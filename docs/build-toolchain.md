@@ -1,6 +1,6 @@
 # Android build toolchain selection
 
-Verified **2026-10-20** for `modernize-xmouse` task **1.1**. This is the selection/handoff, not a build migration: task 1.3 applies the pins, 1.4 compiles the existing application, and 1.5 updates its tests/lint.
+Selected and verified **2026-10-20** for `modernize-xmouse` task **1.1**, then applied and configuration-verified in **1.3**. Task 1.4 compiles the existing application, and 1.5 updates its tests/lint.
 
 ## Selected pins
 
@@ -83,6 +83,37 @@ export ANDROID_SDK_ROOT=/home/homoludens/Android/Sdk
 On **2026-10-20**, `sdkmanager --list_installed` exited successfully and detected `platforms;android-37.0` revision 2, `build-tools;36.0.0`, and `platform-tools` 37.0.1. It emitted an SDK XML version-compatibility warning while loading the installed package metadata, but completed the listing. An audit of tracked Gradle scripts, properties, and wrapper launchers found no `sdk.dir`, `org.gradle.java.home`, or absolute `/home/`/`/Users/` paths; `local.properties` is not tracked.
 
 For individual AAR reinspection, use `https://dl.google.com/dl/android/maven2/<group-path>/<artifact>/<version>/<artifact>-<version>.aar` and read the two ZIP entries above. Maven Central uses `https://repo.maven.apache.org/maven2/` for Kotlin/coroutine POMs/modules/JARs. `minSdk` comes from the **manifest**, not `minCompileSdk`.
+
+### Build migration and configuration verification (task 1.3)
+
+Applied the selected AGP/KGP/Compose compiler, SDK, bytecode, and UI pins in the Groovy build. Existing Views dependencies now include explicit Core/AppCompat declarations; Compose UI/Foundation/Material3, Activity integration, and preview tooling are prepared for the editor. Lifecycle/service/coroutine and test integrations remain for their implementation tasks. JSch, SpongyCastle, and the existing unit-test dependencies are unchanged.
+
+Generated both wrapper launchers, the JAR, and properties with the cached **Gradle 9.3.1** distribution, not the old wrapper. The distribution checksum is pinned in `gradle-wrapper.properties`. The generated JAR's SHA-256 is `b3a875ddc1f044746e1b1a55f645584505f4a10438c1afea9f15e92a7c42ec13`, matching the [official wrapper checksum](https://services.gradle.org/distributions/gradle-9.3.1-wrapper.jar.sha256).
+
+```sh
+export ANDROID_HOME=/home/homoludens/Android/Sdk
+export ANDROID_SDK_ROOT=/home/homoludens/Android/Sdk
+"$GRADLE_9_3_1" --no-daemon --console=plain --max-workers=2 \
+  -Dorg.gradle.jvmargs=-Xmx2g wrapper --gradle-version 9.3.1 \
+  --distribution-type bin \
+  --gradle-distribution-sha256-sum b266d5ff6b90eada6dc3b20cb090e3731302e553a27c5d3e4df1f0d76beaff06
+./gradlew --version
+./gradlew --no-daemon --console=plain --max-workers=2 \
+  -Dorg.gradle.jvmargs=-Xmx2g \
+  --init-script /tmp/opencode/xmouse-build-task-1.3/verify-configuration.init.gradle \
+  :app:verifyTask13Configuration :app:checkDebugAarMetadata
+```
+
+Results on **2026-10-20**: wrapper generation **BUILD SUCCESSFUL**; wrapper runtime **9.3.1 / Temurin 21.0.7+6**; configuration assertions and application AAR metadata **BUILD SUCCESSFUL** (2 executed tasks). The temporary, uncommitted assertion task checked:
+
+- Actual AGP **9.1.1** and Kotlin compiler **2.4.21**, Compose enabled, and no `org.jetbrains.kotlin.android` application.
+- Namespace/application ID **`com.stripe1.xmouse`** and unchanged version identity **25 / 2.0.27**.
+- Minimum/compile/target SDK **24 / 37 / 37**, Build Tools **36.0.0**, and resolved SDK boot classpath using **`platforms/android-37.0/android.jar`**.
+- Java source/target **17 / 17** and Kotlin target **17**, including the configured debug compilation tasks; only Google Maven/Maven Central repositories.
+
+Logs and the assertion script remain in `/tmp/opencode/xmouse-build-task-1.3`. No absolute SDK/JDK location was added to tracked build configuration. AGP reports the pre-existing `android.enableJetifier=true` property as deprecated; it did not block configuration or metadata checks.
+
+**Next-task boundary:** Java/resource-ID compatibility and source-manifest namespace cleanup remain for 1.4; instrumentation, test-library migration, and meaningful lint policy remain for 1.5. The old blanket lint policy is retained using AGP 9's `lint` DSL solely to load configuration. No app assembly, Java/Kotlin source compilation, lint, unit/instrumentation tests, or device tests were run in 1.3.
 
 ## Handoff constraints
 
