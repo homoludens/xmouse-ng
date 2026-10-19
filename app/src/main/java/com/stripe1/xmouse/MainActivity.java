@@ -157,29 +157,17 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 	public void xMouseClickMouse(View v){
 
-		switch(v.getId()){
-			case R.id.firstMouseButton:
-			case R.id.js_firstMouseButton:
-				doTool.mouseClick(IDoTool.MOUSE_LEFT);
-				break;
-			case R.id.secondMouseButton:
-			case R.id.js_secondMouseButton:
-				doTool.mouseClick(IDoTool.MOUSE_MIDDLE);
-				break;
-			case R.id.thirdMouseButton:
-			case R.id.js_thirdMouseButton:
-				doTool.mouseClick(IDoTool.MOUSE_RIGHT);
-				break;
-			case R.id.fourthMouseButton:
-			case R.id.js_fourthMouseButton:
-				doTool.mouseWheelUp();
-				break;
-			case R.id.fifthMouseButton:
-			case R.id.js_fifthMouseButton:
-				doTool.mouseWheelDown();
-				break;
-			default:
-				break;
+		int id = v.getId();
+		if (id == R.id.firstMouseButton || id == R.id.js_firstMouseButton) {
+			doTool.mouseClick(IDoTool.MOUSE_LEFT);
+		} else if (id == R.id.secondMouseButton || id == R.id.js_secondMouseButton) {
+			doTool.mouseClick(IDoTool.MOUSE_MIDDLE);
+		} else if (id == R.id.thirdMouseButton || id == R.id.js_thirdMouseButton) {
+			doTool.mouseClick(IDoTool.MOUSE_RIGHT);
+		} else if (id == R.id.fourthMouseButton || id == R.id.js_fourthMouseButton) {
+			doTool.mouseWheelUp();
+		} else if (id == R.id.fifthMouseButton || id == R.id.js_fifthMouseButton) {
+			doTool.mouseWheelDown();
 		}
 	}
 	@Override
@@ -705,68 +693,53 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	@Override
 	public boolean onOptionsItemSelected(MenuItem item) {
 
-		switch (item.getItemId()) {
-			case R.id.action_settings:
-				Intent intent = new Intent(this, SettingsActivity.class);
-				startActivity(intent);
-				break;
-			case R.id.action_conn_disc:
+		int id = item.getItemId();
+		if (id == R.id.action_settings) {
+			Intent intent = new Intent(this, SettingsActivity.class);
+			startActivity(intent);
+		} else if (id == R.id.action_conn_disc) {
 
-				//Log.d("prefTest",setting_host+" "+setting_user+" "+setting_pass+" "+setting_port);
+			//Log.d("prefTest",setting_host+" "+setting_user+" "+setting_pass+" "+setting_port);
 
-				if(conn.session != null && conn.session.isConnected()){
-					conn.xMouseDisconnect();
-				}else {
-					conn.xMouseTryConnect();
-				}
-				break;
-			case R.id.action_restore_default_keys:
-				KEYLOAYOUTFILENAME = "keyLayoutFile.csv";
-				confirmLayoutReload("Restore default Keyboard?","Any unsaved buttons will be lost",true);
-				break;
-			case R.id.action_save_preset_one:
-				KEYLOAYOUTFILENAME = "keyFileOne.csv";
-				confirmSaveLayout("Save as Keyboard Layout 1", "Any previous layout data will be overwritten", false);
-
-				break;
-			case R.id.action_save_preset_two:
-				KEYLOAYOUTFILENAME = "keyFileTwo.csv";
-				confirmSaveLayout("Save as Keyboard Layout 2", "Any previous layout data will be overwritten", false);
-				break;
-			case R.id.action_save_preset_three:
-				KEYLOAYOUTFILENAME = "keyFileThree.csv";
-				confirmSaveLayout("Save as Keyboard Layout 3", "Any previous layout data will be overwritten", false);
-				break;
-
-			case R.id.action_lock_keys:
-				setting_keyboard_locked=!setting_keyboard_locked;
-				item.setChecked(setting_keyboard_locked);
-				SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
-				SharedPreferences.Editor editor = prefs.edit();
-				editor.putBoolean("keyboard_layout_locked", setting_keyboard_locked);
-				editor.commit();
-				break;
-			case R.id.action_invert_scroll:
-				setting_invert_scroll=!setting_invert_scroll;
-				item.setChecked(setting_invert_scroll);
-				SharedPreferences prefs2 = PreferenceManager.getDefaultSharedPreferences(this);
-				SharedPreferences.Editor editor2 = prefs2.edit();
-				editor2.putBoolean("mouse_invert_scroll", setting_invert_scroll);
-				editor2.commit();
-				break;
-			case R.id.action_edit_layout:
-				showNoticeDialog(getBaseContext());
-
-				break;
-			case R.id.action_exit:
-
-				//close all connections and finish.
+			if(conn.session != null && conn.session.isConnected()){
 				conn.xMouseDisconnect();
+			}else {
+				conn.xMouseTryConnect();
+			}
+		} else if (id == R.id.action_restore_default_keys) {
+			KEYLOAYOUTFILENAME = "keyLayoutFile.csv";
+			confirmLayoutReload("Restore default Keyboard?","Any unsaved buttons will be lost",true);
+		} else if (id == R.id.action_save_preset_one) {
+			KEYLOAYOUTFILENAME = "keyFileOne.csv";
+			confirmSaveLayout("Save as Keyboard Layout 1", "Any previous layout data will be overwritten", false);
+		} else if (id == R.id.action_save_preset_two) {
+			KEYLOAYOUTFILENAME = "keyFileTwo.csv";
+			confirmSaveLayout("Save as Keyboard Layout 2", "Any previous layout data will be overwritten", false);
+		} else if (id == R.id.action_save_preset_three) {
+			KEYLOAYOUTFILENAME = "keyFileThree.csv";
+			confirmSaveLayout("Save as Keyboard Layout 3", "Any previous layout data will be overwritten", false);
+		} else if (id == R.id.action_lock_keys) {
+			setting_keyboard_locked=!setting_keyboard_locked;
+			item.setChecked(setting_keyboard_locked);
+			SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+			SharedPreferences.Editor editor = prefs.edit();
+			editor.putBoolean("keyboard_layout_locked", setting_keyboard_locked);
+			editor.commit();
+		} else if (id == R.id.action_invert_scroll) {
+			setting_invert_scroll=!setting_invert_scroll;
+			item.setChecked(setting_invert_scroll);
+			SharedPreferences prefs2 = PreferenceManager.getDefaultSharedPreferences(this);
+			SharedPreferences.Editor editor2 = prefs2.edit();
+			editor2.putBoolean("mouse_invert_scroll", setting_invert_scroll);
+			editor2.commit();
+		} else if (id == R.id.action_edit_layout) {
+			showNoticeDialog(getBaseContext());
+		} else if (id == R.id.action_exit) {
 
-				this.finish();
-				break;
-			default:
-				break;
+			//close all connections and finish.
+			conn.xMouseDisconnect();
+
+			this.finish();
 		}
 		return super.onOptionsItemSelected(item);
 	}

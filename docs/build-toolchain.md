@@ -122,3 +122,41 @@ Logs and the assertion script remain in `/tmp/opencode/xmouse-build-task-1.3`. N
 - Wrapper distribution: `https://services.gradle.org/distributions/gradle-9.3.1-bin.zip`; [official SHA-256](https://services.gradle.org/distributions/gradle-9.3.1-bin.zip.sha256): `b266d5ff6b90eada6dc3b20cb090e3731302e553a27c5d3e4df1f0d76beaff06`. Regenerate/verify wrapper files using compatible Gradle, not by executing 7.3.3 on JDK 21.
 - **Tasks 1.4/1.5:** Preserve non-final resource IDs and adapt Java switches rather than hiding the migration. Replace blanket lint suppression and obsolete instrumentation; the selected runner is `androidx.test.runner.AndroidJUnitRunner`. Existing Mockito/JUnit and SSH/SpongyCastle dependencies were **not** validated or replaced by this probe; their migration/verification remains with the corresponding tasks.
 - Do not use unsupported-compile-SDK suppression, manifest minimum overrides, a higher minimum, or API 37.1 to force dependency acceptance. Kotlin 2.4.21 and Gradle's embedded Kotlin 2.2.21 are different components. Device coverage on API 24 and 37 and the actual XMouse build/lint/instrumentation suites are **not run by task 1.1**.
+
+## Existing-source compatibility verification (task 1.4)
+
+Verified **2026-10-20**. Replaced only the two app-resource-ID switches in `MainActivity` with bounded `if` chains and removed the source manifest's obsolete `package` attribute; the Gradle namespace/application ID remain unchanged. Framework `android.R.id.home`, numeric navigation IDs, and non-resource switches remain valid and unchanged. No Java-to-Kotlin source conversion, final-resource-ID override, desktop-command change, or runtime/lifecycle feature was introduced.
+
+```sh
+export ANDROID_HOME=/home/homoludens/Android/Sdk
+export ANDROID_SDK_ROOT=/home/homoludens/Android/Sdk
+python3 docs/verification/audit-resource-actions.py
+./gradlew --no-daemon --console=plain --no-build-cache --max-workers=2 \
+  -Dorg.gradle.jvmargs=-Xmx2g :app:clean :app:assembleDebug
+"$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging \
+  app/build/outputs/apk/debug/app-debug.apk
+```
+
+- **Action audit passed:** the committed Python/Git audit derives the permitted conversion directly from baseline `fa8b529810e5bcc0c2602313751eefc7899bd9b8`. All **10 menu actions** and **10 mouse/joystick IDs** retain their exact Java branch tokens, including grouped labels, default no-op, and superclass fallback. It also checks menu XML coverage and unchanged remaining Java/resources, including dynamic drawer mappings and desktop backends. This is a migration-specific source audit, **not** an on-device menu test; later intentional behavior changes need their own tests rather than weakening this baseline.
+- **Fresh assembly passed:** `BUILD SUCCESSFUL in 54s`, **36 tasks executed**, no build-cache reuse; Java compilation, manifest merge, resource processing, dexing, and APK packaging succeeded. The real app currently has no Kotlin sources, so its `compileDebugKotlin` correctly reports **NO-SOURCE**.
+- **Actual APK assertions passed:** `com.stripe1.xmouse`, version **25 / 2.0.27**, **minSdk 24 / targetSdk 37 / compileSdk 37**, and launcher `com.stripe1.xmouse.MainActivity`. `javap` confirmed all **61 app `R.id` fields remain non-final**; `MainActivity.class` is bytecode major **61** (Java 17).
+
+### Isolated mixed-source smoke check
+
+The temporary project `/tmp/opencode/xmouse-build-task-1.4/mixed-smoke` copies the current root Gradle files/properties and app build/proguard/main sources, **without** `local.properties`. Only that copy adds `toolchainsmoke/JavaProbe.java` and `KotlinProbe.kt`: Java calls Kotlin, Kotlin calls Java plus the real `IDoTool.MOUSE_LEFT`, and a Kotlin `@Composable` renders Material3 `Text`. No probe source or binary is added to the production app.
+
+With both SDK variables exported as above, repeat against the retained fixture:
+
+```sh
+./gradlew --project-dir /tmp/opencode/xmouse-build-task-1.4/mixed-smoke \
+  --no-daemon --console=plain --max-workers=2 -Dorg.gradle.jvmargs=-Xmx2g \
+  --init-script /tmp/opencode/xmouse-build-task-1.3/verify-configuration.init.gradle \
+  :app:verifyTask13Configuration :app:compileDebugKotlin :app:compileDebugJavaWithJavac
+python3 /tmp/opencode/xmouse-build-task-1.4/verify-artifacts.py
+```
+
+Results: **BUILD SUCCESSFUL** (1m2s); Kotlin and Java compilation both executed. Configuration assertions reconfirmed JDK **21.0.7**, Gradle **9.3.1**, AGP **9.1.1**, built-in Kotlin **2.4.21**, Java/Kotlin targets **17**, and SDK **24/37/37**. All probe class files have major **61**; `javap` finds the Compose-generated `Composer` parameter. Running the compiled Java probe on the JVM passes the Java → Kotlin → Java/`IDoTool` assertion. This proves compiler/interoperability wiring, **not Android runtime behavior**.
+
+Successful build logs, APK badging, resource-field/Compose signatures, fixture sources, and artifact assertions remain in `/tmp/opencode/xmouse-build-task-1.4`. The pre-fix build failed on the expected 20 non-final case labels; an intermediate assemble hit the 120-second harness timeout, superseded by the successful fresh run above.
+
+**Warnings / 1.5 handoff:** existing Jetifier deprecation and deprecated-Java-API notes remain. AGP packages `libandroidx.graphics.path.so` unstripped (nonfatal). Unit tests, lint, instrumentation APK/device tests, and on-device API 24/37 behavior were **not run**. The existing lint policy/test libraries and obsolete instrumentation are deliberately unchanged for **1.5**; SSH/SpongyCastle remain for **4.1**. Only task **1.4** was completed here.
