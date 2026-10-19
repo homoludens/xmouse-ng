@@ -70,6 +70,18 @@ python3 "$PROBE/audit_metadata.py"
 
 Results: Gradle **9.3.1**, launcher JVM **21.0.7**; metadata/manifest probe **BUILD SUCCESSFUL** (6 tasks, 1m29s); metadata audit **87 AARs, no floor/ceiling violations**; mixed-source compilation **BUILD SUCCESSFUL** (8 tasks, 1m20s). Probe configuration, artifact coordinates/paths, AAR SHA-256s, downloaded metadata and logs remain in that temporary directory for review. To repeat after build migration, run the normal AAR-check/manifest tasks against XMouse and audit its resolved graph again; newly added dependencies are not covered automatically.
 
+### SDK location detection (task 1.2)
+
+Both SDK variables were set to the selected local SDK for Android tooling; no SDK path was written to project build configuration:
+
+```sh
+export ANDROID_HOME=/home/homoludens/Android/Sdk
+export ANDROID_SDK_ROOT=/home/homoludens/Android/Sdk
+"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --list_installed
+```
+
+On **2026-10-20**, `sdkmanager --list_installed` exited successfully and detected `platforms;android-37.0` revision 2, `build-tools;36.0.0`, and `platform-tools` 37.0.1. It emitted an SDK XML version-compatibility warning while loading the installed package metadata, but completed the listing. An audit of tracked Gradle scripts, properties, and wrapper launchers found no `sdk.dir`, `org.gradle.java.home`, or absolute `/home/`/`/Users/` paths; `local.properties` is not tracked.
+
 For individual AAR reinspection, use `https://dl.google.com/dl/android/maven2/<group-path>/<artifact>/<version>/<artifact>-<version>.aar` and read the two ZIP entries above. Maven Central uses `https://repo.maven.apache.org/maven2/` for Kotlin/coroutine POMs/modules/JARs. `minSdk` comes from the **manifest**, not `minCompileSdk`.
 
 ## Handoff constraints

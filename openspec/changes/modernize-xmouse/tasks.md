@@ -1,7 +1,7 @@
 ## 1. Establish the modern Android build
 
 - [x] 1.1 [high] Select a stable AGP/Gradle/Kotlin/Compose/AndroidX version matrix supporting JDK 21, minimum API 24, and compile/target API 37; verify official compatibility guidance and dependency metadata support that range before pinning the versions in the build.
-- [ ] 1.2 [low] Set both `ANDROID_HOME` and `ANDROID_SDK_ROOT` to `/home/homoludens/Android/Sdk` for Android tooling, without committing machine-specific project paths; verify SDK detection succeeds and no absolute SDK path is added to tracked build configuration.
+- [x] 1.2 [low] Set both `ANDROID_HOME` and `ANDROID_SDK_ROOT` to `/home/homoludens/Android/Sdk` for Android tooling, without committing machine-specific project paths; verify SDK detection succeeds and no absolute SDK path is added to tracked build configuration.
 - [ ] 1.3 [high] Update and pin root/app build dependencies and wrapper, replace JCenter, define the namespace, align Java/Kotlin bytecode targets, and retain the application ID; verify the wrapper runs on JDK 21 and Gradle configuration loads with the intended namespace, application ID, and SDK values.
 - [ ] 1.4 [high] Adapt existing Java resource-ID switches and other modern AGP incompatibilities without a wholesale source conversion; verify `./gradlew :app:assembleDebug` compiles Java/Kotlin together with API 24 minimum and API 37 target metadata and existing menu actions remain mapped correctly.
 - [ ] 1.5 [high] Replace obsolete instrumentation configuration, modernize unit-test dependencies, and enable meaningful lint checks; verify `./gradlew :app:testDebugUnitTest :app:lintDebug` runs and the instrumentation test APK builds with the current AndroidX runner.
