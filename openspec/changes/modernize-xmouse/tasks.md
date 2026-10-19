@@ -1,0 +1,99 @@
+## 1. Establish the modern Android build
+
+- [x] 1.1 [high] Select a stable AGP/Gradle/Kotlin/Compose/AndroidX version matrix supporting JDK 21, minimum API 24, and compile/target API 37; verify official compatibility guidance and dependency metadata support that range before pinning the versions in the build.
+- [ ] 1.2 [low] Set both `ANDROID_HOME` and `ANDROID_SDK_ROOT` to `/home/homoludens/Android/Sdk` for Android tooling, without committing machine-specific project paths; verify SDK detection succeeds and no absolute SDK path is added to tracked build configuration.
+- [ ] 1.3 [high] Update and pin root/app build dependencies and wrapper, replace JCenter, define the namespace, align Java/Kotlin bytecode targets, and retain the application ID; verify the wrapper runs on JDK 21 and Gradle configuration loads with the intended namespace, application ID, and SDK values.
+- [ ] 1.4 [high] Adapt existing Java resource-ID switches and other modern AGP incompatibilities without a wholesale source conversion; verify `./gradlew :app:assembleDebug` compiles Java/Kotlin together with API 24 minimum and API 37 target metadata and existing menu actions remain mapped correctly.
+- [ ] 1.5 [high] Replace obsolete instrumentation configuration, modernize unit-test dependencies, and enable meaningful lint checks; verify `./gradlew :app:testDebugUnitTest :app:lintDebug` runs and the instrumentation test APK builds with the current AndroidX runner.
+
+## 2. Capture regression fixtures and shared boundaries
+
+- [ ] 2.1 [low] Add representative version-2 `contactsManager` and preference fixtures covering host IDs, aliases, ports, scripts, selected host, global key authentication, and retained passphrase; verify fixture assertions reproduce the current stored values without real user secrets.
+- [ ] 2.2 [low] Add legacy layout fixtures for the active file and three presets in comma and `<xmousesep>` forms, including absent color and malformed records; verify fixture expectations cover order, commands, spans, colors, and distinct preset contents.
+- [ ] 2.3 [high] Introduce a Java-callable command transport boundary and fake SSH transport for the existing xdotool/ydotool adapters; verify the existing command-translation tests pass without an Activity or real network connection.
+- [ ] 2.4 [high] Define endpoint/locator values, stable endpoint identity, connection states, and typed failure categories; verify unit tests cover manual/discovered locators, IPv4/IPv6, host/port normalization, and distinct permission/resolution/trust/authentication failures.
+
+## 3. Protect storage and migrate existing configuration
+
+- [ ] 3.1 [high] Implement versioned Keystore-backed AES-GCM secret storage with unique nonces and application-private non-backup persistence; verify encrypted round trips, ciphertext tampering rejection, and absence of plaintext in stored files.
+- [ ] 3.2 [high] Handle unavailable or invalidated device keys without erasing non-secret configuration; verify an invalid-key instrumentation test requests credential re-entry while preserving host/script records.
+- [ ] 3.3 [high] Replace destructive `DatabaseHandler` upgrade/downgrade behavior with additive migrations for credential references and discovered-service locator metadata; verify version-2 fixtures retain every host/script ID and unsupported downgrade attempts do not drop tables.
+- [ ] 3.4 [high] Add restartable migration checkpoints that verify encrypted replacements before clearing plaintext database/preferences fields; verify fault-injection tests at each checkpoint preserve a usable credential representation and do not duplicate records.
+- [ ] 3.5 [high] Route host/default password and global key/passphrase reads and writes through the protected repository, preserving selected-host and authentication choices; verify no active save path writes new plaintext secrets and both legacy preference and database cases migrate correctly.
+- [ ] 3.6 [high] Add legacy backup rules and current data-extraction rules excluding secrets and migration intermediates, and perform appropriate database checkpoint/compaction after credential migration; verify backup-rule tests exclude old/new credential sources while non-secret metadata remains recoverable.
+- [ ] 3.7 [high] Remove authentication and typed-content logging from affected paths; verify log-capture tests and a source audit find no credential/private-key/typed-text values emitted by those paths.
+
+## 4. Modernize SSH transport, trust, and key import
+
+- [ ] 4.1 [high] Replace the old JSch dependency with one pinned maintained fork and remove obsolete crypto/provider setup after adding required replacements; verify the dependency graph contains one JSch implementation and API 24 instrumentation can initialize its crypto providers.
+- [ ] 4.2 [high] Extract blocking SSH/channel operations from Activity, `AsyncTask`, dialogs, and static UI references; verify transport tests run without Android UI objects and connection/exec I/O is dispatched off the main thread.
+- [ ] 4.3 [high] Implement a host-key repository keyed by logical endpoint and port, plus cancellable first-trust approval before authentication; verify accepting persists trust, rejecting sends no credentials/commands, and a changed DHCP address with the same trusted hostname/key remains accepted.
+- [ ] 4.4 [high] Add host-key mismatch blocking and an explicit trust-management replacement action; verify a changed key cannot authenticate through reconnect, alternate-address retry, or discovered-service selection without deliberate trust replacement.
+- [ ] 4.5 [high] Preserve password and encrypted RSA/ECDSA authentication with modern negotiation; verify SSH integration tests cover password success/failure, passphrase failure, ECDSA, and RSA SHA-2 against a server with SHA-1 RSA signatures disabled.
+- [ ] 4.6 [high] Add finite resolution/connection/channel/exec deadlines, finite SSH keepalive failure handling, and stdout/stderr draining; verify stalled handshakes, closed channels, and sustained remote output produce bounded, classified outcomes without UI blocking.
+- [ ] 4.7 [high] Replace `FileDialog` key selection with the system document picker and validate/encrypt key bytes before atomic replacement; verify provider import, subsequent source removal, cancelled/invalid selection, and inaccessible legacy paths preserve the previous usable configuration or request re-import.
+- [ ] 4.8 [high] Remove obsolete storage-permission requests and declarations once key import is integrated; verify key authentication works without broad storage permission on API 24 and current Android.
+
+## 5. Keep sessions alive across app switching
+
+- [ ] 5.1 [high] Implement the serialized session controller with idempotent connect, explicit disconnect, attempt-generation cancellation, and desired-host state; verify repeated connect, in-flight host changes, and late callbacks never toggle off or duplicate the active session.
+- [ ] 5.2 [high] Add the started-and-bound `connectedDevice` foreground service with required manifest permissions, prompt foreground disclosure, and non-sticky lifecycle; verify a foreground Connect starts it legally and no boot/background-only startup path is introduced.
+- [ ] 5.3 [high] Publish Open controls/Disconnect notification actions and handle notification permission grant/denial by OS version; verify notification disconnect closes transport and the denial case explains visibility limits while retaining in-app session controls.
+- [ ] 5.4 [high] Bind `MainActivity` to session state and remove activity-owned connection construction/shutdown and toggle-based auto-connect; verify Activity recreation and return with auto-connect enabled reattach to one existing session.
+- [ ] 5.5 [high] Route legacy input, custom buttons, and scripts through the service-backed ordered command sink; verify command-translation regressions still pass and transport loss discards unsent commands rather than replaying them after reconnection.
+- [ ] 5.6 [high] Stop gyro and inactive control input, handle touch cancellation, and release tracked held inputs on leaving the control surface; verify app switching during a drag sends release when possible and returning does not resume stale input.
+- [ ] 5.7 [high] Implement bounded failure detection and a foreground recovery attempt after involuntary interruption, preserving trust and permission checks; verify network-loss/return tests show honest state and explicit Disconnect suppresses auto-reconnect even with saved auto-connect enabled.
+- [ ] 5.8 [high] Wire Disconnect, Exit, and deliberate task dismissal to complete service/transport cleanup without treating ordinary app switching as dismissal; verify repeated cleanup is harmless, the notification disappears, and force-stop does not cause automatic restart.
+
+## 6. Resolve hostnames and handle LAN permissions
+
+- [ ] 6.1 [low] Relabel host input as hostname/IP, validate ports and blank endpoints, and preserve the entered name separately from resolved addresses; verify saving/editing IPv4, IPv6, ordinary DNS, and `.local` profiles never substitutes a DHCP address or overwrites valid settings on invalid input.
+- [ ] 6.2 [high] Add the OS-aware LAN-permission coordinator before local resolution, discovery, and direct SSH; verify API 37 grant/deny/revoke cases are actionable and earlier Android versions do not request unsupported permissions.
+- [ ] 6.3 [high] Implement fresh, cancellable platform resolution with scoped IPv6 candidates and an overall deadline; verify multiple-address fallback, cancellation, network change, and stale-result tests cannot connect the wrong host or bypass a trust failure.
+- [ ] 6.4 [high] Implement the bounded query-only `.local` mDNS fallback for devices lacking native support, with a reviewed compatible DNS codec, response matching, compression/packet limits, and no subnet scan; verify A/AAAA, malformed-packet, unrelated-response, and timeout tests work without any SSH service advertisement.
+- [ ] 6.5 [high] Scope fallback sockets and any Wi-Fi multicast lock to one permitted local lookup and release them on cancellation, completion, or failure; verify resource-cleanup tests and API 24 device behavior leave no persistent multicast work and respect network/VPN restrictions.
+- [ ] 6.6 [low] Present distinct permission, resolution, connection-refused/unreachable, trust, and authentication errors with Retry/manual-entry guidance; verify UI tests retain the configured endpoint and never describe a DNS failure as a bad password.
+
+## 7. Discover local SSH computers
+
+- [ ] 7.1 [high] Add lifecycle-scoped `_ssh._tcp` discovery adapters for API 24 callbacks and newer service-info APIs; verify fake-service tests cover start/stop failures, deduplication, non-default ports, multiple addresses, and disappearing services.
+- [ ] 7.2 [low] Add a Find computers entry point and result/empty/error states in host management; verify selecting a result fills a connection candidate without inventing credentials, saving automatically, or executing a remote command.
+- [ ] 7.3 [high] Save user-approved discovered profiles with stable hostname or service-instance/type/domain locator metadata rather than only an address; verify reopening the profile re-resolves its locator after address changes and preserves the intended trust identity.
+- [ ] 7.4 [high] Stop discovery when its interface closes/backgrounds and isolate its lifetime from active SSH sessions; verify leaving discovery stops callbacks/listening while an existing session remains connected.
+- [ ] 7.5 [high] Integrate discovered candidates with normal trust, permission, authentication, and manual-entry flows; verify a changed service key is blocked and empty discovery still permits manual `.local`, DNS, and IP connection attempts.
+
+## 8. Introduce safe layout persistence and migration
+
+- [ ] 8.1 [low] Add versioned Kotlin profile/button models with stable IDs, ten-column widths, validated properties, and raw command strings; verify serialization round trips preserve Unicode, quotes, commas, spaces, and multiline commands exactly.
+- [ ] 8.2 [high] Implement atomic profile persistence with explicit read/write failures and recoverable draft handling; verify interrupted/truncated writes retain the last valid saved profile and never report a failed save as successful.
+- [ ] 8.3 [high] Migrate active/preset legacy files using deterministic source identities and the approved comma/separator readers; verify all four fixtures become distinct named profiles with correct order, command, width, color, and missing-color defaults.
+- [ ] 8.4 [high] Add migration checkpoints and malformed-source recovery without overwriting retained legacy files; verify interrupted/repeated migration does not duplicate profiles or silently restore defaults over damaged content.
+- [ ] 8.5 [low] Implement profile create/rename/duplicate/select/confirmed-delete operations independent of storage names; verify more than three profiles work and renaming/duplicating/deletion cancellation cannot overwrite unrelated profiles.
+- [ ] 8.6 [high] Route normal custom-button rendering and layout selection through the repository, disabling legacy preset/autosave writes only after successful migration; verify app pause/resume cannot overwrite recovery sources and existing command-dispatch tests remain unchanged.
+
+## 9. Build the Kotlin grid editor
+
+- [ ] 9.1 [high] Add an explicit editor entry point with saved/draft ViewModel state, Save/Discard/Cancel, and draft restoration across screen recreation; verify dirty Back navigation and recreation preserve or discard changes only as requested.
+- [ ] 9.2 [low] Render the ten-column flow preview with stable button selection and valid-property feedback; verify logical order/wrapping and fixed-height behavior across phone/tablet widths without storing pixel positions.
+- [ ] 9.3 [high] Implement drag reordering with placement previews and width resizing through visible controls; verify pointer tests produce the expected order/width and invalid spans keep the draft open.
+- [ ] 9.4 [low] Add button create/edit/duplicate/delete, color selection, and required-field validation without converting custom commands to a new action format; verify invalid properties do not dismiss the draft or alter saved data.
+- [ ] 9.5 [high] Implement undo/redo for all button edits, with completed gestures grouped into single history entries and redo invalidation after a new edit; verify reducer tests cover full restoration of deleted/moved/resized button properties and order.
+- [ ] 9.6 [low] Provide labeled controls and non-drag move/resize actions with adequate touch targets; verify accessibility tests and manual navigation can reorder, resize, and save without drag gestures.
+- [ ] 9.7 [high] Ensure the editor never invokes the command sink and only saved layouts feed normal remote control; verify a recording transport receives zero commands for editor taps/drags/resizes and receives the expected command only after normal-mode activation.
+
+## 10. Complete current Android interaction support
+
+- [ ] 10.1 [high] Apply system-bar/cutout/IME insets to the existing controls, host screens, and new editor; verify controls remain reachable with gesture/three-button navigation and keyboard show/hide on API 35, 36, and 37.
+- [ ] 10.2 [high] Replace legacy Back interception with supported AndroidX navigation handling for drawer, dialogs, and dirty editor state; verify API 36/37 Back closes the appropriate layer without accidental saves or session disconnection.
+- [ ] 10.3 [high] Mark gyro hardware optional and register sensors only while active and supported; verify an API 24 device/emulator without a gyroscope can install and use touchpad, keyboard, profiles, and scripts without sensor exceptions.
+- [ ] 10.4 [low] Regression-test unchanged touchpad/joystick behavior, volume shortcuts, batch typing, scripts, and xdotool/ydotool selection; verify the modernization does not require a replacement desktop daemon or cloud account.
+
+## 11. Validate the complete release slice and document it
+
+- [ ] 11.1 [low] Run `./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug` with both specified SDK environment variables and execute the instrumentation suite on available devices; verify all results are recorded and unavailable environments are reported as not run rather than passed.
+- [ ] 11.2 [high] Execute a real-device, display-on app-switch test of at least five minutes against a stable Linux SSH host, including auto-connect enabled and activity recreation; verify server/client session identifiers show the same authenticated session is reused without manual reconnection.
+- [ ] 11.3 [high] Execute LAN integration cases for native/fallback `.local` without SSH advertising, IPv4/IPv6/DNS, advertised SSH on a custom port, disappearing service, and DHCP changes; verify manual entry and stable logical endpoint trust remain usable throughout.
+- [ ] 11.4 [high] Run upgrade/failure/security integration cases from the legacy data fixtures, including migration interruption, unreadable key path, host-key mismatch, device-key loss, backup exclusions, notification/LAN permission denial, network loss, and leaving during a drag; verify no user data is silently lost and no stale input or credentials are replayed/leaked.
+- [ ] 11.5 [low] Check the approved API 24 floor plus API 31, 33/34, 35, 36, and 37 behavior using available devices/emulators; verify an explicit coverage matrix identifies any remaining release-blocking platform or hardware gaps.
+- [ ] 11.6 [low] Update README/user guidance for Android 7+ support, first-use host trust, key re-import, background-session notification/disconnect, named layout migration, and optional Avahi SSH advertisements; verify the documentation matches the implemented behavior and does not promise indefinite screen-off connectivity or safe legacy-APK downgrade.
+- [ ] 11.7 [high] Reconcile implementation evidence with every capability scenario and run `openspec validate modernize-xmouse --strict`; verify all scenario coverage is accounted for and the change remains valid before requesting final verification/archive.
