@@ -1,0 +1,2 @@
+Play,xdotool key XF86AudioPlay,3
+Mute,xdotool key XF86AudioMute,2

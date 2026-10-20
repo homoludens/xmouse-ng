@@ -1,0 +1,2 @@
+Next desktop<xmousesep>xdotool set_desktop 1<xmousesep>4<xmousesep>#D8EAD2
+Previous desktop<xmousesep>xdotool set_desktop 0<xmousesep>4<xmousesep>#FFE599

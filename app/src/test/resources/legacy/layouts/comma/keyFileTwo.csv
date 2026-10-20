@@ -1,0 +1,2 @@
+Next desktop,xdotool set_desktop 1,4
+Previous desktop,xdotool set_desktop 0,4

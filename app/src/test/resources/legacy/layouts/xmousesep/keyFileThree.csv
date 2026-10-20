@@ -1,0 +1,2 @@
+Play<xmousesep>xdotool key XF86AudioPlay<xmousesep>3<xmousesep>#D9EAD3
+Mute<xmousesep>xdotool key XF86AudioMute<xmousesep>2<xmousesep>#C9DAF8

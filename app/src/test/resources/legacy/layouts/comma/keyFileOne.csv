@@ -1,0 +1,2 @@
+Address bar,xdotool key ctrl+l,3
+Reload,xdotool key ctrl+r,2
