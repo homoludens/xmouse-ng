@@ -18,10 +18,11 @@ Use this mandatory model assignment for implementation and the task's associated
 
 ### Classification
 
-- Use `[low]` for bounded, routine work with an established approach: synthetic fixtures, simple input/presentation changes, straightforward model serialization or profile CRUD, documentation, and running an established verification procedure without nontrivial diagnosis.
-- Use `[high]` for architecture or cross-component changes, dependency/toolchain compatibility decisions, security/authentication/cryptography, permissions and trust policy, data migrations or recovery, atomic persistence, Android lifecycle/background services, asynchronous network/resource ownership, concurrency/cancellation, complex gestures/history, and system-level validation requiring diagnosis or safety judgments.
-- Classify the entire task, including its verification, by its most demanding or risk-sensitive part. Mixed, uncertain, or security-sensitive work MUST be `[high]`.
-- If a `[low]` task develops unexpected complexity, stop, promote it to `[high]`, and route the remaining work to sol6.1 xhigh before proceeding. Do not silently downgrade a `[high]` task or substitute another model/variant; obtain user approval for exceptions.
+- Default to `[low]` for work with a clear design and an established implementation approach, including normal feature implementation, API/library integration, schema additions, permissions, UI work, documentation, and defined verification procedures. `[low]` does not mean trivial or lower-quality work.
+- Reserve `[high]` for the most complex tasks: foundational security design, difficult architectural extraction, multi-stage recovery under partial failure, subtle concurrency/state-machine behavior, or substantial networking/gesture/history algorithms.
+- Target approximately **20% `[high]` tasks** across a change, with the remainder `[low]`. Compare tasks by their actual implementation and verification difficulty; security sensitivity, multiple files, platform APIs, or integration tests alone do not make a task `[high]`. Do not weaken scope, tests, or safety requirements to meet the target.
+- If a `[low]` task reveals substantial unexpected complexity, stop and reassess its tag with a concrete reason before routing the remaining work to sol6.1 xhigh. Routine debugging or a failed command is not an automatic promotion. Explain any material increase beyond the approximate 20% target rather than broadly relabeling categories.
+- Do not silently downgrade a `[high]` task or substitute another model/variant; obtain user approval for exceptions. Both models must meet the same correctness, security, and verification standards.
 
 ### Execution and maintenance
 
