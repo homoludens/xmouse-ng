@@ -168,6 +168,24 @@ class PrivateKeyImportAndroidTest {
         } }
     }
 
+    @Test fun failedImportCommitRestoresBooleanPrivateKeyReentryMarkerWithItsOriginalType() = fixture { f ->
+        f.preferences.edit(commit = true) {
+            putBoolean(CredentialMetadataBackup.PRIVATE_KEY_REENTRY, true)
+        }
+        val before = f.preferences.all.toMap()
+        val failing = FailingPreferences(f.preferences, 0)
+        val bytes = key()
+        try {
+            assertEquals(PrivateKeyImportException.Reason.STORAGE_FAILURE,
+                expect<PrivateKeyImportException> { f.importBytes(bytes, preferences = failing) }.reason)
+        } finally { bytes.fill(0) }
+
+        assertEquals(before, f.preferences.all)
+        assertTrue(f.preferences.getBoolean(CredentialMetadataBackup.PRIVATE_KEY_REENTRY, false))
+        assertNull(f.reference())
+        assertEquals("/NOT_REAL_SYNTHETIC_MISSING/key", f.preferences.getString(AndroidPrivateKeys.LEGACY_PATH, null))
+    }
+
     @Test fun unavailableKeystoreCannotBeResetOrBypassedByImportingAFreshId() = fixture { f ->
         f.importBytes(key())
         val before = f.preferences.all

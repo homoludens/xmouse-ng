@@ -7,6 +7,7 @@ import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteException;
 import android.database.sqlite.SQLiteOpenHelper;
+import android.os.Looper;
 
 import java.io.Closeable;
 import java.text.SimpleDateFormat;
@@ -56,6 +57,41 @@ public class DatabaseHandler extends SQLiteOpenHelper implements Closeable {
         this(context);
         validateLegacyFields(hostVars, LEGACY_HOST_FIELDS);
         validateLegacyFields(scriptVars, LEGACY_SCRIPT_FIELDS);
+    }
+
+    /**
+     * Rewrites the database after credential migration has committed, so old row/page contents
+     * and SQLite sidecars do not remain eligible for a later file-level backup. Call only from
+     * the credential repository worker and never from a transaction.
+     *
+     * This is logical SQLite compaction, not a promise of secure erasure from flash storage.
+     */
+    public synchronized void checkpointAndCompactAfterCredentialMigration() {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            throw new IllegalStateException("Database compaction requires a background worker");
+        }
+        SQLiteDatabase db = getWritableDatabase();
+        if (db.inTransaction()) {
+            throw new SQLiteException("Cannot compact contactsManager during a transaction");
+        }
+        boolean wal = isWalJournal(db);
+        if (wal) checkpointWal(db);
+        db.execSQL("VACUUM");
+        if (wal) checkpointWal(db);
+    }
+
+    private static boolean isWalJournal(SQLiteDatabase db) {
+        try (Cursor cursor = db.rawQuery("PRAGMA journal_mode", null)) {
+            return cursor.moveToFirst() && "wal".equalsIgnoreCase(cursor.getString(0));
+        }
+    }
+
+    private static void checkpointWal(SQLiteDatabase db) {
+        try (Cursor cursor = db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null)) {
+            if (!cursor.moveToFirst() || cursor.getInt(0) != 0) {
+                throw new SQLiteException("SQLite WAL checkpoint did not complete");
+            }
+        }
     }
 
     private static void validateLegacyFields(ArrayList<ArrayList<String>> fields, String[] expected) {

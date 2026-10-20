@@ -324,6 +324,154 @@ class CredentialRepositoryAndroidTest {
         }
     }
 
+    @Test fun restoredCredentialsAllowAttemptOnlyAuthSettingsReplacementAndConfirmedEmptyHostReplacement() = uiFixture { restored ->
+        Fixture().use { source ->
+            source.preferences.edit(commit = true) { putBoolean("pref_usekeyauth", false) }
+            val snapshotRef = AtomicReference<ByteArray?>()
+            val snapshotError = AtomicReference<Throwable?>()
+            val snapshotDone = CountDownLatch(1)
+            source.repository.execute {
+                try { snapshotRef.set(source.repository.snapshotForBackup()) }
+                catch (failure: Throwable) { snapshotError.set(failure) }
+                finally { snapshotDone.countDown() }
+            }
+            assertTrue(snapshotDone.await(10, TimeUnit.SECONDS))
+            snapshotError.get()?.let { throw AssertionError(it) }
+            val snapshot = snapshotRef.get()!!
+            try {
+                restored.helper.writableDatabase.apply {
+                    delete("contacts", null, null)
+                    delete("scripts", null, null)
+                }
+                restored.preferences.edit(commit = true) { clear() }
+                CredentialMetadataBackup.restore(restored.context, snapshot)
+                assertTrue(restored.preferences.getBoolean(CredentialMetadataBackup.PASSPHRASE_REENTRY, false))
+                assertEquals(setOf("7", "42"), restored.preferences.getStringSet(CredentialMetadataBackup.HOST_REENTRY_IDS, emptySet()))
+                assertTrue(restored.onRepositoryWorker(restored.repository) { restored.repository.prepare() })
+
+                ActivityScenario.launch<SettingsActivity>(Intent(target, SettingsActivity::class.java)).use { scenario ->
+                    lateinit var ui: CredentialUi
+                    scenario.onActivity { activity -> ui = field(activity, "credentialsUi") as CredentialUi }
+
+                    // Authentication remains attempt-only after restore and must not persist this entry.
+                    val material = AtomicReference<AuthenticationMaterial?>()
+                    val done = CountDownLatch(1)
+                    restored.repository.execute {
+                        restored.repository.authenticate(ui) { value, _ -> material.set(value); done.countDown() }
+                    }
+                    barrier(); barrier()
+                    scenario.onActivity { activity ->
+                        val dialog = secretDialog(activity)
+                        assertTrue(dialog.getButton(AlertDialog.BUTTON_POSITIVE).text.toString().contains("once"))
+                        enter(findInput(dialog), "NOT_REAL_restored_attempt_only")
+                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                    }
+                    assertTrue(done.await(10, TimeUnit.SECONDS))
+                    material.get()!!.use { assertArrayEquals("NOT_REAL_restored_attempt_only".toByteArray(), it.password) }
+                    assertNull(restored.preferences.getString(LegacyCredentialReferences.DEFAULT_PASSWORD, null))
+                    assertTrue(restored.preferences.getBoolean(CredentialMetadataBackup.DEFAULT_PASSWORD_REENTRY, false))
+
+                    // Settings presents an empty editor only for the known restore marker; Save creates
+                    // a new encrypted reference and durably clears the marker.
+                    scenario.onActivity { activity ->
+                        val preference = activity.findPreference("pref_key_passphrase")
+                        preference.onPreferenceClickListener.onPreferenceClick(preference)
+                    }
+                    barrier()
+                    scenario.onActivity { activity ->
+                        val dialog = secretDialog(activity)
+                        val input = findInput(dialog)
+                        assertEquals("", input.text.toString())
+                        enter(input, "NOT_REAL_restored_passphrase_saved")
+                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                    }
+                    barrier(); barrier()
+                    assertFalse(restored.preferences.getBoolean(CredentialMetadataBackup.PASSPHRASE_REENTRY, false))
+                    val passphraseReference = restored.preferences.getString(LegacyCredentialReferences.GLOBAL_PASSPHRASE, null)
+                    assertNotNull(passphraseReference)
+                    val storedPhrase = restored.onRepositoryWorker(restored.repository) { restored.repository.readPassphrase() }
+                    try { assertArrayEquals("NOT_REAL_restored_passphrase_saved".toByteArray(), storedPhrase) }
+                    finally { storedPhrase.fill(0) }
+                    assertFalse(restored.preferences.all.values.any {
+                        it is String && it.contains("NOT_REAL_restored_passphrase_saved")
+                    })
+                }
+
+                ActivityScenario.launch<ListEditActivity>(Intent(target, ListEditActivity::class.java)).use { scenario ->
+                    barrier()
+                    scenario.onActivity { it.xMouseManage(0) }
+                    barrier()
+                    scenario.onActivity { activity ->
+                        val dialog = editor(activity)
+                        val password = dialog.findViewById<EditText>(R.id.new_host_password)
+                        assertEquals("", password.text.toString())
+                        assertEquals("Enter the saved password again", password.hint.toString())
+                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                        val confirmation = field(activity, "emptyPasswordConfirmation") as AlertDialog
+                        assertTrue(confirmation.isShowing)
+                        confirmation.getButton(AlertDialog.BUTTON_NEGATIVE).performClick()
+                        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).performClick()
+                    }
+                    barrier()
+                    assertTrue("Canceling empty-password confirmation keeps re-entry required",
+                        "7" in restored.preferences.getStringSet(CredentialMetadataBackup.HOST_REENTRY_IDS, emptySet()).orEmpty())
+                    assertNull(restored.repository.hosts().first { it.id == 7L }.passwordReference)
+
+                    scenario.onActivity { activity -> activity.xMouseManage(0) }
+                    barrier()
+                    scenario.onActivity { activity ->
+                        val dialog = editor(activity)
+                        assertEquals("", dialog.findViewById<EditText>(R.id.new_host_password).text.toString())
+                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                        val confirmation = field(activity, "emptyPasswordConfirmation") as AlertDialog
+                        assertTrue(confirmation.isShowing)
+                        confirmation.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                    }
+                    barrier(); barrier()
+                    assertFalse("Confirmed empty replacement clears the restore marker",
+                        "7" in restored.preferences.getStringSet(CredentialMetadataBackup.HOST_REENTRY_IDS, emptySet()).orEmpty())
+                    val savedHost = restored.repository.hosts().first { it.id == 7L }
+                    assertFalse(savedHost.credentialReentryRequired)
+                    val savedPassword = restored.onRepositoryWorker(restored.repository) { restored.repository.readPassword(savedHost) }
+                    try { assertArrayEquals(byteArrayOf(), savedPassword) } finally { savedPassword.fill(0) }
+                }
+            } finally { snapshot.fill(0) }
+        }
+    }
+
+    @Test fun passphraseSettingsReadDoesNotTurnMissingReferencedCiphertextIntoEmptyRestoreEntry() = fixture { f ->
+        val missingReference = "missing_restored_passphrase_record"
+        f.preferences.edit(commit = true) {
+            clear()
+            putString(LegacyCredentialReferences.GLOBAL_PASSPHRASE, missingReference)
+            putBoolean(CredentialMetadataBackup.PASSPHRASE_REENTRY, true)
+        }
+        val error = AtomicReference<Throwable?>()
+        val done = CountDownLatch(1)
+        f.repository.execute {
+            try { f.repository.readPassphraseForEdit() } catch (failure: Throwable) { error.set(failure) }
+            finally { done.countDown() }
+        }
+        assertTrue(done.await(10, TimeUnit.SECONDS))
+        assertTrue("Existing unreadable records must still fail closed", error.get() is CredentialRepositoryException)
+        assertEquals(missingReference, f.preferences.getString(LegacyCredentialReferences.GLOBAL_PASSPHRASE, null))
+        assertTrue(f.preferences.getBoolean(CredentialMetadataBackup.PASSPHRASE_REENTRY, false))
+
+        val tampered = SecretStoreException(SecretStoreException.Reason.INVALID_RECORD)
+        val damagedStore = object : SecretStore by f.store {
+            override fun read(id: SecretId): ByteArray? = throw tampered
+        }
+        val damagedRepository = CredentialRepository(f.helper, f.preferences, damagedStore)
+        val damagedError = AtomicReference<Throwable?>()
+        val damagedDone = CountDownLatch(1)
+        damagedRepository.execute {
+            try { damagedRepository.readPassphraseForEdit() } catch (failure: Throwable) { damagedError.set(failure) }
+            finally { damagedDone.countDown() }
+        }
+        assertTrue(damagedDone.await(10, TimeUnit.SECONDS))
+        assertSame("Tampered existing ciphertext must not be presented as an empty replacement", tampered, damagedError.get())
+    }
+
     @Test fun actualMainPreferencesAndHostNavigationKeepFallbackIndependentAndPersistSelection() = uiFixture { f ->
         // Blank endpoint intentionally prevents any network/SSH work in this UI storage test.
         assertTrue(f.repository.prepare())
@@ -633,6 +781,18 @@ class CredentialRepositoryAndroidTest {
         assertNotEquals(Looper.getMainLooper(), Looper.myLooper())
         val latch = CountDownLatch(1); AndroidCredentials.get(target).execute { latch.countDown() }
         assertTrue(latch.await(10, TimeUnit.SECONDS)); instrumentation.waitForIdleSync()
+    }
+    private fun <T> Fixture.onRepositoryWorker(repository: CredentialRepository, action: () -> T): T {
+        val result = AtomicReference<T?>()
+        val error = AtomicReference<Throwable?>()
+        val done = CountDownLatch(1)
+        repository.execute {
+            try { result.set(action()) } catch (failure: Throwable) { error.set(failure) } finally { done.countDown() }
+        }
+        assertTrue(done.await(20, TimeUnit.SECONDS))
+        error.get()?.let { throw AssertionError(it) }
+        @Suppress("UNCHECKED_CAST")
+        return result.get() as T
     }
     private fun editor(activity: ListEditActivity) = field(activity, "editing") as AlertDialog
     private fun secretDialog(activity: SettingsActivity): AlertDialog {

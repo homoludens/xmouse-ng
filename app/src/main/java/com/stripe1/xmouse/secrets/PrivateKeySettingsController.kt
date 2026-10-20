@@ -127,6 +127,8 @@ class PrivateKeySettingsController(private val activity: Activity, private val p
             preferences.contains(LegacyCredentialReferences.GLOBAL_PRIVATE_KEY) -> "Imported SSH private key"
             !preferences.getString(AndroidPrivateKeys.LEGACY_PATH, "").isNullOrEmpty() ->
                 "Saved key needs import. Tap to select it with the document picker."
+            preferences.getBoolean(CredentialMetadataBackup.PRIVATE_KEY_REENTRY, false) ->
+                "Private key was not restored. Tap to select it again with the document picker."
             else -> "Select an SSH private-key document"
         }
     }

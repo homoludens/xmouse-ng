@@ -29,6 +29,7 @@ class CredentialRepositoryException : Exception("Protected credentials unavailab
 class CredentialHost(
     val id: Long, val alias: String?, val host: String?, val user: String?, val port: String?,
     val passwordReference: String?, val legacyPasswordPresent: Boolean,
+    val credentialReentryRequired: Boolean = false,
 )
 
 enum class CredentialKind { PASSWORD, PASSPHRASE, PRIVATE_KEY }
@@ -79,10 +80,17 @@ class CredentialRepository internal constructor(
 
     fun hosts(): List<CredentialHost> {
         offMain()
+        val reentryIds = preferences.getStringSet(CredentialMetadataBackup.HOST_REENTRY_IDS, emptySet())?.toSet().orEmpty()
         return database.readableDatabase.rawQuery(
             "SELECT id, Alias, Host, Username, Port, PasswordCredentialRef, Password IS NOT NULL FROM contacts ORDER BY id", null,
         ).use { c -> buildList {
-            while (c.moveToNext()) add(CredentialHost(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4), c.getString(5), c.getInt(6) != 0))
+            while (c.moveToNext()) {
+                val id = c.getLong(0)
+                val reference = c.getString(5)
+                val restoredReentry = reference == null && c.getInt(6) == 0 && id.toString() in reentryIds
+                add(CredentialHost(id, c.getString(1), c.getString(2), c.getString(3), c.getString(4), reference,
+                    c.getInt(6) != 0 || restoredReentry, restoredReentry))
+            }
         } }
     }
 
@@ -91,7 +99,10 @@ class CredentialRepository internal constructor(
         return hosts().firstOrNull { it.id == selected } ?: CredentialHost(
             0, null, preferences.getString("setting_host", ""), preferences.getString("setting_user", ""),
             preferences.getString("setting_port", "22"), preferences.getString(LegacyCredentialReferences.DEFAULT_PASSWORD, null),
-            preferences.contains("setting_pass"),
+            preferences.contains("setting_pass") || preferences.getBoolean(CredentialMetadataBackup.DEFAULT_PASSWORD_REENTRY, false),
+            preferences.getString(LegacyCredentialReferences.DEFAULT_PASSWORD, null) == null &&
+                !preferences.contains("setting_pass") &&
+                preferences.getBoolean(CredentialMetadataBackup.DEFAULT_PASSWORD_REENTRY, false),
         )
     }
 
@@ -106,16 +117,36 @@ class CredentialRepository internal constructor(
 
     fun readPassword(host: CredentialHost): ByteArray = readStored(host.passwordReference, host.legacyPasswordPresent)
     fun readPassphrase(): ByteArray = readStored(
-        preferences.getString(LegacyCredentialReferences.GLOBAL_PASSPHRASE, null), preferences.contains("pref_key_passphrase"),
+        preferences.getString(LegacyCredentialReferences.GLOBAL_PASSPHRASE, null),
+        preferences.contains("pref_key_passphrase") || preferences.getBoolean(CredentialMetadataBackup.PASSPHRASE_REENTRY, false),
     )
+
+    /**
+     * Settings may replace a known restore marker only when the backup intentionally omitted the
+     * record. A present reference or legacy value always goes through the normal strict read path.
+     */
+    fun readPassphraseForEdit(): ByteArray {
+        offMain()
+        val reference = preferences.getString(LegacyCredentialReferences.GLOBAL_PASSPHRASE, null)
+        if (reference != null) return readStored(reference, false)
+        if (preferences.contains("pref_key_passphrase")) return readStored(null, true)
+        if (preferences.getBoolean(CredentialMetadataBackup.PASSPHRASE_REENTRY, false)) return byteArrayOf()
+        return byteArrayOf()
+    }
+
+    /** Called by the system BackupAgent only on this repository's serialized worker. */
+    internal fun snapshotForBackup(): ByteArray {
+        offMain()
+        return CredentialMetadataBackup.capture(database, preferences)
+    }
 
     /** Fresh records per edit/add avoid clobbering old credentials, even after SQLite ID reuse. */
     fun saveHost(expected: CredentialHost?, alias: String, host: String, user: String, port: String, password: ByteArray): Long {
         requireWritable()
-        expected?.let { readPassword(it).fill(0) }
+        expected?.takeUnless { it.credentialReentryRequired }?.let { readPassword(it).fill(0) }
         val reference = verifiedReplacement(password)
         val db = database.writableDatabase
-        return db.transaction {
+        val savedId = db.transaction {
             val values = ContentValues().apply {
                 put("Alias", alias); put("Host", host); put("Username", user); put("Port", port)
                 putNull("Password"); put(DatabaseHandler.PASSWORD_CREDENTIAL_REF, reference.value)
@@ -129,6 +160,8 @@ class CredentialRepository internal constructor(
                 expected.id
             }
         }
+        clearHostReentryMarker(savedId)
+        return savedId
     }
 
     fun deleteHost(expected: CredentialHost) {
@@ -145,8 +178,25 @@ class CredentialRepository internal constructor(
         requireWritable()
         readStored(preferences.getString(key, null), preferences.contains(legacy)).fill(0)
         val id = verifiedReplacement(plaintext)
-        val committed = preferences.edit().putString(key, id.value).remove(legacy).commit()
+        val reentryMarker = when (key) {
+            LegacyCredentialReferences.DEFAULT_PASSWORD -> CredentialMetadataBackup.DEFAULT_PASSWORD_REENTRY
+            LegacyCredentialReferences.GLOBAL_PASSPHRASE -> CredentialMetadataBackup.PASSPHRASE_REENTRY
+            else -> null
+        }
+        val editor = preferences.edit().putString(key, id.value).remove(legacy)
+        reentryMarker?.let(editor::remove)
+        val committed = editor.commit()
         if (!committed) { isWritable = false; throw CredentialRepositoryException() }
+    }
+
+    private fun clearHostReentryMarker(id: Long) {
+        val existing = preferences.getStringSet(CredentialMetadataBackup.HOST_REENTRY_IDS, emptySet())?.toMutableSet()
+            ?: return
+        if (!existing.remove(id.toString())) return
+        if (!preferences.edit().putStringSet(CredentialMetadataBackup.HOST_REENTRY_IDS, existing).commit()) {
+            isWritable = false
+            throw CredentialRepositoryException()
+        }
     }
 
     private fun verifiedReplacement(bytes: ByteArray): SecretId {
@@ -173,14 +223,23 @@ class CredentialRepository internal constructor(
         val useKey = preferences.getBoolean("pref_usekeyauth", false)
         val keyRef = preferences.getString(LegacyCredentialReferences.GLOBAL_PRIVATE_KEY, null)
         val reference = if (useKey) preferences.getString(LegacyCredentialReferences.GLOBAL_PASSPHRASE, null) else host.passwordReference
-        val legacy = if (useKey) preferences.contains("pref_key_passphrase") else host.legacyPasswordPresent
-        readAttempt(reference, legacy, if (useKey) CredentialKind.PASSPHRASE else CredentialKind.PASSWORD, prompts) { credential, error ->
+        val legacy = if (useKey) preferences.contains("pref_key_passphrase") ||
+            preferences.getBoolean(CredentialMetadataBackup.PASSPHRASE_REENTRY, false) else host.legacyPasswordPresent
+        val restoredReentry = if (useKey) preferences.getBoolean(CredentialMetadataBackup.PASSPHRASE_REENTRY, false)
+            else host.credentialReentryRequired
+        readAttempt(reference, legacy, if (useKey) CredentialKind.PASSPHRASE else CredentialKind.PASSWORD, prompts,
+            done = { credential, error ->
             if (credential == null) { completion.complete(null, error); return@readAttempt }
             if (!useKey) {
                 completion.complete(AuthenticationMaterial(host, false, credential, byteArrayOf(), byteArrayOf()), null)
             } else {
                 if (keyRef != null) {
-                    readAttempt(keyRef, false, CredentialKind.PRIVATE_KEY, prompts) { key, keyError ->
+                    readAttempt(keyRef, false, CredentialKind.PRIVATE_KEY, prompts, done = { key, keyError ->
+                        if (key == null) { credential.fill(0); completion.complete(null, keyError) }
+                        else completion.complete(AuthenticationMaterial(host, true, byteArrayOf(), credential, key), null)
+                    })
+                } else if (preferences.getBoolean(CredentialMetadataBackup.PRIVATE_KEY_REENTRY, false)) {
+                    requestMemoryOnly(CredentialKind.PRIVATE_KEY, prompts) { key, keyError ->
                         if (key == null) { credential.fill(0); completion.complete(null, keyError) }
                         else completion.complete(AuthenticationMaterial(host, true, byteArrayOf(), credential, key), null)
                     }
@@ -195,12 +254,14 @@ class CredentialRepository internal constructor(
                     }
                 }
             }
-        }
+        }, forceReentry = restoredReentry)
     }
 
-    private fun readAttempt(reference: String?, legacy: Boolean, kind: CredentialKind, prompts: CredentialPrompts, done: (ByteArray?, String?) -> Unit) {
+    private fun readAttempt(reference: String?, legacy: Boolean, kind: CredentialKind, prompts: CredentialPrompts,
+                            done: (ByteArray?, String?) -> Unit, forceReentry: Boolean = false) {
         if (reference == null) {
-            if (legacy) done(null, RECOVERY_MESSAGE) else done(byteArrayOf(), null)
+            if (forceReentry) requestMemoryOnly(kind, prompts, done)
+            else if (legacy) done(null, RECOVERY_MESSAGE) else done(byteArrayOf(), null)
             return
         }
         val secretId = try { id(reference) } catch (_: CredentialRepositoryException) { done(null, RECOVERY_MESSAGE); return }
@@ -213,6 +274,20 @@ class CredentialRepository internal constructor(
                 }
             }
         }
+    }
+
+    private fun requestMemoryOnly(kind: CredentialKind, prompts: CredentialPrompts, done: (ByteArray?, String?) -> Unit) {
+        val requestId = SecretId("restore_reentry_${UUID.randomUUID().toString().replace("-", "")}")
+        val request = CredentialReentryRequest(requestId) { result ->
+            execute {
+                when (result) {
+                    is CredentialReadResult.Available -> done(result.plaintext, null)
+                    CredentialReadResult.Cancelled -> done(null, null)
+                    else -> done(null, RECOVERY_MESSAGE)
+                }
+            }
+        }
+        prompts.request(kind, request)
     }
 
     private fun requireWritable() { offMain(); if (!isWritable || !prepare()) throw CredentialRepositoryException() }

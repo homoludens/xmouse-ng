@@ -13,6 +13,8 @@ import com.stripe1.xmouse.DatabaseHandler
  * Does not close the caller-owned helper. Failures stop migration; retry with the same sources/store.
  */
 object AndroidCredentialMigration {
+    private const val DATABASE_COMPACTION_COMPLETE = "credential_database_compacted_v1"
+
     /** False is only "no pending raw path", not a private-key validation/availability guarantee. */
     class Result(val legacyKeyImportRequired: Boolean)
 
@@ -31,6 +33,12 @@ object AndroidCredentialMigration {
             val db = database.writableDatabase
             check(!db.inTransaction()) { "Migration requires its own transaction boundary" }
             LegacyCredentialMigration(AndroidLegacyCredentialSources(db, preferences), secrets, probe).run()
+            if (!preferences.getBoolean(DATABASE_COMPACTION_COMPLETE, false)) {
+                database.checkpointAndCompactAfterCredentialMigration()
+                if (!preferences.edit().putBoolean(DATABASE_COMPACTION_COMPLETE, true).commit()) {
+                    migrationFail(CredentialMigrationException.Reason.STORAGE_FAILURE)
+                }
+            }
             // Raw paths are configuration context, never private-key bytes. Keep even readable paths
             // until the validated import boundary (4.7) has durably replaced them. Do not open files,
             // infer per-host key choices, clear the path, or switch off pref_usekeyauth here.

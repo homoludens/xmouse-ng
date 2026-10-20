@@ -47,6 +47,7 @@ object AndroidPrivateKeys {
             editor.putString(LegacyCredentialReferences.GLOBAL_PRIVATE_KEY, replacement.value)
             editor.putString(LABEL, "Imported SSH private key")
             editor.remove(LEGACY_PATH)
+            editor.remove(CredentialMetadataBackup.PRIVATE_KEY_REENTRY)
             // Retain recovery context for the intrinsically uncertain SharedPreferences commit(false)
             // case. Old ciphertext is NEVER overwritten/deleted, even after successful replacement.
             editor.putString(PREVIOUS_REFERENCE, expected.reference)
@@ -55,8 +56,17 @@ object AndroidPrivateKeys {
             if (!committed) {
                 // Android updates its cache before disk. Restore only our fields, not unrelated prefs.
                 val rollback = preferences.edit()
-                listOf(LegacyCredentialReferences.GLOBAL_PRIVATE_KEY, LABEL, LEGACY_PATH, PREVIOUS_REFERENCE, PREVIOUS_PATH).forEach {
-                    if (before.containsKey(it)) rollback.putString(it, before[it] as String?) else rollback.remove(it)
+                listOf(LegacyCredentialReferences.GLOBAL_PRIVATE_KEY, LABEL, LEGACY_PATH, PREVIOUS_REFERENCE, PREVIOUS_PATH,
+                    CredentialMetadataBackup.PRIVATE_KEY_REENTRY).forEach {
+                    when (val value = before[it]) {
+                        is String -> rollback.putString(it, value)
+                        is Boolean -> rollback.putBoolean(it, value)
+                        is Int -> rollback.putInt(it, value)
+                        is Long -> rollback.putLong(it, value)
+                        is Float -> rollback.putFloat(it, value)
+                        is Set<*> -> rollback.putStringSet(it, value.filterIsInstance<String>().toSet())
+                        else -> rollback.remove(it)
+                    }
                 }
                 val restored = rollback.commit()
                 if (!restored) keyImportFail(PrivateKeyImportException.Reason.STORAGE_FAILURE)

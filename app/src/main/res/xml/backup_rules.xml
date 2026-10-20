@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- The custom agent writes this versioned, credential-free metadata snapshot at backup time. -->
+    <include domain="file" path="backup/safe-config-v1.bin" />
+    <!-- Preserve the existing active keyboard and three presets. -->
+    <include domain="file" path="keyLayoutFile.csv" />
+    <include domain="file" path="keyFileOne.csv" />
+    <include domain="file" path="keyFileTwo.csv" />
+    <include domain="file" path="keyFileThree.csv" />
+</full-backup-content>

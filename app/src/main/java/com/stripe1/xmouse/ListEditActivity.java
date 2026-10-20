@@ -30,6 +30,7 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
     private CredentialRepository credentials;
     private int generation;
     private AlertDialog editing;
+    private AlertDialog emptyPasswordConfirmation;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -46,7 +47,12 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
     }
 
     @Override protected void onStart() { super.onStart(); loadCurrentHostList(); }
-    @Override protected void onStop() { generation++; if (editing != null) editing.dismiss(); super.onStop(); }
+    @Override protected void onStop() {
+        generation++;
+        if (emptyPasswordConfirmation != null) emptyPasswordConfirmation.dismiss();
+        if (editing != null) editing.dismiss();
+        super.onStop();
+    }
     @Override protected void onDestroy() { database.close(); super.onDestroy(); }
     private boolean current(int token) { return token == generation && !isFinishing() && !isDestroyed(); }
     private void failure() { Toast.makeText(this, CredentialRepository.RECOVERY_MESSAGE, Toast.LENGTH_LONG).show(); }
@@ -116,12 +122,14 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
                 byte[] password = null;
                 try {
                     if (!credentials.prepare()) throw new com.stripe1.xmouse.secrets.CredentialRepositoryException();
-                    password = existing == null ? new byte[0] : credentials.readPassword(existing.getCredentialHost());
+                    boolean reentry = existing != null && existing.getCredentialHost().getCredentialReentryRequired();
+                    password = existing == null || reentry ? new byte[0] : credentials.readPassword(existing.getCredentialHost());
                     final byte[] loaded = password;
                     runOnUiThread(() -> {
                         try {
                             if (current(token) && dialog.isShowing()) {
                                 passwordBox.setText(new String(loaded, StandardCharsets.UTF_8));
+                                if (reentry) passwordBox.setHint("Enter the saved password again");
                                 dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
                             }
                         } finally { Arrays.fill(loaded, (byte) 0); }
@@ -144,21 +152,27 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
                 dialog.dismiss(); loadCurrentHostList();
             } else {
                 String user = userBox.getText().toString(); String port = portBox.getText().toString();
-                byte[] password = passwordBox.getText().toString().getBytes(StandardCharsets.UTF_8);
-                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
-                credentials.execute(() -> {
-                    boolean saved;
-                    try { credentials.saveHost(existing == null ? null : existing.getCredentialHost(), alias, endpoint, user, port, password); saved = true; }
-                    catch (Exception ignored) { saved = false; }
-                    finally { Arrays.fill(password, (byte) 0); }
-                    final boolean success = saved;
-                    runOnUiThread(() -> {
-                        if (current(token) && dialog.isShowing()) {
-                            if (success) { dialog.dismiss(); loadCurrentHostList(); }
-                            else { failure(); dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true); }
-                        }
+                if (existing != null && existing.getCredentialHost().getCredentialReentryRequired()
+                        && passwordBox.getText().length() == 0) {
+                    AlertDialog confirmation = new AlertDialog.Builder(this)
+                            .setTitle("Save an empty password?")
+                            .setMessage("This host's saved password was not included in the backup. Confirm to replace it with an empty password.")
+                            .setPositiveButton("Save empty password", (confirmationDialog, which) -> {
+                                if (current(token) && dialog.isShowing()) {
+                                    saveHost(dialog, token, existing, alias, endpoint, user, port, new byte[0]);
+                                }
+                            })
+                            .setNegativeButton("Keep editing", null)
+                            .create();
+                    emptyPasswordConfirmation = confirmation;
+                    confirmation.setOnDismissListener(ignored -> {
+                        if (emptyPasswordConfirmation == confirmation) emptyPasswordConfirmation = null;
                     });
-                });
+                    confirmation.show();
+                    return;
+                }
+                byte[] password = passwordBox.getText().toString().getBytes(StandardCharsets.UTF_8);
+                saveHost(dialog, token, existing, alias, endpoint, user, port, password);
             }
         });
         dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(view -> {
@@ -167,6 +181,24 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
             else credentials.execute(() -> {
                 try { credentials.deleteHost(existing.getCredentialHost()); runOnUiThread(() -> { if (current(token)) { dialog.dismiss(); loadCurrentHostList(); } }); }
                 catch (Exception ignored) { runOnUiThread(() -> { if (current(token)) failure(); }); }
+            });
+        });
+    }
+
+    private void saveHost(AlertDialog dialog, int token, HostItem existing, String alias,
+                          String endpoint, String user, String port, byte[] password) {
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+        credentials.execute(() -> {
+            boolean saved;
+            try { credentials.saveHost(existing == null ? null : existing.getCredentialHost(), alias, endpoint, user, port, password); saved = true; }
+            catch (Exception ignored) { saved = false; }
+            finally { Arrays.fill(password, (byte) 0); }
+            final boolean success = saved;
+            runOnUiThread(() -> {
+                if (current(token) && dialog.isShowing()) {
+                    if (success) { dialog.dismiss(); loadCurrentHostList(); }
+                    else { failure(); dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true); }
+                }
             });
         });
     }

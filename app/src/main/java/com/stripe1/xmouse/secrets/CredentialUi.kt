@@ -159,7 +159,7 @@ class CredentialUi(private val activity: Activity) : CredentialPrompts {
         repository.execute {
             try {
                 if (!repository.prepare()) throw CredentialRepositoryException()
-                val bytes = repository.readPassphrase()
+                val bytes = repository.readPassphraseForEdit()
                 main.post {
                     try {
                         if (!isCurrent(token)) return@post
