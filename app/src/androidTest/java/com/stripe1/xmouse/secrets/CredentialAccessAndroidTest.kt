@@ -189,13 +189,13 @@ class CredentialAccessAndroidTest {
     }
 
     private fun snapshotMetadata(): Metadata {
-        // Open the fixture through the real v2 helper, isolated via Context (no schema migration).
+        // Open/migrate the v2 fixture through the current real helper in this isolated Context.
         val helper = DatabaseHandler(context, arrayListOf(), arrayListOf())
         val hosts: List<List<String?>>
         val scripts: List<List<String?>>
         helper.use {
             val db = helper.readableDatabase
-            assertEquals(2, db.version)
+            assertEquals(DatabaseHandler.DATABASE_VERSION, db.version)
             hosts = rows(db, "contacts")
             scripts = rows(db, "scripts")
         }

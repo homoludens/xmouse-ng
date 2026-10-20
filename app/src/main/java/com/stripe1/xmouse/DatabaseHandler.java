@@ -5,18 +5,20 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteException;
 import android.database.sqlite.SQLiteOpenHelper;
-import android.util.Log;
 
+import java.io.Closeable;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
 
-public class DatabaseHandler extends SQLiteOpenHelper {
+// SQLiteOpenHelper gained AutoCloseable only at API 29; Closeable keeps callers safe on API 24–28.
+public class DatabaseHandler extends SQLiteOpenHelper implements Closeable {
  
     // All Static variables
     // Database Version
-    private static final int DATABASE_VERSION = 2;
+    public static final int DATABASE_VERSION = 3;
     public SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
     // Database Name
     private static final String DATABASE_NAME = "contactsManager";
@@ -24,69 +26,131 @@ public class DatabaseHandler extends SQLiteOpenHelper {
     // Contacts table name
     public static final String HOST_TABLE_NAME = "contacts";
     public static final String SCRIPT_TABLE_NAME = "scripts";
+    // V3 host metadata. Host/Port remain the original manual endpoint; addresses and Network
+    // handles observed during discovery are never persisted as a service's logical identity.
+    public static final String PASSWORD_CREDENTIAL_REF = "PasswordCredentialRef";
+    public static final String LOCATOR_TYPE = "LocatorType";
+    public static final String LOCATOR_MANUAL = "manual";
+    public static final String LOCATOR_DISCOVERED_SERVICE = "discovered_service";
+    public static final String SERVICE_INSTANCE_NAME = "ServiceInstanceName";
+    public static final String SERVICE_TYPE = "ServiceType";
+    public static final String SERVICE_DOMAIN = "ServiceDomain";
+    public static final String STABLE_TARGET_HOSTNAME = "StableTargetHostname";
     // Contacts Table Columns names
     private static final String KEY_ID = "id";
     private static final String KEY_TIME = "time";
-    //private static final String KEY_NAME = "name";
-    //private static final String KEY_PH_NO = "phone_number";
- 
-    private ArrayList<ArrayList<String>> hostVarList;
-    private ArrayList<ArrayList<String>> scriptVarList;
-    
-    public DatabaseHandler(Context context,ArrayList<ArrayList<String>> hostVars,ArrayList<ArrayList<String>> scriptVars) {
+    private static final String[] LEGACY_HOST_FIELDS = {"Alias", "Host", "Username", "Port", "Password"};
+    private static final String[] LEGACY_SCRIPT_FIELDS = {"Alias", "Script"};
+
+    public DatabaseHandler(Context context) {
         super(context, DATABASE_NAME, null, DATABASE_VERSION);
-        hostVarList=hostVars; 
-        scriptVarList=scriptVars;
+        dateFormat.setLenient(false);
     }
- 
-    // Creating Tables
+
+    /**
+     * Compatibility for MainActivity.initDb's legacy field lists. The helper now owns its schema:
+     * empty lists or the original declarations are accepted, never caller-supplied SQL/schema drift.
+     * Do not append metadata to MainActivity.hostDBKeys (legacy CRUD uses its positional fields).
+     */
+    public DatabaseHandler(Context context,ArrayList<ArrayList<String>> hostVars,ArrayList<ArrayList<String>> scriptVars) {
+        this(context);
+        validateLegacyFields(hostVars, LEGACY_HOST_FIELDS);
+        validateLegacyFields(scriptVars, LEGACY_SCRIPT_FIELDS);
+    }
+
+    private static void validateLegacyFields(ArrayList<ArrayList<String>> fields, String[] expected) {
+        if (fields == null) {
+            throw new IllegalArgumentException("Database field declarations must not be null");
+        }
+        if (fields.isEmpty()) return;
+        if (fields.size() != expected.length) {
+            throw new IllegalArgumentException("Unsupported database field declarations");
+        }
+        for (int i = 0; i < expected.length; i++) {
+            ArrayList<String> field = fields.get(i);
+            if (field == null || field.size() != 2 || !expected[i].equals(field.get(0))
+                    || !"TEXT".equals(field.get(1))) {
+                throw new IllegalArgumentException("Unsupported database field declarations");
+            }
+        }
+    }
+
+    // SQLiteOpenHelper runs creation/version changes, including user_version, in one transaction.
     @Override
     public void onCreate(SQLiteDatabase db) {
-    	Log.d("DatabaseHandler", "onCreate");
-    	dateFormat.setLenient(false);
-    	
-    	//setup contacts table
-        String CREATE_CONTACTS_TABLE = "CREATE TABLE " + HOST_TABLE_NAME + "(" +
-        		KEY_ID + " INTEGER PRIMARY KEY," +
-        		KEY_TIME + " DATETIME";
-        for(ArrayList<String> var : hostVarList){
-        	CREATE_CONTACTS_TABLE += "," + var.get(0) + " " + var.get(1);
+        try (Cursor tables = db.rawQuery(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT GLOB 'sqlite_*'",
+                null)) {
+            // Android creates this internal locale table even for a new database.
+            while (tables.moveToNext()) {
+                if (!"android_metadata".equals(tables.getString(0))) {
+                    throw new SQLiteException("Cannot initialize an existing unversioned database");
+                }
+            }
         }
-        CREATE_CONTACTS_TABLE += " )";
-        db.execSQL(CREATE_CONTACTS_TABLE);
-        
-        
-        //setup scripts table
-        String CREATE_SCRIPTS_TABLE = "CREATE TABLE " + SCRIPT_TABLE_NAME + "(" +
-        		KEY_ID + " INTEGER PRIMARY KEY," +
-        		KEY_TIME + " DATETIME";
-        for(ArrayList<String> var : scriptVarList){
-        	CREATE_SCRIPTS_TABLE += "," + var.get(0) + " " + var.get(1);
-        }
-        CREATE_SCRIPTS_TABLE += " )";
-        db.execSQL(CREATE_SCRIPTS_TABLE);
-        
+        createLegacyTable(db, HOST_TABLE_NAME, LEGACY_HOST_FIELDS);
+        createLegacyTable(db, SCRIPT_TABLE_NAME, LEGACY_SCRIPT_FIELDS);
+        migrate2To3(db);
     }
-    @Override
-    public void onDowngrade(SQLiteDatabase db, int oldVersion, int newVersion){
-    	Log.d("DatabaseHandler", "onDowngrade");
-    	// Drop older tables if existing
-    	db.execSQL("DROP TABLE IF EXISTS " + SCRIPT_TABLE_NAME);
-        db.execSQL("DROP TABLE IF EXISTS " + HOST_TABLE_NAME);
-        // Create tables again
-        onCreate(db);
+
+    private static void createLegacyTable(SQLiteDatabase db, String table, String[] fields) {
+        StringBuilder sql = new StringBuilder("CREATE TABLE ").append(table)
+                .append(" (id INTEGER PRIMARY KEY, time DATETIME");
+        for (String field : fields) sql.append(", ").append(field).append(" TEXT");
+        db.execSQL(sql.append(")").toString());
     }
-    // Upgrading database
+
     @Override
     public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-    	Log.d("DatabaseHandler", "onUpgrade");
-    	
-    	// Drop older tables if existing
-    	db.execSQL("DROP TABLE IF EXISTS " + SCRIPT_TABLE_NAME);
-        db.execSQL("DROP TABLE IF EXISTS " + HOST_TABLE_NAME);
-        // Create tables again
-        onCreate(db);
-        
+        // Available history establishes only v2. Never infer older/different schemas or skip steps.
+        if (oldVersion != 2 || newVersion != 3) {
+            throw new SQLiteException("Unsupported database upgrade " + oldVersion + " -> " + newVersion);
+        }
+        requireLegacyTable(db, HOST_TABLE_NAME, LEGACY_HOST_FIELDS);
+        requireLegacyTable(db, SCRIPT_TABLE_NAME, LEGACY_SCRIPT_FIELDS);
+        migrate2To3(db);
+    }
+
+    private static void requireLegacyTable(SQLiteDatabase db, String table, String[] fields) {
+        // Refuse incomplete/mismatched v2 schemas rather than recording a successful migration.
+        ArrayList<String> names = new ArrayList<>();
+        try (Cursor columns = db.rawQuery("PRAGMA table_info(" + table + ")", null)) {
+            while (columns.moveToNext()) {
+                String name = columns.getString(1);
+                String type = columns.getString(2);
+                boolean id = KEY_ID.equals(name) && "INTEGER".equalsIgnoreCase(type) && columns.getInt(5) == 1;
+                boolean time = KEY_TIME.equals(name) && "DATETIME".equalsIgnoreCase(type);
+                boolean text = false;
+                for (String field : fields) {
+                    if (field.equals(name) && "TEXT".equalsIgnoreCase(type)) text = true;
+                }
+                if (id || time || text) names.add(name);
+            }
+        }
+        if (!names.contains(KEY_ID) || !names.contains(KEY_TIME)) {
+            throw new SQLiteException("Unsupported version-2 table structure");
+        }
+        for (String field : fields) {
+            if (!names.contains(field)) throw new SQLiteException("Unsupported version-2 table structure");
+        }
+    }
+
+    private static void migrate2To3(SQLiteDatabase db) {
+        // Add only. In particular, Password and all preference credentials stay untouched until
+        // task 3.4 has durably stored AND verified their encrypted replacements.
+        db.execSQL("ALTER TABLE contacts ADD COLUMN " + PASSWORD_CREDENTIAL_REF + " TEXT");
+        db.execSQL("ALTER TABLE contacts ADD COLUMN " + LOCATOR_TYPE + " TEXT NOT NULL DEFAULT '"
+                + LOCATOR_MANUAL + "' CHECK (" + LOCATOR_TYPE + " IN ('" + LOCATOR_MANUAL + "', '"
+                + LOCATOR_DISCOVERED_SERVICE + "'))");
+        db.execSQL("ALTER TABLE contacts ADD COLUMN " + SERVICE_INSTANCE_NAME + " TEXT");
+        db.execSQL("ALTER TABLE contacts ADD COLUMN " + SERVICE_TYPE + " TEXT");
+        db.execSQL("ALTER TABLE contacts ADD COLUMN " + SERVICE_DOMAIN + " TEXT");
+        db.execSQL("ALTER TABLE contacts ADD COLUMN " + STABLE_TARGET_HOSTNAME + " TEXT");
+    }
+
+    @Override
+    public void onDowngrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        throw new SQLiteException("Unsupported database downgrade " + oldVersion + " -> " + newVersion);
     }
  
     /**
