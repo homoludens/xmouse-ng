@@ -46,7 +46,7 @@ public class MyConnectionHandler implements CommandTransport {
     //public ByteArrayOutputStream os = null;
 
 
-    private final String TAG = "MyConnectionHandler";
+    private static final String TAG = "MyConnectionHandler";
     private Activity myActivity;
 
     private MyInterface myInterface;
@@ -154,7 +154,7 @@ public class MyConnectionHandler implements CommandTransport {
         protected ProgressDialog dialog;
         protected String doInBackground(String... params) {
             try{
-                Log.d(TAG,"Connecting to... "+mUser+"@"+mHost+":"+mPort);
+                Log.d(TAG, "connection_attempt");
                 session= jsch.getSession(mUser, mHost, mPort);
 
                 if(material.getUseKey()){
@@ -169,7 +169,6 @@ public class MyConnectionHandler implements CommandTransport {
                 }else{
                     session.setConfig("PreferredAuthentications", "password,keyboard-interactive");
                     session.setPassword(material.getPassword());
-                    Log.d("SshConnectTask", "attempt password auth");
                 }
                 session.setX11Host(xhost);
                 session.setX11Port(xport + 6000);
@@ -188,13 +187,10 @@ public class MyConnectionHandler implements CommandTransport {
 
                 //channel.setInputStream(System.in);
 
-                //channel.setOutputStream(System.out);
-
                 //channel.connect(3000);
 
                 /*os = new ByteArrayOutputStream();
                 channel.setOutputStream(os);
-                //channel.setOutputStream(System.out);
                 //shellStream = new PrintStream(channel.getOutputStream());  // printStream for convenience
                 */
 
@@ -307,15 +303,13 @@ public class MyConnectionHandler implements CommandTransport {
         }
         if(session.isConnected() && channel.isConnected()){
             try {
-                //Log.d(TAG,cmd+", "+session.isConnected());
                 cmd=cmd+"\r\n";
                 pin.write(cmd.getBytes());
                 pin.flush();
                 return true;
-            } catch (IOException e) {
-                MainActivity.recentCmdTextView.setText(e.getMessage()+"\t"+cmd);
-
-                e.printStackTrace();
+            } catch (IOException ignored) {
+                Log.w(TAG, "command_send_failed");
+                Toast.makeText(myActivity, "Command could not be sent.", Toast.LENGTH_SHORT).show();
             }
         }
         return false;
@@ -360,9 +354,9 @@ public class MyConnectionHandler implements CommandTransport {
                 //session.disconnect();
                 log.append(total.toString());
 
-            } catch (Exception e){
-                e.printStackTrace();
-                log.append(e.getMessage());
+            } catch (Exception ignored){
+                Log.w(TAG, "exec_command_failed");
+                log.append("Command execution failed.");
             }
             return log.toString();
         }
@@ -440,8 +434,6 @@ public class MyConnectionHandler implements CommandTransport {
                         }
                     }
 
-                    //System.out.println("filesize="+filesize+", file="+file);
-
                     // send '\0'
                     buf[0]=0; out.write(buf, 0, 1); out.flush();
 
@@ -466,19 +458,17 @@ public class MyConnectionHandler implements CommandTransport {
                     fos=null;
 
                     if(checkAck(in)!=0){
-                        Log.d("doInBackground", "done");
+                        Log.d(TAG, "scp_complete");
                     }
 
                     // send '\0'
                     buf[0]=0; out.write(buf, 0, 1); out.flush();
 
                 }
-            } catch (JSchException e) {
-                // TODO Auto-generated catch block
-                e.printStackTrace();
-            } catch (IOException e) {
-                // TODO Auto-generated catch block
-                e.printStackTrace();
+            } catch (JSchException ignored) {
+                Log.w(TAG, "scp_transport_failed");
+            } catch (IOException ignored) {
+                Log.w(TAG, "scp_io_failed");
             }
             return log.toString();
         }
@@ -494,18 +484,16 @@ public class MyConnectionHandler implements CommandTransport {
             if(b==-1) return b;
 
             if(b==1 || b==2){
-                StringBuffer sb=new StringBuffer();
                 int c;
                 do {
                     c=in.read();
-                    sb.append((char)c);
                 }
-                while(c!='\n');
+                while(c!='\n' && c!=-1);
                 if(b==1){ // error
-                    Log.e("checkAck", sb.toString());
+                    Log.e(TAG, "scp_remote_error");
                 }
                 if(b==2){ // fatal error
-                    Log.e("checkAck", sb.toString());
+                    Log.e(TAG, "scp_remote_fatal_error");
                 }
             }
             return b;

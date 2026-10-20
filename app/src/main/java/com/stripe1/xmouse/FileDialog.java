@@ -6,7 +6,6 @@ import android.app.Dialog;
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnClickListener;
 import android.os.Environment;
-import android.util.Log;
 
 import com.stripe1.xmouse.ListenerList.FireHandler;
 
@@ -18,7 +17,6 @@ import java.util.List;
 
 public class FileDialog {
     private static final String PARENT_DIR = "..";
-    private final String TAG = getClass().getName();
     private String[] fileList;
     private File currentPath;
     public interface FileSelectedListener {
@@ -56,7 +54,6 @@ public class FileDialog {
         if (selectDirectoryOption) {
             builder.setPositiveButton("Select directory", new OnClickListener() {
                 public void onClick(DialogInterface dialog, int which) {
-                    Log.d(TAG, currentPath.getPath());
                     fireDirectorySelectedEvent(currentPath);
                 }
             });

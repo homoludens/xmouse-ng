@@ -22,12 +22,10 @@ public class HostListItemAdapter extends ArrayAdapter<HostItem> {
 
     }
     private LayoutInflater mLayoutInflater = null;
-    private Context mContext;
 
     public HostListItemAdapter(Context context, List<HostItem> plugins, MyInterface a, ListEditActivity.ActivityType t) {
         super(context, R.layout.host_list_item, plugins);
         myInterface = a;
-        mContext = context;
         mLayoutInflater = LayoutInflater.from(context);
         type= t;
     }
@@ -71,15 +69,6 @@ public class HostListItemAdapter extends ArrayAdapter<HostItem> {
         /*if(MainActivity.setting_keyboard_show_details){
             itemViewHolder.itemCommand.setText(item.getmCommand());
             itemViewHolder.itemCommand.setSelected(true);
-        }*/
-
-
-        /*final RelativeLayout layoutHolder = (RelativeLayout) convertView.findViewById(R.id.textViewHolderLayout);
-        try{
-            layoutHolder.setBackgroundColor(Color.parseColor(item.getmColor()));
-        }catch(Exception e){
-            e.printStackTrace();
-            Toast.makeText(mContext, "Error parsing new layout: " + e.getMessage() + " " + item.getmColor(), Toast.LENGTH_SHORT).show();
         }*/
 
 

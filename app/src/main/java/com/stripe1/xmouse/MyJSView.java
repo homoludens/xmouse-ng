@@ -83,7 +83,6 @@ public class MyJSView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        //Log.d("js", event.toString());
         switch (event.getAction()) {
             case MotionEvent.ACTION_DOWN:
             case MotionEvent.ACTION_MOVE:

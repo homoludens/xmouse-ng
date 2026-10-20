@@ -99,39 +99,12 @@ public class CustomKeyboardButtonAdapter extends ArrayAdapter<CustomKeyboardButt
         final RelativeLayout layoutHolder = (RelativeLayout) convertView.findViewById(R.id.textViewHolderLayout);
         try{
             layoutHolder.setBackgroundColor(Color.parseColor(item.getmColor()));
-        }catch(Exception e){
-            e.printStackTrace();
-            Toast.makeText(mContext, "Error parsing new layout: " + e.getMessage() + " " + item.getmColor(), Toast.LENGTH_SHORT).show();
+        }catch(Exception ignored){
+            Log.w("CustomKeyboardButtonAdapter", "custom_button_display_failed");
+            Toast.makeText(mContext, "Button style could not be displayed.", Toast.LENGTH_SHORT).show();
         }
 
 		//itemViewHolder.itemIcon.setImageResource(keyboard_button.getIcon());
-        /*convertView.setOnTouchListener(new View.OnTouchListener() {
-            @Override
-            public boolean onTouch(View v, MotionEvent event) {
-                //String ac = "";
-                switch (event.getAction()) {
-
-                    case MotionEvent.ACTION_DOWN:
-                        //ac="down";
-                        layoutHolder.setBackgroundColor(Color.parseColor("#00BFFF"));//lightblue
-                        break;
-                    case MotionEvent.ACTION_UP:
-                        //ac="up";
-                        try{
-                            layoutHolder.setBackgroundColor(Color.parseColor(item.getmColor()));
-                        }catch(Exception e){
-                            e.printStackTrace();
-                            Toast.makeText(mContext, "Error parsing new layout: " + e.getMessage() + " " + item.getmColor(), Toast.LENGTH_SHORT).show();
-                        }
-                        break;
-
-                }
-                //MainActivity.recentCmdTextView.setText(ac);
-                return false;//false=do not consume click event
-
-            }
-        });*/
-
 		convertView.setOnClickListener(new View.OnClickListener(){
 
 			@Override
@@ -149,8 +122,8 @@ public class CustomKeyboardButtonAdapter extends ArrayAdapter<CustomKeyboardButt
 	public void execCommand(String command, IDoTool doTool, CommandTransport transport) {
 		try {
 			CustomCommandDispatcher.execCommand(command, doTool, transport);
-		} catch (ArrayIndexOutOfBoundsException e) {
-			Log.d("execCommand", "invalid command: " + command);
+		} catch (ArrayIndexOutOfBoundsException ignored) {
+			Log.d("CustomKeyboardButtonAdapter", "invalid_custom_command");
 		}
 	}
 

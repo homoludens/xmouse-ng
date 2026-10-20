@@ -13,6 +13,7 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.times;
 
 /** Only the UI delegate needs Android stubs; its constructor/Context/Activity are never used. */
 public class CustomKeyboardButtonAdapterDelegationTest {
@@ -33,14 +34,29 @@ public class CustomKeyboardButtonAdapterDelegationTest {
         RecordingSshTransport transport = new RecordingSshTransport();
 
         try (MockedStatic<Log> log = mockStatic(Log.class)) {
-            for (String command : new String[]{"key", "type", "mouseclick", "mousedown", "mouseup",
-                    "mousemoverelative", "mousemoverelative 1", "   "}) {
+            String[] commands = {"key", "type", "mouseclick", "mousedown", "mouseup",
+                    "mousemoverelative", "mousemoverelative 1", "   "};
+            for (String command : commands) {
                 adapter.execCommand(command, new XDoTool(transport), transport);
-                log.verify(() -> Log.d("execCommand", "invalid command: " + command));
             }
+            log.verify(() -> Log.d("CustomKeyboardButtonAdapter", "invalid_custom_command"), times(commands.length));
             log.verifyNoMoreInteractions();
         }
         assertTrue(transport.getCommands().isEmpty());
+    }
+
+    @Test
+    public void typedCustomCommandIsDispatchedWithoutLoggingItsContent() {
+        CustomKeyboardButtonAdapter adapter = mock(CustomKeyboardButtonAdapter.class, CALLS_REAL_METHODS);
+        RecordingSshTransport transport = new RecordingSshTransport();
+        String syntheticTypedContent = "XMouseSyntheticTypedSentinel";
+
+        try (MockedStatic<Log> log = mockStatic(Log.class)) {
+            adapter.execCommand("type " + syntheticTypedContent, new XDoTool(transport), transport);
+            log.verifyNoInteractions();
+        }
+
+        assertEquals(Collections.singletonList("xdotool type " + syntheticTypedContent), transport.getCommands());
     }
 
     @Test

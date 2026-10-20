@@ -122,9 +122,7 @@ public class SettingsActivity extends AppCompatPreferenceActivity {
 
             hostsNames[i]=desc;
             hostsValues[i]=val;
-            //Log.d("setting", "-"+hosts.get(i).get(0)+"-");
         }
-        //Log.d("setting", "-"+hosts.size()+"-");
         if(hosts.size()!=0){
             listPrefHost = new ListPreference(this);
             listPrefHost.setKey("hostPreferenceList"); //Refer to get the pref value

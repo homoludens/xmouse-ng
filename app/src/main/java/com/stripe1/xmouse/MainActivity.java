@@ -57,6 +57,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		SpanVariableGridView.OnItemLongClickListener,
 		myDialogFragment.NoticeDialogListener,
 		SensorEventListener{
+	private static final String TAG = "MainActivity";
 
 	MenuItem conDiscButton = null;
 	MenuItem KeyLockButton = null;
@@ -130,15 +131,13 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	//private ArrayList<ArrayList<String>> scriptItems = new ArrayList<ArrayList<String>>();
 
 	static {
-		Log.d("MainActivity", "Configure spongy castle security");
+		Log.d(TAG, "configure_crypto_provider");
 		Security.insertProviderAt(new org.spongycastle.jce.provider.BouncyCastleProvider(), 1);
 	}
 
 	@Override
 	public void onDialogPositiveClickValid(
 			com.stripe1.xmouse.myDialogFragment dialog, String layoutText) {
-		//Log.d("onDialogPositiveClickValid",layoutText);
-
 		LinkedList<CustomKeyboardButton> temp = loadKeyboardLayout(MainActivity.this,layoutText);
 		if(temp!=null){
 			mItems = temp;
@@ -444,8 +443,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			setting_user= prefs.getString("setting_user", "");
 			setting_port= Integer.valueOf(prefs.getString("setting_port", "22"));
 
-			//Log.d("prefTest",setting_host+" "+setting_user+" "+setting_pass+" "+setting_port);
-
 			setting_host_all = prefs.getString("hostPreferenceList", "0");//id of host in db
 
 			ArrayList<ArrayList<String>> host = db.getRowWithId(DatabaseHandler.HOST_TABLE_NAME,new String[] {"Host","Username","Port"},setting_host_all);
@@ -460,8 +457,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
                 //Log.d("getPreferences", "Zero host records, will default to last used settings");
                 Toast.makeText(getBaseContext(), "No Saved Host selected", Toast.LENGTH_LONG).show();
             }*/
-
-			//Log.d("prefTest",setting_host+" "+setting_user+" "+setting_pass+" "+setting_port);
 
 			setting_sensitivity = Float.valueOf(prefs.getString("sensitivity_list", "1.0f"));
 			setting_delay = Integer.valueOf(prefs.getString("delay_list", "350"));
@@ -490,10 +485,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			//setting_log_staydown=prefs.getBoolean("log_staydown", true);
 			//setting_command_overlay=prefs.getBoolean("command_overlay", false);
 			setting_invert_scroll=prefs.getBoolean("mouse_invert_scroll",false);
-			Log.d("getPref",""+setting_invert_scroll);
-		}catch(Exception e){
-			e.printStackTrace();
-			Toast.makeText(getApplicationContext(), "There was a problem retrieving your settings: "+e.getMessage(), Toast.LENGTH_LONG).show();
+		}catch(Exception ignored){
+			Log.w(TAG, "settings_read_failed");
+			Toast.makeText(getApplicationContext(), "There was a problem retrieving your settings.", Toast.LENGTH_LONG).show();
 		}
 	}
 	public void xMouseKeyboardSend(View v){
@@ -505,14 +499,14 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	protected void onStart() {
 		super.onStart();
 		// The activity is about to become visible.
-		Log.d("onStart","onStart");
+		Log.d(TAG, "activity_started");
 		if (conn != null) conn.startCredentialUi();
 
 	}
 	@Override
 	protected void onResume() {
 		super.onResume();
-		Log.d("onResume","onResume");
+		Log.d(TAG, "activity_resumed");
 		// The activity has become visible (it is now "resumed").
 		getPreferences();
 
@@ -576,7 +570,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			case "ydotool": doTool = new YDoTool(conn); break;
 			case "xdotool": doTool = new XDoTool(conn); break;
 			default:
-				Log.d("initDoTool", "unknown value for setting_dotool_initial: " + setting_dotool_initial);
+				Log.w(TAG, "unknown_command_backend");
 				doTool = new XDoTool(conn);
 				break;
 		}
@@ -688,8 +682,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			Intent intent = new Intent(this, SettingsActivity.class);
 			startActivity(intent);
 		} else if (id == R.id.action_conn_disc) {
-
-			//Log.d("prefTest",setting_host+" "+setting_user+" "+setting_pass+" "+setting_port);
 
 			if(conn.session != null && conn.session.isConnected()){
 				conn.xMouseDisconnect();
@@ -898,8 +890,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		try {
 			mItems.remove(potentialDeletePosition);
 			mItemAdapter.notifyDataSetChanged();
-		}catch (Exception e){
-			e.printStackTrace();
+		}catch (Exception ignored){
+			Log.w(TAG, "layout_button_delete_failed");
 			Toast.makeText(getBaseContext(),"Error during delete",Toast.LENGTH_LONG).show();
 			mItemAdapter.notifyDataSetChanged();
 		}
@@ -916,7 +908,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 				//sb.append(line).append("\n");
 				if(line.contains("<xmousesep>")){
 					//parse line in to customItems
-					//Log.d("loadKeyboardLayout",line);
 					String[] temp =line.split("<xmousesep>");
 					//iconId,span int,title string, script
 
@@ -932,22 +923,20 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 						views.add(new CustomKeyboardButton( 0,Integer.valueOf(temp[2]), temp[0], temp[1],"#ffffff"));
 
 					}
-					//Log.d("loadKeyboardLayout","using new <xmousesep> separator");
 				}else{
-					//Log.d("loadKeyboardLayout","using old comma separator");
 					String[] temp =line.split(",");
 					views.add(new CustomKeyboardButton( 0,Integer.valueOf(temp[2]), temp[0], temp[1],"#ffffff"));
 
 				}
 			}
 			//fis.close();
-		} catch(OutOfMemoryError om){
-			om.printStackTrace();
-			Toast.makeText(mCont, om.toString(), Toast.LENGTH_LONG).show();
+		} catch(OutOfMemoryError ignored){
+			Log.e(TAG, "layout_parse_resource_failure");
+			Toast.makeText(mCont, "Keyboard layout could not be loaded.", Toast.LENGTH_LONG).show();
 			return null;
-		} catch(Exception ex){
-			ex.printStackTrace();
-			Toast.makeText(mCont, ex.toString(), Toast.LENGTH_LONG).show();
+		} catch(Exception ignored){
+			Log.w(TAG, "layout_parse_failed");
+			Toast.makeText(mCont, "Keyboard layout could not be loaded.", Toast.LENGTH_LONG).show();
 			return null;
 		}
 
@@ -965,7 +954,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 		LinkedList<CustomKeyboardButton> views = new LinkedList<CustomKeyboardButton>();
 		FileInputStream fis;
-		Log.d("loadKeyboardLayout", KEYLOAYOUTFILENAME);
 		try {
 			fis = mCont.openFileInput(KEYLOAYOUTFILENAME);
 
@@ -984,26 +972,23 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 							views.add(new CustomKeyboardButton( 0,Integer.valueOf(temp[2]), temp[0], temp[1],"#FFFFFF"));
 
 						}
-						//Log.d("loadKeyboardLayout","using new <xmousesep> separator");
 					}else{
-						//Log.d("loadKeyboardLayout","using old comma separator");
 						String[] temp =line.split(",");
 						views.add(new CustomKeyboardButton( 0,Integer.valueOf(temp[2]), temp[0], temp[1],"#FFFFFF"));
 
 					}
 				}
 				fis.close();
-			} catch(OutOfMemoryError om){
-				om.printStackTrace();
-			} catch(Exception ex){
-				ex.printStackTrace();
+			} catch(OutOfMemoryError ignored){
+				Log.e(TAG, "layout_read_resource_failure");
+			} catch(Exception ignored){
+				Log.w(TAG, "layout_parse_failed");
 			}
 			//String result = sb.toString();
 			//Toast.makeText(mCont, result, Toast.LENGTH_LONG).show();
 
-		} catch (Exception e) {
-			//Toast.makeText(mCont, e.getMessage(), Toast.LENGTH_LONG).show();
-			e.printStackTrace();
+		} catch (Exception ignored) {
+			Log.w(TAG, "layout_read_failed");
 		}
 
 		if(views.size()<1){
@@ -1093,17 +1078,14 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 	public void saveKeyboardLayout(){
 
-		//Toast.makeText(getBaseContext(), sb.toString(), Toast.LENGTH_LONG).show();
-
 		try{
-			Log.d("saveKeyboardLayout", KEYLOAYOUTFILENAME);
 			FileOutputStream fos = openFileOutput(KEYLOAYOUTFILENAME, Context.MODE_PRIVATE);
 			fos.write(getKeyboardTextValue().getBytes());
 			fos.close();
 			//Toast.makeText(getBaseContext(), "Saved", Toast.LENGTH_SHORT).show();
-		}catch(Exception e){
-			e.printStackTrace();
-			Toast.makeText(getBaseContext(), e.getMessage(), Toast.LENGTH_LONG).show();
+		}catch(Exception ignored){
+			Log.w(TAG, "layout_save_failed");
+			Toast.makeText(getBaseContext(), "Keyboard layout could not be saved.", Toast.LENGTH_LONG).show();
 		}
 	}
 	public void xMouseNewCustomButton(final Integer id){
@@ -1194,7 +1176,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	private void useKeyboardSendText() {
 		CharSequence contents = ET.getText();
 		String t = contents.toString();
-		Log.d("type",String.valueOf(t));
 		if(!t.isEmpty()){
 			t = t.replaceAll("'", "'\\\"'\\\"'"); // -> xdotool type ''"'"''
 			t = t.replaceAll("\"", "\\\"");       // -> xdotool type '"'
@@ -1209,7 +1190,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 	@Override
 	public void performCallback() {
-		Log.d("tagCallback","doCallback");
+		Log.d(TAG, "connection_state_changed");
 		showConnectionStat();
 	}
 

@@ -5,7 +5,7 @@ public final class CustomCommandDispatcher {
     private CustomCommandDispatcher() {
     }
 
-    /** Missing arguments are reported by the UI caller using its existing diagnostic. */
+    /** Missing arguments are reported by the UI caller with a fixed, non-content diagnostic. */
     public static void execCommand(String command, IDoTool doTool, CommandTransport transport) {
         // Remove only the legacy prefix; keep tokenization and raw-shell fallback unchanged.
         String commandNormalized = command.replaceAll("^xdotool ", "");

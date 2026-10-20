@@ -340,7 +340,6 @@ public class MyMouseView extends View {
                                         canvas = new Canvas(mBitmap.copy(Bitmap.Config.ARGB_8888, true));
                                     } catch (Exception e) {
                                         // TODO Auto-generated catch block
-                                        e.printStackTrace();
                                     }
                                 }
                             };
