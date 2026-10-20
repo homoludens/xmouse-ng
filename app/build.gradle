@@ -1,10 +1,18 @@
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.testing.Test
+import org.gradle.process.CommandLineArgumentProvider
+
 apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.plugin.compose'
 
 android {
-    // Keep the existing lint policy until its dedicated migration in task 1.5.
     lint {
-        abortOnError = false
+        abortOnError = true
+        checkTestSources = true
+        xmlReport = true
     }
 
     namespace = 'com.stripe1.xmouse'
@@ -17,6 +25,7 @@ android {
         targetSdk = 37
         versionCode 25
         versionName "2.0.27"
+        testInstrumentationRunner = 'androidx.test.runner.AndroidJUnitRunner'
     }
     buildTypes {
         release {
@@ -39,11 +48,38 @@ kotlin {
     }
 }
 
+configurations {
+    mockitoAgent
+}
+
+// Explicit startup instrumentation avoids Mockito's dynamic self-attachment on JDK 21+.
+abstract class MockitoAgentProvider implements CommandLineArgumentProvider {
+    @InputFiles
+    @PathSensitive(PathSensitivity.RELATIVE)
+    abstract ConfigurableFileCollection getAgentJar()
+
+    @Override
+    Iterable<String> asArguments() {
+        ["-javaagent:${agentJar.asPath}".toString()]
+    }
+}
+
+tasks.withType(Test).configureEach {
+    jvmArgumentProviders.add(objects.newInstance(MockitoAgentProvider).tap {
+        agentJar.from(configurations.mockitoAgent)
+    })
+}
+
 dependencies {
-    testImplementation 'junit:junit:4.12'
-    testImplementation 'org.mockito:mockito-core:4.6.1'
-    testImplementation 'org.mockito:mockito-inline:4.6.1'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.mockito:mockito-core:5.24.0'
+    mockitoAgent('org.mockito:mockito-core:5.24.0') {
+        transitive = false
+    }
     testImplementation 'com.tngtech.java:junit-dataprovider:1.13.1'
+    androidTestImplementation 'androidx.test:core:1.7.0'
+    androidTestImplementation 'androidx.test:runner:1.7.0'
+    androidTestImplementation 'androidx.test.ext:junit:1.3.0'
     implementation 'com.jcraft:jsch:0.1.55'
     implementation 'com.madgag.spongycastle:core:1.58.0.0'
     implementation 'com.madgag.spongycastle:prov:1.58.0.0'

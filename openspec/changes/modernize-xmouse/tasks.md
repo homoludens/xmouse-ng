@@ -4,7 +4,7 @@
 - [x] 1.2 [low] Set both `ANDROID_HOME` and `ANDROID_SDK_ROOT` to `/home/homoludens/Android/Sdk` for Android tooling, without committing machine-specific project paths; verify SDK detection succeeds and no absolute SDK path is added to tracked build configuration.
 - [x] 1.3 [high] Update and pin root/app build dependencies and wrapper, replace JCenter, define the namespace, align Java/Kotlin bytecode targets, and retain the application ID; verify the wrapper runs on JDK 21 and Gradle configuration loads with the intended namespace, application ID, and SDK values.
 - [x] 1.4 [high] Adapt existing Java resource-ID switches and other modern AGP incompatibilities without a wholesale source conversion; verify `./gradlew :app:assembleDebug` compiles Java/Kotlin together with API 24 minimum and API 37 target metadata and existing menu actions remain mapped correctly.
-- [ ] 1.5 [high] Replace obsolete instrumentation configuration, modernize unit-test dependencies, and enable meaningful lint checks; verify `./gradlew :app:testDebugUnitTest :app:lintDebug` runs and the instrumentation test APK builds with the current AndroidX runner.
+- [x] 1.5 [high] Replace obsolete instrumentation configuration, modernize unit-test dependencies, and enable meaningful lint checks, including the user-approved existing-screen AndroidX drawer Back migration and explicit host/script dialog bindings; verify `./gradlew :app:testDebugUnitTest :app:lintDebug` passes, the instrumentation test APK builds with the current AndroidX runner, and focused regression checks preserve callback enablement, ordinary Back fallback, and both dialog bindings.
 
 ## 2. Capture regression fixtures and shared boundaries
 
@@ -84,7 +84,7 @@
 ## 10. Complete current Android interaction support
 
 - [ ] 10.1 [high] Apply system-bar/cutout/IME insets to the existing controls, host screens, and new editor; verify controls remain reachable with gesture/three-button navigation and keyboard show/hide on API 35, 36, and 37.
-- [ ] 10.2 [high] Replace legacy Back interception with supported AndroidX navigation handling for drawer, dialogs, and dirty editor state; verify API 36/37 Back closes the appropriate layer without accidental saves or session disconnection.
+- [ ] 10.2 [high] Complete integrated AndroidX Back handling for drawer, dialogs, and dirty editor state on top of the existing-screen drawer migration in 1.5; verify API 36/37 Back closes the appropriate layer without accidental saves or session disconnection.
 - [ ] 10.3 [high] Mark gyro hardware optional and register sensors only while active and supported; verify an API 24 device/emulator without a gyroscope can install and use touchpad, keyboard, profiles, and scripts without sensor exceptions.
 - [ ] 10.4 [low] Regression-test unchanged touchpad/joystick behavior, volume shortcuts, batch typing, scripts, and xdotool/ydotool selection; verify the modernization does not require a replacement desktop daemon or cloud account.
 

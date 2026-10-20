@@ -254,8 +254,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		DrawerLayout drawer = (DrawerLayout) findViewById(R.id.drawer_layout);
 		ActionBarDrawerToggle toggle = new ActionBarDrawerToggle(
 				this, drawer, toolbar, R.string.navigation_drawer_open, R.string.navigation_drawer_close);
-		drawer.setDrawerListener(toggle);
+		drawer.addDrawerListener(toggle);
 		toggle.syncState();
+		getOnBackPressedDispatcher().addCallback(this, new DrawerBackCallback(drawer));
 
 		mouseLayout = (LinearLayout) findViewById(R.id.mouse);
 		keyboardLayout = (LinearLayout) findViewById(R.id.keyboard);
@@ -621,15 +622,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		return super.onKeyUp(keyCode, event);
 	}
 
-	@Override
-	public void onBackPressed() {
-		DrawerLayout drawer = (DrawerLayout) findViewById(R.id.drawer_layout);
-		if (drawer.isDrawerOpen(GravityCompat.START)) {
-			drawer.closeDrawer(GravityCompat.START);
-		} else {
-			super.onBackPressed();
-		}
-	}
 	public void confirmLayoutReload(String title, String msg,final boolean def){
 		AlertDialog.Builder builder = new AlertDialog.Builder(this);
 

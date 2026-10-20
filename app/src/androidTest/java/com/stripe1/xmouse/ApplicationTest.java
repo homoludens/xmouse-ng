@@ -1,13 +1,20 @@
 package com.stripe1.xmouse;
 
-import android.app.Application;
-import android.test.ApplicationTestCase;
+import android.content.Context;
 
-/**
- * <a href="http://d.android.com/tools/testing/testing_android.html">Testing Fundamentals</a>
- */
-public class ApplicationTest extends ApplicationTestCase<Application> {
-    public ApplicationTest() {
-        super(Application.class);
+import androidx.test.core.app.ApplicationProvider;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+
+import org.junit.Test;
+import org.junit.runner.RunWith;
+
+import static org.junit.Assert.assertEquals;
+
+@RunWith(AndroidJUnit4.class)
+public class ApplicationTest {
+    @Test
+    public void applicationContextHasExpectedPackage() {
+        Context context = ApplicationProvider.getApplicationContext();
+        assertEquals("com.stripe1.xmouse", context.getPackageName());
     }
 }

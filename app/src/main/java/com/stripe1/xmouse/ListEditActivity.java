@@ -108,32 +108,31 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
     public void xMouseManage(final Integer pos){
         //open dialog for new command
 
-        //Preparing views
-        //LayoutInflater inflater = (LayoutInflater) getLayoutInflater();
-        View layout = layoutInflater.inflate(R.layout.manage_host_item, null);
-        //layout_root should be the name of the "top-level" layout node in the dialog_layout.xml file.
-        int nameId = R.id.new_host_alias;
-        int hostId = R.id.new_host_ip;
-        int userId = R.id.new_host_username;
-        int portId = R.id.new_host_port;
-        int passId = R.id.new_host_password;
-
-
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-
-        builder.setView(layout);
+        final View layout;
+        final EditText nameBox;
+        final EditText hostBox;
+        final EditText userBox;
+        final EditText portBox;
+        final EditText passwordBox;
         if(type==ActivityType.type_script) {
             layout = layoutInflater.inflate(R.layout.manage_script_item, null);
-            builder.setView(layout);
-            nameId = R.id.new_script_alias;
-            hostId = R.id.new_script_command;
+            nameBox = (EditText) layout.findViewById(R.id.new_script_alias);
+            hostBox = (EditText) layout.findViewById(R.id.new_script_command);
+            // Script dialogs have no authentication fields; existing host-only branches use these.
+            userBox = null;
+            portBox = null;
+            passwordBox = null;
+        } else {
+            layout = layoutInflater.inflate(R.layout.manage_host_item, null);
+            nameBox = (EditText) layout.findViewById(R.id.new_host_alias);
+            hostBox = (EditText) layout.findViewById(R.id.new_host_ip);
+            userBox = (EditText) layout.findViewById(R.id.new_host_username);
+            portBox = (EditText) layout.findViewById(R.id.new_host_port);
+            passwordBox = (EditText) layout.findViewById(R.id.new_host_password);
         }
 
-        final EditText nameBox = (EditText) layout.findViewById(nameId);
-        final EditText hostBox = (EditText) layout.findViewById(hostId);
-        final EditText userBox = (EditText) layout.findViewById(userId);
-        final EditText portBox = (EditText) layout.findViewById(portId);
-        final EditText passwordBox = (EditText) layout.findViewById(passId);
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setView(layout);
 
         //Building dialog
 

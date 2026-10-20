@@ -160,3 +160,71 @@ Results: **BUILD SUCCESSFUL** (1m2s); Kotlin and Java compilation both executed.
 Successful build logs, APK badging, resource-field/Compose signatures, fixture sources, and artifact assertions remain in `/tmp/opencode/xmouse-build-task-1.4`. The pre-fix build failed on the expected 20 non-final case labels; an intermediate assemble hit the 120-second harness timeout, superseded by the successful fresh run above.
 
 **Warnings / 1.5 handoff:** existing Jetifier deprecation and deprecated-Java-API notes remain. AGP packages `libandroidx.graphics.path.so` unstripped (nonfatal). Unit tests, lint, instrumentation APK/device tests, and on-device API 24/37 behavior were **not run**. The existing lint policy/test libraries and obsolete instrumentation are deliberately unchanged for **1.5**; SSH/SpongyCastle remain for **4.1**. Only task **1.4** was completed here.
+
+## Test/lint migration (task 1.5 — complete)
+
+On **2026-10-20**, updated JUnit to **4.13.2** and Mockito Core to **5.24.0**, removing the old separate `mockito-inline` declaration. Mockito 5 includes inline mocking; its [documented JDK 21+ startup-agent configuration](https://javadoc.io/static/org.mockito/mockito-core/5.24.0/org.mockito/org/mockito/Mockito.html#0.3) is supplied through a tracked-input `CommandLineArgumentProvider`, without dynamic-agent-loading overrides or machine-specific paths. The existing data-provider library and all unit-test cases/assertions remain unchanged.
+
+Set `androidx.test.runner.AndroidJUnitRunner` with the selected AndroidX Test **Core/Runner 1.7.0** and **ext JUnit 1.3.0**. Replaced `ApplicationTestCase` with an AndroidJUnit4 application-context/package assertion. Lint now explicitly aborts on errors, checks test sources, and emits an XML report; no baseline, category disablement, severity downgrade, test-failure ignore, or default-return workaround was added.
+
+### Initial blocked attempt (historical; superseded below)
+
+The first attempt exposed the following blockers and correctly left 1.5 unchecked at **4/67**. Its log is retained; the generated report paths now contain the successful follow-up results documented below.
+
+```sh
+export ANDROID_HOME=/home/homoludens/Android/Sdk
+export ANDROID_SDK_ROOT=/home/homoludens/Android/Sdk
+./gradlew --no-daemon --console=plain --continue --max-workers=2 \
+  -Dorg.gradle.jvmargs=-Xmx2g \
+  :app:testDebugUnitTest :app:lintDebug :app:assembleDebugAndroidTest
+"$ANDROID_HOME/build-tools/36.0.0/aapt2" dump xmltree \
+  app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+  --file AndroidManifest.xml
+"$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging \
+  app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+```
+
+- **Combined Gradle command failed (exit 1)** in **1m45s**, solely at `:app:lintDebug`; `--continue` allowed the instrumentation APK build to finish. **61 actionable tasks:** 34 executed, 8 from cache, 19 up-to-date. Full log: `/tmp/opencode/xmouse-task-1.5-verification.log`.
+- **Unit tests passed:** **29 tests, 0 failures/errors/skips** (22 custom-command translations, 6 ydotool key translations, 1 existing arithmetic smoke test). Reviewed all three XML suites under `app/build/test-results/testDebugUnitTest/`; both command backends and fallback commands retain their original coverage.
+- **Instrumentation APK built:** `app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk`. Actual APK manifest inspection confirms package `com.stripe1.xmouse.test`, runner `androidx.test.runner.AndroidJUnitRunner`, target package `com.stripe1.xmouse`, and SDK **min 24 / target 37 / compile 37**. The replacement smoke test compiled and packaged; **on-device execution was not run** and is not claimed.
+- **Lint failed with 3 errors and 154 warnings**, verified in `app/build/reports/lint-results-debug.xml` (HTML alongside it; full text in `app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt`):
+
+| Error | Location | Finding / task boundary |
+| --- | --- | --- |
+| `GestureBackNavigation` | `MainActivity.java:625` | `onBackPressed` no longer handles back gestures on target API 36+. Initially blocked 1.5 because the AndroidX Back-navigation migration was allocated to **10.2**; the user subsequently approved moving only the existing-screen drawer migration into **1.5**. |
+| `MissingInflatedId` | `ListEditActivity.java:132` | Lint associates `new_script_alias` with `manage_host_item`. The existing conditional replaces both the layout and IDs for scripts (lines 125–129); the script ID exists in `manage_script_item.xml:16`. This appears to be a branch-correlation analysis finding; no behavior change or suppression was made while blocked. |
+| `MissingInflatedId` | `ListEditActivity.java:133` | Same conditional-layout finding for `new_script_command`, declared in `manage_script_item.xml:28`. |
+
+At that pause, warnings remained visible, including **9 `StaticFieldLeak`**, **5 `Recycle`**, and **2 `ScopedStorage`** findings. The task-1.4 source/action audit and `git diff --check` passed before any production-source changes. Those were historical results, not current Back/dialog feature coverage.
+
+### User-approved resolution and successful verification
+
+The user explicitly approved moving **only the existing-screen drawer Back migration** from 10.2 into 1.5 and fixing the two conditional-layout binding findings, without suppressing lint. The task text records this allocation. **10.2 remains pending** for integrated drawer/dialog/editor Back handling, dirty-state behavior, and API 36/37 device coverage; no future editor, remote-command, authentication/trust, or session-owner work was implemented.
+
+- `MainActivity` now registers `DrawerBackCallback` through the lifecycle-aware `addCallback(this, ...)` overload and uses additive drawer listeners. The callback is enabled only while the START drawer is open; when closed, the real AndroidX dispatcher's ordinary Back fallback remains available. Open/close events and layout changes synchronize state, including an open drawer restored before its first layout without an open event. The old `onBackPressed` override was removed; other Activity lifecycle bodies remain unchanged.
+- `ListEditActivity` inflates exactly one selected layout and binds literal IDs in its corresponding branch. Scripts bind only alias/command; absent host-only fields remain unused/null as before. Host bindings, existing record prefill, titles, and save/delete/persistence callback bodies are preserved.
+- Added **6 `DrawerBackCallbackTest` cases** using the real AndroidX dispatcher/lifecycle registry with mocked drawer views: closed fallback, initially open drawer, open/close enablement, unrelated drawer events, restored-open first-layout synchronization, and START/STOP/DESTROY registration behavior.
+- Added **4 `ListEditActivityDialogTest` cases** executing the production dialog method with mocked Android UI boundaries: New/Edit host and New/Edit script. They assert the exact inflated layout/lookup IDs, no extra inflation/lookups, preserved title/prefill, and no script access to host-only authentication widgets. These are JVM regressions, **not device UI or real-gesture tests**; lint also validates the actual layout resources.
+
+```sh
+export ANDROID_HOME=/home/homoludens/Android/Sdk
+export ANDROID_SDK_ROOT=/home/homoludens/Android/Sdk
+./gradlew --no-daemon --console=plain --continue --no-build-cache --max-workers=2 \
+  -Dorg.gradle.jvmargs=-Xmx2g \
+  :app:testDebugUnitTest :app:lintDebug :app:assembleDebugAndroidTest :app:assembleDebug
+"$ANDROID_HOME/build-tools/36.0.0/aapt2" dump xmltree \
+  app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+  --file AndroidManifest.xml
+"$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging \
+  app/build/outputs/apk/debug/app-debug.apk
+```
+
+**Results (2026-10-20): BUILD SUCCESSFUL, exit 0, 59s; 77 actionable tasks, 17 executed / 60 up-to-date.** Unit tests and all three lint analysis tasks executed with build-cache reuse disabled. Both APK assembly tasks succeeded; unchanged instrumentation compilation/packaging was up-to-date from the earlier successful build.
+
+- Reviewed all **5 unit-test XML suites: 39 tests, 0 failures/errors/skips**: original 22 custom-command + 6 ydotool + 1 arithmetic cases, plus the 10 focused regressions above. Existing command-test sources/assertions remain unchanged.
+- Reviewed `app/build/reports/lint-results-debug.xml`: **0 errors/fatal findings, 155 warnings**; the three original errors are absent. Warnings are not suppressed or baselined. Both pre-existing null-root inflation sites are now visible as **2 `InflateParams`** warnings (previously 1), explaining the total increase from 154. The existing 9 `StaticFieldLeak`, 5 `Recycle`, and 2 `ScopedStorage` findings remain visible for their planned lifecycle/transport/storage work.
+- Reinspected the actual APKs: application `com.stripe1.xmouse`, version **25 / 2.0.27**; instrumentation `com.stripe1.xmouse.test` targets that application using **`androidx.test.runner.AndroidJUnitRunner`**. Both retain SDK **24 / 37 / 37**. **No instrumentation/device execution or API 36/37 gesture behavior is claimed.**
+- A baseline comparison against `aa6f18de7394ba17f46aad9badac164171d1ff1e` confirmed that `MainActivity` differs only in the approved drawer listener/Back registration and override removal, and `ListEditActivity` differs only in dialog binding setup. Menu/command/lifecycle bodies and dialog save/delete/persistence bodies are unchanged. `git diff --check` passes.
+- `docs/verification/audit-resource-actions.py` is deliberately **unchanged**. Its task-1.4 whole-source equality check no longer applies after these approved changes; it is not counted as current feature coverage or weakened to pass. The new focused tests provide Back/binding regression coverage.
+
+Build warnings remain: deprecated Jetifier/Java APIs and the test JVM's bootstrap-classpath/CDS message; none is hidden. Full successful log: `/tmp/opencode/xmouse-task-1.5-approved-verification.log`; APK evidence: `/tmp/opencode/xmouse-task-1.5-{test-apk-manifest,app-badging}.txt`. **Only 1.5 is newly checked (overall 5/67); 10.2 is still unchecked.**
