@@ -8,7 +8,6 @@ import android.content.ClipData;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.os.AsyncTask;
-import android.preference.PreferenceManager;
 import android.text.TextUtils;
 import android.util.Log;
 import android.widget.Toast;
@@ -18,11 +17,11 @@ import com.jcraft.jsch.ChannelExec;
 import com.jcraft.jsch.JSch;
 import com.jcraft.jsch.JSchException;
 import com.jcraft.jsch.Session;
-import com.stripe1.xmouse.secrets.AndroidPrivateKeys;
-import com.stripe1.xmouse.secrets.AndroidSecretStore;
 import com.stripe1.xmouse.secrets.PrivateKeyImportException;
-import com.stripe1.xmouse.secrets.SecretStore;
-import com.stripe1.xmouse.secrets.SecretStoreException;
+import com.stripe1.xmouse.secrets.AndroidCredentials;
+import com.stripe1.xmouse.secrets.CredentialUi;
+import com.stripe1.xmouse.secrets.AuthenticationMaterial;
+import android.content.Intent;
 
 import java.io.BufferedReader;
 import java.io.FileOutputStream;
@@ -51,28 +50,55 @@ public class MyConnectionHandler implements CommandTransport {
     private Activity myActivity;
 
     private MyInterface myInterface;
+    private final CredentialUi credentialUi;
+    private int authenticationGeneration;
+    private boolean readingCredentials;
 
     public MyConnectionHandler(Activity a, MyInterface b){
 
         myInterface = b;
         myActivity = a;
+        credentialUi = new CredentialUi(a);
     }
+    public void startCredentialUi() { credentialUi.start(); }
+    public void stopCredentialUi() { if (!credentialUi.hasPicker()) { authenticationGeneration++; readingCredentials = false; credentialUi.stop(); } }
+    public int credentialGeneration() { return credentialUi.getGeneration(); }
+    public boolean credentialsCurrent(int token) { return credentialUi.isCurrent(token); }
+    public boolean onCredentialResult(int code, int result, Intent data) { return credentialUi.onActivityResult(code, result, data); }
 
     public void xMouseTryConnect(){ //change connection state
+        if (readingCredentials) return;
         if(session==null || !session.isConnected()){
 
-            if(MainActivity.setting_user=="" || MainActivity.setting_host=="" || String.valueOf(MainActivity.setting_port)==""){
+            if(TextUtils.isEmpty(MainActivity.setting_user) || TextUtils.isEmpty(MainActivity.setting_host)){
 
                 Toast.makeText(myActivity, "A connection setting is blank", Toast.LENGTH_LONG).show();
                 return;
             }
 
-            SshConnectTask  t = (SshConnectTask) new SshConnectTask(	myActivity,
-                    MainActivity.setting_user,
-                    MainActivity.setting_host,
-                    MainActivity.setting_pass,
-                    MainActivity.setting_port,
-                    MainActivity.setting_shell) {
+            final int attempt = ++authenticationGeneration;
+            readingCredentials = true;
+            final int token = credentialUi.getGeneration();
+            AndroidCredentials.get(myActivity).execute(() -> {
+                try {
+                    AndroidCredentials.get(myActivity).prepare();
+                    AndroidCredentials.get(myActivity).authenticate(credentialUi, (material, error) -> myActivity.runOnUiThread(() -> {
+                        if (attempt == authenticationGeneration) readingCredentials = false;
+                        if (attempt != authenticationGeneration || !credentialUi.isCurrent(token)) { if (material != null) material.close(); return; }
+                        if (material == null) { if (error != null) Toast.makeText(myActivity, error, Toast.LENGTH_LONG).show(); return; }
+                        try { beginSsh(material); } catch (Exception ignored) { material.close(); credentialUi.message(); }
+                    }));
+                } catch (Exception ignored) {
+                    myActivity.runOnUiThread(() -> { if (attempt == authenticationGeneration) readingCredentials = false; if (credentialUi.isCurrent(token)) credentialUi.message(); });
+                }
+            });
+        }else{
+            xMouseDisconnect();
+        }
+    }
+
+    private void beginSsh(AuthenticationMaterial material) {
+            SshConnectTask t = new SshConnectTask(myActivity, material, MainActivity.setting_shell) {
                 protected void onPostExecute(String result) {
                     if (dialog.isShowing()) {
                         dialog.dismiss();
@@ -100,11 +126,6 @@ public class MyConnectionHandler implements CommandTransport {
             };
             //dt.setCont(mCont);
             t.execute("");
-        }else{
-            xMouseDisconnect();
-
-        }
-
     }
 
     public class SshConnectTask extends AsyncTask<String, String, String> {
@@ -112,18 +133,18 @@ public class MyConnectionHandler implements CommandTransport {
         private String mUser = "";
         private String mHost ="";
         private int mPort =22;
-        private String mPass ="";
+        private final AuthenticationMaterial material;
         private String mShell = "";
         private String xhost = "127.0.0.1";
         private int xport = 0;
         private Activity a;
 
-        public SshConnectTask(Activity a, String user, String host, String pass, int port, String shell){
+        public SshConnectTask(Activity a, AuthenticationMaterial material, String shell){
             this.a=a;
-            this.mUser=user;
-            this.mHost=host;
-            this.mPass=pass;
-            this.mPort=port;
+            this.material = material;
+            this.mUser=material.getHost().getUser();
+            this.mHost=material.getHost().getHost();
+            this.mPort=Integer.parseInt(material.getHost().getPort());
             this.mShell = shell;
 
             dialog = new ProgressDialog(a);
@@ -136,29 +157,18 @@ public class MyConnectionHandler implements CommandTransport {
                 Log.d(TAG,"Connecting to... "+mUser+"@"+mHost+":"+mPort);
                 session= jsch.getSession(mUser, mHost, mPort);
 
-                if(MainActivity.setting_use_keys){
-                    // Task 4.7's minimal consumer bridge. No plaintext key file or path-based identity.
-                    SecretStore secrets = AndroidSecretStore.open(a);
-                    byte[] phrase = AndroidPrivateKeys.readConfiguredPassphrase(
-                            PreferenceManager.getDefaultSharedPreferences(a), secrets);
-                    byte[] key = null;
+                if(material.getUseKey()){
                     try {
-                        key = AndroidPrivateKeys.open(
-                                PreferenceManager.getDefaultSharedPreferences(a), secrets)
-                                .readForAuthentication(phrase);
                         jsch.removeAllIdentity();
-                        jsch.addIdentity("xmouse-private-key", key, null, phrase);
+                        jsch.addIdentity("xmouse-private-key", material.getPrivateKey(), null, material.getPassphrase());
                         session.setConfig("PreferredAuthentications", "publickey");
                     } catch (JSchException ignored) {
                         // Never expose a key parser/provider message through the legacy generic logger.
                         throw new PrivateKeyImportException(PrivateKeyImportException.Reason.INVALID_KEY);
-                    } finally {
-                        java.util.Arrays.fill(phrase, (byte) 0);
-                        if (key != null) java.util.Arrays.fill(key, (byte) 0);
                     }
                 }else{
                     session.setConfig("PreferredAuthentications", "password,keyboard-interactive");
-                    session.setPassword(mPass);
+                    session.setPassword(material.getPassword());
                     Log.d("SshConnectTask", "attempt password auth");
                 }
                 session.setX11Host(xhost);
@@ -197,13 +207,10 @@ public class MyConnectionHandler implements CommandTransport {
 
             }catch(PrivateKeyImportException e){
                 return "Private key unavailable or invalid ("+e.getReason().name()+"). Open Settings > Private Key to re-import; check Optional Key Passphrase. Existing configuration was kept.";
-            }catch(SecretStoreException e){
-                return "Protected key storage unavailable. Existing encrypted keys were kept; credential re-entry is required.";
             }catch(Exception e){
-                //Toast.makeText(a, e.toString(), Toast.LENGTH_LONG).show();
-                e.printStackTrace();
-                return e.getMessage();//.toString();
+                return "Connection or authentication failed. Existing configuration was kept.";
             }finally{
+                material.close();
                 try { jsch.removeAllIdentity(); } catch (JSchException ignored) { }
             }
             if(session.isConnected()){
@@ -226,7 +233,10 @@ public class MyConnectionHandler implements CommandTransport {
         }
     }
     public void xMouseDisconnect(){
-
+        authenticationGeneration++;
+        readingCredentials = false;
+        credentialUi.stop();
+        credentialUi.start();
         if(session!=null){
             if(session.isConnected()){
                 channel.disconnect();

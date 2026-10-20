@@ -123,6 +123,9 @@ class PrivateKeyRepository internal constructor(
         const val MAX_KEY_BYTES = 1024 * 1024
         private val lock = Any()
 
+        /** Explicit memory-only key re-entry: same bounds/stream cancellation, no publication. */
+        internal fun readForReentry(source: InputStream, attempt: PrivateKeyImportAttempt): ByteArray = readSource(source, attempt)
+
         private fun readSource(source: InputStream, attempt: PrivateKeyImportAttempt): ByteArray {
             var bytes: ByteArray? = null
             try {

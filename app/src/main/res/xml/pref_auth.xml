@@ -12,14 +12,10 @@
 	     >
     </Preference>
     
-    <EditTextPreference
+    <Preference
         android:dependency="pref_usekeyauth"
-        android:defaultValue=""
+        android:persistent="false"
         android:key="pref_key_passphrase"
-        android:inputType="textPassword"
-        android:maxLines="1"
-        android:selectAllOnFocus="true"
-        android:singleLine="true"
         android:title="Optional Key Passphrase"
         android:summary="For an encrypted key, set its passphrase before importing. Import never changes this choice."
         />

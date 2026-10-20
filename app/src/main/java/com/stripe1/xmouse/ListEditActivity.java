@@ -1,317 +1,175 @@
 package com.stripe1.xmouse;
 
 import android.app.AlertDialog;
-import android.content.DialogInterface;
-import android.content.Intent;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.ListView;
-
+import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
-
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
-
+import com.stripe1.xmouse.secrets.AndroidCredentials;
+import com.stripe1.xmouse.secrets.CredentialHost;
+import com.stripe1.xmouse.secrets.CredentialRepository;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
 
 public class ListEditActivity extends AppCompatActivity implements MyInterface {
-
-    private static ListView mList;
-    private static List<HostItem> mHostItems = new LinkedList<HostItem>();
-
-    public enum ActivityType {
-        type_host,
-        type_script
-    }
-
+    private ListView mList;
+    private List<HostItem> mHostItems = new LinkedList<>();
+    public enum ActivityType { type_host, type_script }
     private ActivityType type;
-    private static HostListItemAdapter adapter;
-    private static int selectedHostIndex=0;
-    //CharSequence[] hostsNames;
-    ////CharSequence[] hostsValues;
-    //ListPreference listPrefHost;
-    //ListPreference listPrefKeys;
-    private static LayoutInflater layoutInflater;
-    private int activityType; //0=hosts, 1=scripts
+    private HostListItemAdapter adapter;
+    private LayoutInflater layoutInflater;
+    private DatabaseHandler database;
+    private CredentialRepository credentials;
+    private int generation;
+    private AlertDialog editing;
 
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_list_edit);
-        Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
-        setSupportActionBar(toolbar);
+        setSupportActionBar((Toolbar) findViewById(R.id.toolbar));
         getSupportActionBar().setDisplayHomeAsUpEnabled(true);
         layoutInflater = getLayoutInflater();
-
-        Intent mIntent = getIntent();
-        int intValue = mIntent.getIntExtra("intVariableType", 0);
-
-
-        if(intValue==0){ //hosts
-            type = ActivityType.type_host;
-            setTitle("Manage Hosts");
-        }else if(intValue ==1){ //scripts
-            type=ActivityType.type_script;
-            setTitle("Manage Scripts");
-        }
-
-        FloatingActionButton fab = (FloatingActionButton) findViewById(R.id.fab);
-        fab.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                //Snackbar.make(view, "Replace with your own action", Snackbar.LENGTH_LONG) .setAction("Action", null).show();
-                xMouseManage(null);
-            }
-        });
-
-        mList = (ListView) findViewById(R.id.myListView);
-        if(MainActivity.db!=null) {
-            loadCurrentHostList();
-        }
-
+        database = new DatabaseHandler(getApplicationContext());
+        credentials = AndroidCredentials.get(this);
+        type = getIntent().getIntExtra("intVariableType", 0) == 0 ? ActivityType.type_host : ActivityType.type_script;
+        setTitle(type == ActivityType.type_host ? "Manage Hosts" : "Manage Scripts");
+        ((FloatingActionButton) findViewById(R.id.fab)).setOnClickListener(view -> xMouseManage(null));
+        mList = findViewById(R.id.myListView);
     }
-    public void loadCurrentHostList(){
-        mHostItems = new LinkedList<HostItem>();
-        ArrayList<ArrayList<String>> hosts = new ArrayList<ArrayList<String>>();
 
-        if(type==ActivityType.type_host) {
-            hosts = MainActivity.db.listAll(DatabaseHandler.HOST_TABLE_NAME, new String[]{"Alias", "Host", "Username", "Port", "Password", "id"});
-        }else if(type == ActivityType.type_script) {
-            hosts = MainActivity.db.listAll(DatabaseHandler.SCRIPT_TABLE_NAME, new String[]{"Alias", "Script", "id"});
-        }
+    @Override protected void onStart() { super.onStart(); loadCurrentHostList(); }
+    @Override protected void onStop() { generation++; if (editing != null) editing.dismiss(); super.onStop(); }
+    @Override protected void onDestroy() { database.close(); super.onDestroy(); }
+    private boolean current(int token) { return token == generation && !isFinishing() && !isDestroyed(); }
+    private void failure() { Toast.makeText(this, CredentialRepository.RECOVERY_MESSAGE, Toast.LENGTH_LONG).show(); }
 
-        if (hosts.size() > 0) {
-
-            for (int i = hosts.size()-1; i>=0;i--) {
-                //Log.d("ListEditActivity", "found host " + i);
-                HostItem thisItem = new HostItem();
-                thisItem.setAlias(hosts.get(i).get(0)); //alias for host and script
-                thisItem.setIP(hosts.get(i).get(1)); //ip for host, content for script
-                thisItem.setUsername(hosts.get(i).get(2)); //username for host, dbid for script
-
-                if(type==ActivityType.type_host) {
-
-                    thisItem.setPassword(hosts.get(i).get(4));
-                    thisItem.setPort(hosts.get(i).get(3));
-                    thisItem.setDbId(Integer.valueOf(hosts.get(i).get(5)));
-                }
-                mHostItems.add(thisItem);
+    public void loadCurrentHostList() {
+        if (type == ActivityType.type_host) {
+            final int token = generation;
+            credentials.execute(() -> {
+                boolean ready = credentials.prepare();
+                List<HostItem> items = new LinkedList<>();
+                try {
+                    for (CredentialHost host : credentials.hosts()) {
+                        HostItem item = new HostItem();
+                        item.setCredentialHost(host); item.setAlias(host.getAlias()); item.setIP(host.getHost());
+                        item.setUsername(host.getUser()); item.setPort(host.getPort()); item.setDbId((int) host.getId());
+                        items.add(item);
+                    }
+                    runOnUiThread(() -> { if (current(token)) { showItems(items); if (!ready) failure(); } });
+                } catch (Exception ignored) { runOnUiThread(() -> { if (current(token)) failure(); }); }
+            });
+        } else {
+            List<HostItem> items = new LinkedList<>();
+            ArrayList<ArrayList<String>> rows = database.listAll(DatabaseHandler.SCRIPT_TABLE_NAME, new String[]{"Alias", "Script", "id"});
+            for (int i = rows.size() - 1; i >= 0; i--) {
+                ArrayList<String> row = rows.get(i);
+                HostItem item = new HostItem(); item.setAlias(row.get(0)); item.setIP(row.get(1)); item.setUsername(row.get(2)); items.add(item);
             }
+            showItems(items);
         }
-        adapter = new HostListItemAdapter(this, mHostItems,this,type);
+    }
+
+    private void showItems(List<HostItem> items) {
+        mHostItems = items;
+        adapter = new HostListItemAdapter(this, items, this, type);
         mList.setAdapter(adapter);
     }
-    public void xMouseManage(final Integer pos){
-        //open dialog for new command
 
-        final View layout;
-        final EditText nameBox;
-        final EditText hostBox;
-        final EditText userBox;
-        final EditText portBox;
-        final EditText passwordBox;
-        if(type==ActivityType.type_script) {
-            layout = layoutInflater.inflate(R.layout.manage_script_item, null);
-            nameBox = (EditText) layout.findViewById(R.id.new_script_alias);
-            hostBox = (EditText) layout.findViewById(R.id.new_script_command);
-            // Script dialogs have no authentication fields; existing host-only branches use these.
-            userBox = null;
-            portBox = null;
-            passwordBox = null;
-        } else {
-            layout = layoutInflater.inflate(R.layout.manage_host_item, null);
-            nameBox = (EditText) layout.findViewById(R.id.new_host_alias);
-            hostBox = (EditText) layout.findViewById(R.id.new_host_ip);
-            userBox = (EditText) layout.findViewById(R.id.new_host_username);
-            portBox = (EditText) layout.findViewById(R.id.new_host_port);
-            passwordBox = (EditText) layout.findViewById(R.id.new_host_password);
+    public void xMouseManage(final Integer pos) {
+        final boolean script = type == ActivityType.type_script;
+        final HostItem existing = pos == null ? null : mHostItems.get(pos);
+        final View layout = layoutInflater.inflate(script ? R.layout.manage_script_item : R.layout.manage_host_item, null);
+        final EditText nameBox = layout.findViewById(script ? R.id.new_script_alias : R.id.new_host_alias);
+        final EditText hostBox = layout.findViewById(script ? R.id.new_script_command : R.id.new_host_ip);
+        final EditText userBox = script ? null : layout.findViewById(R.id.new_host_username);
+        final EditText portBox = script ? null : layout.findViewById(R.id.new_host_port);
+        final EditText passwordBox = script ? null : layout.findViewById(R.id.new_host_password);
+        if (!script) {
+            passwordBox.setSaveEnabled(false);
+            if (android.os.Build.VERSION.SDK_INT >= 26) passwordBox.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
         }
-
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setView(layout);
-
-        //Building dialog
-
-        if(pos != null) {
-
-            if(type==ActivityType.type_host) {
-                builder.setTitle("Edit Host");
-            }else if(type == ActivityType.type_script) {
-                builder.setTitle("Edit Script");
-            }
-
-            nameBox.setText(mHostItems.get(pos).getAlias());
-            hostBox.setText(mHostItems.get(pos).getIP());
-
-            if(type==ActivityType.type_host) {
-                userBox.setText(mHostItems.get(pos).getUsername());
-                portBox.setText(mHostItems.get(pos).getPort());
-                passwordBox.setText(mHostItems.get(pos).getPassword());
-            }
-
-        }else{
-
-            if(type==ActivityType.type_host) {
-                builder.setTitle("New Host");
-            }else if(type == ActivityType.type_script) {
-                builder.setTitle("New Script");
-            }
+        if (existing != null) {
+            nameBox.setText(existing.getAlias()); hostBox.setText(existing.getIP());
+            if (!script) { userBox.setText(existing.getUsername()); portBox.setText(existing.getPort()); }
         }
-        builder.setPositiveButton("Save", new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-
-                String name = nameBox.getText().toString();
-                String host = hostBox.getText().toString();
-
-                if(pos!=null){
-
-                    mHostItems.get(pos).setAlias(name);
-                    mHostItems.get(pos).setIP(host);
-
-                    if(type==ActivityType.type_host) {
-                        mHostItems.get(pos).setUsername(userBox.getText().toString());
-                        mHostItems.get(pos).setPort(portBox.getText().toString());
-                        mHostItems.get(pos).setPassword(passwordBox.getText().toString());
-
-                        String[] updateValues = new String[] {name,
-                                host,
-                                userBox.getText().toString(),
-                                portBox.getText().toString(),
-                                passwordBox.getText().toString()};
-
-                        MainActivity.db.updateRow(DatabaseHandler.HOST_TABLE_NAME,
-                                new String[]{"Alias", "Host", "Username", "Port", "Password"},
-                                updateValues,String.valueOf(mHostItems.get(pos).getDbId()));
-
-                    }else if(type==ActivityType.type_script){
-
-
-                        String[] updateValues = new String[] {name, host};
-
-                        MainActivity.db.updateRow(DatabaseHandler.SCRIPT_TABLE_NAME,
-                                new String[]{"Alias", "Script"},
-                                updateValues,mHostItems.get(pos).getUsername()); //username holds value of dbid in case of script
-
-                    }
-
-                }else {
-                    HostItem newHostItem = new HostItem();
-
-                    newHostItem.setAlias(name);
-                    newHostItem.setIP(host);
-
-                    if(type==ActivityType.type_host) {
-                        newHostItem.setUsername(userBox.getText().toString());
-                        newHostItem.setPort(portBox.getText().toString());
-                        newHostItem.setPassword(passwordBox.getText().toString());
-
-                        ArrayList<ArrayList<String>> newHost = new ArrayList<ArrayList<String>>();
-
-                        ArrayList<String> valArr = new ArrayList<String>();
-                        valArr.add(MainActivity.hostDBKeys.get(0).get(0));
-                        valArr.add(name);
-                        newHost.add(valArr);
-
-                        valArr = new ArrayList<String>();
-                        valArr.add(MainActivity.hostDBKeys.get(1).get(0));
-                        valArr.add(host);
-                        newHost.add(valArr);
-
-                        valArr = new ArrayList<String>();
-                        valArr.add(MainActivity.hostDBKeys.get(2).get(0));
-                        valArr.add(userBox.getText().toString());
-                        newHost.add(valArr);
-
-                        valArr = new ArrayList<String>();
-                        valArr.add(MainActivity.hostDBKeys.get(3).get(0));
-                        valArr.add(portBox.getText().toString());
-                        newHost.add(valArr);
-
-                        valArr = new ArrayList<String>();
-                        valArr.add(MainActivity.hostDBKeys.get(4).get(0));
-                        valArr.add(passwordBox.getText().toString());
-                        newHost.add(valArr);
-
-                        MainActivity.db.addRow(DatabaseHandler.HOST_TABLE_NAME,newHost);
-
-
-                    }else if(type== ActivityType.type_script){
-                        ArrayList<ArrayList<String>> newHost = new ArrayList<ArrayList<String>>();
-
-                        ArrayList<String> valArr = new ArrayList<String>();
-                        valArr.add("Alias");
-                        valArr.add(name);
-                        newHost.add(valArr);
-
-                        valArr = new ArrayList<String>();
-                        valArr.add("Script");
-                        valArr.add(host);
-                        newHost.add(valArr);
-
-                        MainActivity.db.addRow(DatabaseHandler.SCRIPT_TABLE_NAME,newHost);
-                    }
-
-                    mHostItems.add(newHostItem);
-                }
-
-                adapter.notifyDataSetChanged();
-
-                //Toast.makeText(getBaseContext(), "Host saved", Toast.LENGTH_LONG).show();
-                loadCurrentHostList();
-                dialog.dismiss();
-
-            }
-        });
-        builder.setNegativeButton("Delete", new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-
-                if(pos==null){
-
-                    //do nothing with temp item
-                }else {
-                    if (type == ActivityType.type_host) {
-
-                        MainActivity.db.deleteRow(DatabaseHandler.HOST_TABLE_NAME, mHostItems.get(pos).getDbId());
-
-                    } else if (type == ActivityType.type_script) {
-
-                        MainActivity.db.deleteRow(DatabaseHandler.SCRIPT_TABLE_NAME, Integer.valueOf(mHostItems.get(pos).getUsername()));
-                    }
-
-
-                    adapter.remove(mHostItems.get(pos));
-                    mHostItems.remove(pos);
-                    adapter.notifyDataSetChanged();
-                    //adapter=new HostListItemAdapter(getBaseContext(),mHostItems,ListEditActivity.this);
-                    //mList.setAdapter(adapter);
-
-
-                    //Toast.makeText(getBaseContext(), "Host removed "+pos, Toast.LENGTH_LONG).show();
-                }
-                dialog.dismiss();
-
-
-            }
-        });
+        AlertDialog.Builder builder = new AlertDialog.Builder(this).setView(layout)
+                .setTitle((existing == null ? "New " : "Edit ") + (script ? "Script" : "Host"))
+                .setPositiveButton("Save", null).setNegativeButton(existing == null ? "Cancel" : "Delete", null);
+        if (existing != null) builder.setNeutralButton("Cancel", null);
         AlertDialog dialog = builder.create();
+        editing = dialog;
         dialog.show();
-
-
+        final int token = generation;
+        dialog.setOnDismissListener(ignored -> { if (passwordBox != null) passwordBox.getText().clear(); if (editing == dialog) editing = null; });
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(script);
+        if (!script) {
+            credentials.execute(() -> {
+                byte[] password = null;
+                try {
+                    if (!credentials.prepare()) throw new com.stripe1.xmouse.secrets.CredentialRepositoryException();
+                    password = existing == null ? new byte[0] : credentials.readPassword(existing.getCredentialHost());
+                    final byte[] loaded = password;
+                    runOnUiThread(() -> {
+                        try {
+                            if (current(token) && dialog.isShowing()) {
+                                passwordBox.setText(new String(loaded, StandardCharsets.UTF_8));
+                                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                            }
+                        } finally { Arrays.fill(loaded, (byte) 0); }
+                    });
+                } catch (Exception ignored) {
+                    if (password != null) Arrays.fill(password, (byte) 0);
+                    runOnUiThread(() -> { if (current(token) && dialog.isShowing()) failure(); });
+                }
+            });
+        }
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+            String alias = nameBox.getText().toString(); String endpoint = hostBox.getText().toString();
+            if (script) {
+                if (existing != null) database.updateRow(DatabaseHandler.SCRIPT_TABLE_NAME, new String[]{"Alias", "Script"}, new String[]{alias, endpoint}, existing.getUsername());
+                else {
+                    ArrayList<ArrayList<String>> values = new ArrayList<>();
+                    values.add(new ArrayList<>(Arrays.asList("Alias", alias))); values.add(new ArrayList<>(Arrays.asList("Script", endpoint)));
+                    database.addRow(DatabaseHandler.SCRIPT_TABLE_NAME, values);
+                }
+                dialog.dismiss(); loadCurrentHostList();
+            } else {
+                String user = userBox.getText().toString(); String port = portBox.getText().toString();
+                byte[] password = passwordBox.getText().toString().getBytes(StandardCharsets.UTF_8);
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+                credentials.execute(() -> {
+                    boolean saved;
+                    try { credentials.saveHost(existing == null ? null : existing.getCredentialHost(), alias, endpoint, user, port, password); saved = true; }
+                    catch (Exception ignored) { saved = false; }
+                    finally { Arrays.fill(password, (byte) 0); }
+                    final boolean success = saved;
+                    runOnUiThread(() -> {
+                        if (current(token) && dialog.isShowing()) {
+                            if (success) { dialog.dismiss(); loadCurrentHostList(); }
+                            else { failure(); dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true); }
+                        }
+                    });
+                });
+            }
+        });
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(view -> {
+            if (existing == null) { dialog.dismiss(); return; }
+            if (script) { database.deleteRow(DatabaseHandler.SCRIPT_TABLE_NAME, Integer.parseInt(existing.getUsername())); dialog.dismiss(); loadCurrentHostList(); }
+            else credentials.execute(() -> {
+                try { credentials.deleteHost(existing.getCredentialHost()); runOnUiThread(() -> { if (current(token)) { dialog.dismiss(); loadCurrentHostList(); } }); }
+                catch (Exception ignored) { runOnUiThread(() -> { if (current(token)) failure(); }); }
+            });
+        });
     }
-
-    @Override
-    public void performCallback() {
-
-    }
-
-    @Override
-    public void performCallback2(Integer i) {
-        xMouseManage(i);
-    }
+    @Override public void performCallback() { }
+    @Override public void performCallback2(Integer i) { xMouseManage(i); }
 }

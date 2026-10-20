@@ -19,6 +19,8 @@ import android.view.MenuItem;
 import androidx.core.app.NavUtils;
 
 import com.stripe1.xmouse.secrets.PrivateKeySettingsController;
+import com.stripe1.xmouse.secrets.CredentialUi;
+import com.stripe1.xmouse.secrets.AndroidCredentials;
 
 /**
  * A {@link PreferenceActivity} that presents a set of application settings. On
@@ -34,6 +36,7 @@ import com.stripe1.xmouse.secrets.PrivateKeySettingsController;
 public class SettingsActivity extends AppCompatPreferenceActivity {
 
     private PrivateKeySettingsController keyImport;
+    private CredentialUi credentialsUi;
 
     static int selectedHostIndex=0;
     CharSequence[] hostsNames;
@@ -44,7 +47,12 @@ public class SettingsActivity extends AppCompatPreferenceActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
+        credentialsUi = new CredentialUi(this);
+        AndroidCredentials.get(this).execute(() -> {
+            if (!AndroidCredentials.get(this).prepare()) runOnUiThread(() -> {
+                if (!isFinishing() && !isDestroyed()) credentialsUi.message();
+            });
+        });
     }
 
 
@@ -193,6 +201,10 @@ public class SettingsActivity extends AppCompatPreferenceActivity {
         //addPreferencesFromResource(R.xml.ssh_conn);
         final Preference myPref = (Preference) findPreference("pref_addkeybutton");
         keyImport = new PrivateKeySettingsController(this, myPref);
+        findPreference("pref_key_passphrase").setOnPreferenceClickListener(preference -> {
+            credentialsUi.editPassphrase();
+            return true;
+        });
 
         //listPrefKeys = (ListPreference)this.findPreference("pref_usekeyauth_list");
         //listPrefKeys = new ListPreference(this);
@@ -259,9 +271,12 @@ public class SettingsActivity extends AppCompatPreferenceActivity {
 
     @Override
     protected void onDestroy() {
+        credentialsUi.stop();
         if (keyImport != null) keyImport.destroy();
         super.onDestroy();
     }
+    @Override protected void onStart() { super.onStart(); if (credentialsUi != null) credentialsUi.start(); }
+    @Override protected void onStop() { credentialsUi.stop(); super.onStop(); }
     /**
      * A preference value change listener that updates the preference's summary
      * to reflect its new value.

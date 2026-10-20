@@ -6,18 +6,16 @@ import android.content.Intent
 import android.os.CancellationSignal
 import android.os.OperationCanceledException
 import android.preference.Preference
-import android.preference.PreferenceManager
 import android.widget.Toast
 import java.io.IOException
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
 /** Legacy PreferenceActivity uses its platform result API; no Activity/Fragment conversion needed. */
 class PrivateKeySettingsController(private val activity: Activity, private val preference: Preference) {
-    private val preferences = PreferenceManager.getDefaultSharedPreferences(activity)
-    private val secrets = AndroidSecretStore.open(activity)
+    private val credentials = AndroidCredentials.get(activity)
+    private val preferences = credentials.preferences
+    private val secrets = credentials.secrets
     private val repository = AndroidPrivateKeys.open(preferences, secrets)
-    private val worker = Executors.newSingleThreadExecutor()
     private var attempt: PrivateKeyImportAttempt? = null
     private var signal: CancellationSignal? = null
     private var requestCode = -1
@@ -88,8 +86,9 @@ class PrivateKeySettingsController(private val activity: Activity, private val p
     }
 
     private fun execute(importing: PrivateKeyImportAttempt, action: (ByteArray) -> Unit) {
-        worker.execute {
+        credentials.execute {
             val message = try {
+                if (!credentials.prepare()) throw CredentialRepositoryException()
                 val phrase = AndroidPrivateKeys.readConfiguredPassphrase(preferences, secrets)
                 try { action(phrase) } finally { phrase.fill(0) }
                 "Private key imported securely. The source document is no longer needed."
@@ -108,6 +107,8 @@ class PrivateKeySettingsController(private val activity: Activity, private val p
                 }
             } catch (_: SecretStoreException) {
                 "Protected key storage is unavailable. Existing encrypted keys were kept; no device key was reset. Restore access before saving."
+            } catch (_: CredentialRepositoryException) {
+                CredentialRepository.RECOVERY_MESSAGE
             }
             activity.runOnUiThread {
                 if (!destroyed && attempt === importing) {
@@ -143,7 +144,6 @@ class PrivateKeySettingsController(private val activity: Activity, private val p
     fun destroy() {
         destroyed = true
         cancelPending()
-        worker.shutdownNow()
         // Recreation deliberately requires reselection; no URI/key/passphrase is put in saved state.
     }
 

@@ -7,7 +7,7 @@ public class HostItem {
     private String Alias;
     private String Username;
     private String IP;
-    private String Password;
+    private com.stripe1.xmouse.secrets.CredentialHost credentialHost;
 
     public Integer getDbId() {
         return dbId;
@@ -43,12 +43,12 @@ public class HostItem {
         this.IP = IP;
     }
 
-    public String getPassword() {
-        return Password;
+    public com.stripe1.xmouse.secrets.CredentialHost getCredentialHost() {
+        return credentialHost;
     }
 
-    public void setPassword(String password) {
-        Password = password;
+    public void setCredentialHost(com.stripe1.xmouse.secrets.CredentialHost host) {
+        credentialHost = host;
     }
 
     public String getPort() {

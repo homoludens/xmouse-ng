@@ -43,13 +43,9 @@
         android:selectAllOnFocus="true"
         android:singleLine="true"
         android:title="@string/pref_title_setting_port" />
-	<EditTextPreference
-        android:defaultValue="@string/pref_default_setting_pass"
+	<Preference
+        android:persistent="false"
         android:key="setting_pass"
-        android:inputType="textPassword"
-        android:maxLines="1"
-        android:selectAllOnFocus="true"
-        android:singleLine="true"
         android:title="@string/pref_title_setting_pass"
         android:summary="@string/pref_summary_pass" />
     <!--

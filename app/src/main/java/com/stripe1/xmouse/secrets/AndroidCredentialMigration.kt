@@ -8,8 +8,8 @@ import androidx.core.database.sqlite.transaction
 import com.stripe1.xmouse.DatabaseHandler
 
 /**
- * Opt-in task-3.5 boundary; NOTHING calls this from startup/Activities yet. Run off the main thread,
- * before exposing legacy screens, with every credential writer quiesced in the single app process.
+ * Task-3.5's application credential repository calls this on its serialized worker, before enabling
+ * credential writes. Never expose legacy secret readers/writers alongside this migration.
  * Does not close the caller-owned helper. Failures stop migration; retry with the same sources/store.
  */
 object AndroidCredentialMigration {

@@ -233,7 +233,8 @@ class PrivateKeyImportAndroidTest {
                 val bytes = AndroidPrivateKeys.open(target).readForAuthentication(byteArrayOf())
                 try { assertIdentity(bytes, byteArrayOf()) } finally { bytes.fill(0) }
                 assertTrue(preferences.getBoolean("pref_usekeyauth", false))
-                assertEquals("", preferences.getString("pref_key_passphrase", null))
+                assertFalse(preferences.contains("pref_key_passphrase"))
+                assertArrayEquals(byteArrayOf(), AndroidPrivateKeys.readConfiguredPassphrase(preferences, AndroidSecretStore.open(target)))
                 assertEquals(android.content.pm.PackageManager.PERMISSION_DENIED,
                     target.checkSelfPermission("android.permission.READ_EXTERNAL_STORAGE"))
                 assertEquals(android.content.pm.PackageManager.PERMISSION_DENIED,
@@ -304,7 +305,9 @@ class PrivateKeyImportAndroidTest {
                 }
                 instrumentation.waitForIdleSync() // Deliver the platform activity result before the barrier.
                 awaitKeyWorker(scenario)
-                previous.forEach { (name, value) -> assertEquals(value, preferences.all[name]) }
+                previous.filterKeys { it != "pref_key_passphrase" }.forEach { (name, value) -> assertEquals(value, preferences.all[name]) }
+                assertFalse(preferences.contains("pref_key_passphrase"))
+                assertArrayEquals(byteArrayOf(), AndroidPrivateKeys.readConfiguredPassphrase(preferences, AndroidSecretStore.open(target)))
                 val bytes = repository.readForAuthentication(byteArrayOf())
                 try { assertIdentity(bytes, byteArrayOf()) } finally { bytes.fill(0) }
                 assertEquals(1, monitor.hits)
@@ -318,13 +321,10 @@ class PrivateKeyImportAndroidTest {
         }, result, true)
 
     private fun awaitKeyWorker(scenario: ActivityScenario<SettingsActivity>) {
-        lateinit var worker: java.util.concurrent.ExecutorService
-        scenario.onActivity { activity ->
-            val controller = SettingsActivity::class.java.getDeclaredField("keyImport").apply { isAccessible = true }.get(activity)
-            worker = PrivateKeySettingsController::class.java.getDeclaredField("worker").apply { isAccessible = true }
-                .get(controller) as java.util.concurrent.ExecutorService
-        }
-        worker.submit {}.get(10, java.util.concurrent.TimeUnit.SECONDS)
+        scenario.onActivity { /* Ensure the Activity/result dispatch preceded the worker barrier. */ }
+        val finished = java.util.concurrent.CountDownLatch(1)
+        AndroidCredentials.get(target).execute { finished.countDown() }
+        assertTrue(finished.await(10, java.util.concurrent.TimeUnit.SECONDS))
         instrumentation.waitForIdleSync()
     }
 
@@ -407,6 +407,10 @@ class PrivateKeyImportAndroidTest {
             }
             action(preferences)
         } finally {
+            val finished = java.util.concurrent.CountDownLatch(1)
+            AndroidCredentials.get(target).execute { finished.countDown() }
+            assertTrue(finished.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            instrumentation.waitForIdleSync()
             preferences.edit(commit = true) {
                 clear()
                 original.forEach { (name, value) -> when (value) {

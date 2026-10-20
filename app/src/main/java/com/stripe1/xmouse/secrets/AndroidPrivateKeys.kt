@@ -4,7 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.preference.PreferenceManager
 
-/** Task 4.7's bounded key-only boundary. Password/passphrase writers remain task 3.5. */
+/** Validated key boundary; production imports share the application credential repository's gate. */
 object AndroidPrivateKeys {
     const val LEGACY_PATH = "pref_addkeybutton"
     const val LABEL = "pref_private_key_label"
@@ -20,7 +20,7 @@ object AndroidPrivateKeys {
     fun open(preferences: SharedPreferences, secrets: SecretStore): PrivateKeyRepository =
         PrivateKeyRepository(AndroidPrivateKeyReferences(preferences), secrets)
 
-    /** Protected reference takes precedence; never silently substitute legacy text on a read failure. */
+    /** Post-3.5 bridge: protected only; migration must precede use. Never read legacy secret text. */
     @JvmStatic
     @Throws(SecretStoreException::class, PrivateKeyImportException::class)
     fun readConfiguredPassphrase(preferences: SharedPreferences, secrets: SecretStore): ByteArray {
@@ -31,7 +31,8 @@ object AndroidPrivateKeys {
             }
             return secrets.read(id) ?: keyImportFail(PrivateKeyImportException.Reason.MISSING_KEY)
         }
-        return preferences.getString("pref_key_passphrase", "")!!.toByteArray(Charsets.UTF_8)
+        if (preferences.contains("pref_key_passphrase")) keyImportFail(PrivateKeyImportException.Reason.STORAGE_FAILURE)
+        return byteArrayOf()
     }
 
     internal class AndroidPrivateKeyReferences(private val preferences: SharedPreferences) : PrivateKeyReferences {

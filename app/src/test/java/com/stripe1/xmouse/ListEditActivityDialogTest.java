@@ -4,6 +4,8 @@ import android.app.AlertDialog;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.EditText;
+import android.widget.Button;
+import com.stripe1.xmouse.secrets.CredentialRepository;
 
 import com.tngtech.java.junit.dataprovider.DataProvider;
 import com.tngtech.java.junit.dataprovider.DataProviderRunner;
@@ -26,6 +28,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
+import static org.mockito.Mockito.RETURNS_SELF;
+import static org.mockito.Mockito.never;
 
 @RunWith(DataProviderRunner.class)
 public class ListEditActivityDialogTest {
@@ -53,6 +58,10 @@ public class ListEditActivityDialogTest {
         EditText username = mock(EditText.class);
         EditText port = mock(EditText.class);
         EditText password = mock(EditText.class);
+        Button positive = mock(Button.class);
+        Button negative = mock(Button.class);
+        when(dialog.getButton(AlertDialog.BUTTON_POSITIVE)).thenReturn(positive);
+        when(dialog.getButton(AlertDialog.BUTTON_NEGATIVE)).thenReturn(negative);
         int layoutId = script ? R.layout.manage_script_item : R.layout.manage_host_item;
         when(inflater.inflate(layoutId, null)).thenReturn(layout);
         Map<Integer, EditText> fields = new LinkedHashMap<>();
@@ -72,18 +81,17 @@ public class ListEditActivityDialogTest {
         record.setIP(script ? "printf fixture" : "fixture.example");
         record.setUsername("fixture-user");
         record.setPort("2222");
-        record.setPassword("synthetic-test-password");
         Field typeField = accessibleField("type");
         Field inflaterField = accessibleField("layoutInflater");
         Field itemsField = accessibleField("mHostItems");
-        Object previousInflater = inflaterField.get(null);
-        Object previousItems = itemsField.get(null);
         typeField.set(activity, type);
-        inflaterField.set(null, inflater);
-        itemsField.set(null, Collections.singletonList(record));
+        inflaterField.set(activity, inflater);
+        itemsField.set(activity, Collections.singletonList(record));
+        accessibleField("credentials").set(activity, mock(CredentialRepository.class));
 
         try (MockedConstruction<AlertDialog.Builder> builders = mockConstruction(
                 AlertDialog.Builder.class,
+                withSettings().defaultAnswer(RETURNS_SELF),
                 (builder, context) -> when(builder.create()).thenReturn(dialog))) {
             activity.xMouseManage(editing ? 0 : null);
 
@@ -91,6 +99,10 @@ public class ListEditActivityDialogTest {
             AlertDialog.Builder builder = builders.constructed().get(0);
             verify(builder).setView(layout);
             verify(builder).setTitle((editing ? "Edit " : "New ") + (script ? "Script" : "Host"));
+            verify(builder).setPositiveButton("Save", null);
+            verify(builder).setNegativeButton(editing ? "Delete" : "Cancel", null);
+            if (editing) verify(builder).setNeutralButton("Cancel", null);
+            else verify(builder, never()).setNeutralButton("Cancel", null);
             verify(dialog).show();
             verify(inflater).inflate(layoutId, null);
             verifyNoMoreInteractions(inflater);
@@ -105,17 +117,16 @@ public class ListEditActivityDialogTest {
                 if (!script) {
                     verify(username).setText(record.getUsername());
                     verify(port).setText(record.getPort());
-                    verify(password).setText(record.getPassword());
+                    // Protected prefill is asynchronous; no plaintext lives in the list model.
+                    verify(password).setSaveEnabled(false);
                 }
             } else {
-                verifyNoInteractions(alias, endpointOrCommand, username, port, password);
+                verifyNoInteractions(alias, endpointOrCommand, username, port);
+                if (!script) verify(password).setSaveEnabled(false);
             }
             if (script) {
                 verifyNoInteractions(username, port, password);
             }
-        } finally {
-            inflaterField.set(null, previousInflater);
-            itemsField.set(null, previousItems);
         }
     }
 

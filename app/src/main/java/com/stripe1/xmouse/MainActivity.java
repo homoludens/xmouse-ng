@@ -40,6 +40,7 @@ import androidx.fragment.app.FragmentManager;
 
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.google.android.material.navigation.NavigationView;
+import com.stripe1.xmouse.secrets.AndroidCredentials;
 
 import java.io.BufferedReader;
 import java.io.FileInputStream;
@@ -74,7 +75,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	public static String setting_host="";
 	public static String setting_user="";
 	public static int setting_port=22;
-	public static String setting_pass="";
 	public static String setting_shell = "";
 	public static float setting_sensitivity=1.5f;
 	public static int setting_delay=350;
@@ -100,10 +100,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	//static boolean setting_mouse_background=false;
 	private static boolean setting_keyboard_batch=true;
 	private boolean setting_keyboard_autoclear=true;
-	public static String setting_key_passphrase="";
 	public static boolean setting_use_keys = false;
 	public static boolean setting_invert_scroll = false;
-	public static String setting_key_filename = "";
 	//public static boolean setting_keyboard_show_details;
 	//static boolean setting_command_overlay=true;
 	private String setting_host_all;
@@ -377,7 +375,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		dataKey.add("TEXT");
 		scriptDBKeys.add(dataKey);
 
-		db = new DatabaseHandler(this, hostDBKeys,scriptDBKeys);
+		db = new DatabaseHandler(getApplicationContext(), hostDBKeys,scriptDBKeys);
 	}
 
 	public void initMenu(){
@@ -391,13 +389,13 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		m.clear(); //clear in case we added or removed scripts or hosts
 
 		MenuItem title1 = m.add(0, 999, Menu.NONE, "Host Computers");
-		ArrayList<ArrayList<String>> hosts = db.listAll(DatabaseHandler.HOST_TABLE_NAME, new String[]{"Alias", "Host", "Username", "Port", "Password", "id"});
+		ArrayList<ArrayList<String>> hosts = db.listAll(DatabaseHandler.HOST_TABLE_NAME, new String[]{"Alias", "Host", "Username", "Port", "id"});
 
 		if(hosts.size()>0) {
 			for (int i = hosts.size()-1;i>=0; i--) {
 
 				String desc = hosts.get(i).get(0);// + " [" + hosts.get(i).get(2) + "@" + hosts.get(i).get(1) + ":" + hosts.get(i).get(3) + "] id=" + hosts.get(i).get(5);
-				Integer id = Integer.valueOf(hosts.get(i).get(5));
+				Integer id = Integer.valueOf(hosts.get(i).get(4));
 
 				MenuItem itemAdd1 = m.add(1, id, Menu.NONE, desc);
 				itemAdd1.setIcon(R.drawable.ic_action_hardware_desktop_windows);
@@ -445,20 +443,18 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			setting_host= prefs.getString("setting_host", "");
 			setting_user= prefs.getString("setting_user", "");
 			setting_port= Integer.valueOf(prefs.getString("setting_port", "22"));
-			setting_pass= prefs.getString("setting_pass", "");
 
 			//Log.d("prefTest",setting_host+" "+setting_user+" "+setting_pass+" "+setting_port);
 
 			setting_host_all = prefs.getString("hostPreferenceList", "0");//id of host in db
 
-			ArrayList<ArrayList<String>> host = db.getRowWithId(DatabaseHandler.HOST_TABLE_NAME,new String[] {"Host","Username","Port","Password"},setting_host_all);
+			ArrayList<ArrayList<String>> host = db.getRowWithId(DatabaseHandler.HOST_TABLE_NAME,new String[] {"Host","Username","Port"},setting_host_all);
 
 			if(host.size()>0){
 
 				setting_host= host.get(0).get(0);
 				setting_user= host.get(0).get(1);
 				setting_port= Integer.valueOf(host.get(0).get(2));
-				setting_pass= host.get(0).get(3);
 			}/*else{
 
                 //Log.d("getPreferences", "Zero host records, will default to last used settings");
@@ -488,8 +484,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			setting_keyboard_autoclear=prefs.getBoolean("keyboard_autoclear", true);
 			//setting_keyboard_show_details=prefs.getBoolean("show_commands_on_buttons",false);
 			setting_use_keys = prefs.getBoolean("pref_usekeyauth",false);
-			setting_key_filename=prefs.getString("pref_addkeybutton", "");
-			setting_key_passphrase=prefs.getString("pref_key_passphrase", "");
 			setting_keyboard_batch=prefs.getBoolean("setting_keyboard_batch",true);
 			//setting_mouse_background=prefs.getBoolean("setting_mouse_background",false);
 			setting_keyboard_locked=prefs.getBoolean("keyboard_layout_locked",false);
@@ -502,13 +496,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			Toast.makeText(getApplicationContext(), "There was a problem retrieving your settings: "+e.getMessage(), Toast.LENGTH_LONG).show();
 		}
 	}
-	public void bindValueToPref(String key,String val){
-
-		SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MainActivity.this);
-		SharedPreferences.Editor editor = settings.edit();
-		editor.putString(key,val);
-		editor.commit();
-	}
 	public void xMouseKeyboardSend(View v){
 
 		useKeyboardSendText();
@@ -519,6 +506,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		super.onStart();
 		// The activity is about to become visible.
 		Log.d("onStart","onStart");
+		if (conn != null) conn.startCredentialUi();
 
 	}
 	@Override
@@ -531,9 +519,16 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 
 		//Toast.makeText(getBaseContext(), "setting_autoconnect "+String.valueOf(setting_autoconnect), Toast.LENGTH_SHORT).show();
-		if(setting_autoconnect){
-			conn.xMouseTryConnect();
-		}
+		final MyConnectionHandler credentialOwner = conn;
+		final int credentialToken = credentialOwner.credentialGeneration();
+		AndroidCredentials.get(this).execute(() -> {
+			boolean ready = AndroidCredentials.get(this).prepare();
+			runOnUiThread(() -> {
+				if (!credentialOwner.credentialsCurrent(credentialToken)) return;
+				if (!ready) Toast.makeText(this, com.stripe1.xmouse.secrets.CredentialRepository.RECOVERY_MESSAGE, Toast.LENGTH_LONG).show();
+				if (setting_autoconnect) credentialOwner.xMouseTryConnect();
+			});
+		});
 
 		if(mCoolDragAndDropGridView!=null){
 			mItemAdapter = new CustomKeyboardButtonAdapter(MainActivity.this, mItems);
@@ -553,8 +548,11 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 	@Override
 	protected void onStop() {
-
+		conn.stopCredentialUi();
 		super.onStop();  // Always call the superclass method first
+	}
+	@Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+		if (conn == null || !conn.onCredentialResult(requestCode, resultCode, data)) super.onActivityResult(requestCode, resultCode, data);
 	}
 	@Override
 	protected void onDestroy() {
@@ -761,27 +759,21 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 				}else {
 
-					ArrayList<ArrayList<String>> host = db.getRowWithId(DatabaseHandler.HOST_TABLE_NAME,
-							new String[]{"Host", "Username", "Port", "Password"}, String.valueOf(id));
-
-					if (host.size() > 0) {
-
-						setting_host = host.get(0).get(0);
-						setting_user = host.get(0).get(1);
-						setting_port = Integer.valueOf(host.get(0).get(2));
-						setting_pass = host.get(0).get(3);
-
-						bindValueToPref("setting_host",setting_host);
-						bindValueToPref("setting_user",setting_user);
-						bindValueToPref("setting_port",String.valueOf(setting_port));
-						bindValueToPref("setting_pass",setting_pass);
-
-						conn.xMouseDisconnect();
-						conn.xMouseTryConnect();
-					} else {
-
-						Toast.makeText(getBaseContext(), "Error finding Host settings with id=" + id, Toast.LENGTH_LONG).show();
-					}
+					conn.xMouseDisconnect();
+					final MyConnectionHandler owner = conn;
+					final int token = owner.credentialGeneration();
+					AndroidCredentials.get(this).execute(() -> {
+						try {
+							AndroidCredentials.get(this).selectHost(id);
+							runOnUiThread(() -> {
+								if (!owner.credentialsCurrent(token)) return;
+								getPreferences();
+								owner.xMouseTryConnect();
+							});
+						} catch (Exception ignored) {
+							runOnUiThread(() -> Toast.makeText(this, "Host selection could not be saved. Existing credentials were kept.", Toast.LENGTH_LONG).show());
+						}
+					});
 				}
 
 				break;
