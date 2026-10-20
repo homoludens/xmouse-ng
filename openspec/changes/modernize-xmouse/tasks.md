@@ -11,7 +11,7 @@
 - [x] 2.1 [low] Add representative version-2 `contactsManager` and preference fixtures covering host IDs, aliases, ports, scripts, selected host, global key authentication, and retained passphrase; verify fixture assertions reproduce the current stored values without real user secrets.
 - [x] 2.2 [low] Add legacy layout fixtures for the active file and three presets in comma and `<xmousesep>` forms, including absent color and malformed records; verify fixture expectations cover order, commands, spans, colors, and distinct preset contents.
 - [x] 2.3 [high] Introduce a Java-callable command transport boundary and fake SSH transport for the existing xdotool/ydotool adapters; verify the existing command-translation tests pass without an Activity or real network connection.
-- [ ] 2.4 [high] Define endpoint/locator values, stable endpoint identity, connection states, and typed failure categories; verify unit tests cover manual/discovered locators, IPv4/IPv6, host/port normalization, and distinct permission/resolution/trust/authentication failures.
+- [x] 2.4 [high] Define endpoint/locator values, stable endpoint identity, connection states, and typed failure categories; verify unit tests cover manual/discovered locators, IPv4/IPv6, host/port normalization, and distinct permission/resolution/trust/authentication failures.
 
 ## 3. Protect storage and migrate existing configuration
 
