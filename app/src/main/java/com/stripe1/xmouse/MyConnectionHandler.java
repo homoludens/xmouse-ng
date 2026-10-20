@@ -28,7 +28,7 @@ import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
 
 
-public class MyConnectionHandler {
+public class MyConnectionHandler implements CommandTransport {
 
 
     public JSch jsch=new JSch();
@@ -264,6 +264,7 @@ public class MyConnectionHandler {
         return false;
     }
 
+    @Override
     public boolean executeShellCommand(String cmd){
 
         MainActivity.recentCmdTextView.setText(cmd);

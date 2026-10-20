@@ -29,14 +29,14 @@ public class YDoTool implements IDoTool {
         KEYS_MAPPING = Collections.unmodifiableMap(aMap);
     };
 
-    private final MyConnectionHandler connectionHandler;
+    private final CommandTransport transport;
 
-    public YDoTool(MyConnectionHandler connectionHandler) {
-        this.connectionHandler = connectionHandler;
+    public YDoTool(CommandTransport transport) {
+        this.transport = transport;
     }
 
     private void exec(String cmd) {
-        connectionHandler.executeShellCommand("ydotool " + cmd);
+        transport.executeShellCommand("ydotool " + cmd);
     }
 
     public void mouseMoveRelative(float dx, float dy) {

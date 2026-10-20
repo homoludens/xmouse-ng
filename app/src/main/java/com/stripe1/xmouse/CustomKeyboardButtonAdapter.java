@@ -146,23 +146,9 @@ public class CustomKeyboardButtonAdapter extends ArrayAdapter<CustomKeyboardButt
 		return convertView;
 	}
 
-	public void execCommand(String command, IDoTool doTool, MyConnectionHandler connectionHandler) {
-		// remove xdotool prefix as saved keyboard layouts have the full command saved, then try to
-		// execute command on the do-tool interface, and execute the command as-is as fallback.
-		String commandNormalized = command.replaceAll("^xdotool ", "");
-		String[] args = commandNormalized.split(" ");
+	public void execCommand(String command, IDoTool doTool, CommandTransport transport) {
 		try {
-			switch (args[0]) {
-				case "mousemoverelative": doTool.mouseMoveRelative(Float.parseFloat(args[1]), Float.parseFloat(args[2])); break;
-				case "mouseclick": doTool.mouseClick(Integer.parseInt(args[1])); break;
-				case "mousedown": doTool.mouseDown(Integer.parseInt(args[1])); break;
-				case "mouseup": doTool.mouseUp(Integer.parseInt(args[1])); break;
-				case "mousewheelup": doTool.mouseWheelUp(); break;
-				case "mousewheeldown": doTool.mouseWheelDown(); break;
-				case "key": doTool.key(args[1]); break;
-				case "type": doTool.type(args[1]); break;
-				default: connectionHandler.executeShellCommand(command); break;
-			}
+			CustomCommandDispatcher.execCommand(command, doTool, transport);
 		} catch (ArrayIndexOutOfBoundsException e) {
 			Log.d("execCommand", "invalid command: " + command);
 		}

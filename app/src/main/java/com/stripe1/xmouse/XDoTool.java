@@ -1,14 +1,14 @@
 package com.stripe1.xmouse;
 
 public class XDoTool implements IDoTool {
-    private final MyConnectionHandler connectionHandler;
+    private final CommandTransport transport;
 
-    public XDoTool(MyConnectionHandler connectionHandler) {
-        this.connectionHandler = connectionHandler;
+    public XDoTool(CommandTransport transport) {
+        this.transport = transport;
     }
 
     private void exec(String cmd) {
-        connectionHandler.executeShellCommand("xdotool " + cmd);
+        transport.executeShellCommand("xdotool " + cmd);
     }
 
     public void mouseMoveRelative(float dx, float dy) {

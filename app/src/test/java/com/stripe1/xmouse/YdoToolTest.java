@@ -1,12 +1,15 @@
 package com.stripe1.xmouse;
 
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.mockito.Mockito;
-
 import com.tngtech.java.junit.dataprovider.DataProvider;
 import com.tngtech.java.junit.dataprovider.DataProviderRunner;
 import com.tngtech.java.junit.dataprovider.UseDataProvider;
+
+import org.junit.Test;
+import org.junit.runner.RunWith;
+
+import java.util.Collections;
+
+import static org.junit.Assert.assertEquals;
 
 @RunWith(DataProviderRunner.class)
 public class YdoToolTest {
@@ -25,9 +28,9 @@ public class YdoToolTest {
     @Test
     @UseDataProvider("keyTestData")
     public void key(String key, String cmd) {
-        MyConnectionHandler connectionHandler = Mockito.mock(MyConnectionHandler.class);
-        YDoTool doTool = new YDoTool(connectionHandler);
+        RecordingSshTransport transport = new RecordingSshTransport();
+        YDoTool doTool = new YDoTool(transport);
         doTool.key(key);
-        Mockito.verify(connectionHandler, Mockito.times(1)).executeShellCommand(cmd);
+        assertEquals(Collections.singletonList(cmd), transport.getCommands());
     }
 }

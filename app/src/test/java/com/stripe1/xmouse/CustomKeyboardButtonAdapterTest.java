@@ -1,21 +1,17 @@
 package com.stripe1.xmouse;
 
-import android.content.Context;
-import android.view.LayoutInflater;
-
 import com.tngtech.java.junit.dataprovider.DataProvider;
 import com.tngtech.java.junit.dataprovider.DataProviderRunner;
 import com.tngtech.java.junit.dataprovider.UseDataProvider;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.MockedStatic;
-import org.mockito.Mockito;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.util.LinkedList;
+import java.util.Collections;
 
+import static org.junit.Assert.assertEquals;
+
+/** Tests the adapter's extracted dispatch with no Android classes or concrete SSH handler. */
 @RunWith(DataProviderRunner.class)
 public class CustomKeyboardButtonAdapterTest {
     @DataProvider
@@ -32,32 +28,33 @@ public class CustomKeyboardButtonAdapterTest {
                 {"mousewheeldown"           , "ydotool key 108:1 108:0"                   , "xdotool click 5"},
                 {"type hello"               , "ydotool type hello"                        , "xdotool type hello"},
                 {"ssh hello@world"          , "ssh hello@world"                           , "ssh hello@world"},
+                {"type hello world"         , "ydotool type hello"                        , "xdotool type hello"},
+                {"type  hello"              , "ydotool type "                             , "xdotool type "},
+                {"xdotool  key ctrl+t"      , "xdotool  key ctrl+t"                       , "xdotool  key ctrl+t"},
+                {"XDOTOOL key ctrl+t"       , "XDOTOOL key ctrl+t"                        , "XDOTOOL key ctrl+t"},
+                {"xdotool click 1"          , "xdotool click 1"                           , "xdotool click 1"},
+                {"xdotool mousemove_relative -- -12 5", "xdotool mousemove_relative -- -12 5", "xdotool mousemove_relative -- -12 5"},
+                {"printf 'héllo, world'\nprintf done", "printf 'héllo, world'\nprintf done", "printf 'héllo, world'\nprintf done"},
+                {""                        , ""                                          , ""},
         };
     }
 
     @Test
     @UseDataProvider("commandTestData")
-    public void execYdoTool(String command, String yDoToolCmd, String xDoToolCmd) throws NoSuchMethodException, IllegalAccessException, InvocationTargetException {
-        MyConnectionHandler connectionHandler = Mockito.mock(MyConnectionHandler.class);
-        runExecTest(command, yDoToolCmd, new YDoTool(connectionHandler), connectionHandler);
+    public void execYdoTool(String command, String yDoToolCmd, String xDoToolCmd) {
+        RecordingSshTransport transport = new RecordingSshTransport();
+        runExecTest(command, yDoToolCmd, new YDoTool(transport), transport);
     }
 
     @Test
     @UseDataProvider("commandTestData")
-    public void execXdoTool(String command, String yDoToolCmd, String xDoToolCmd) throws NoSuchMethodException, IllegalAccessException, InvocationTargetException {
-        MyConnectionHandler connectionHandler = Mockito.mock(MyConnectionHandler.class);
-        runExecTest(command, xDoToolCmd, new XDoTool(connectionHandler), connectionHandler);
+    public void execXdoTool(String command, String yDoToolCmd, String xDoToolCmd) {
+        RecordingSshTransport transport = new RecordingSshTransport();
+        runExecTest(command, xDoToolCmd, new XDoTool(transport), transport);
     }
 
-    private void runExecTest(String command, String shellCommand, IDoTool doTool, MyConnectionHandler connectionHandler) throws NoSuchMethodException, IllegalAccessException, InvocationTargetException {
-        MockedStatic<LayoutInflater> layoutInflater = Mockito.mockStatic(LayoutInflater.class);
-        CustomKeyboardButtonAdapter buttonAdapter = new CustomKeyboardButtonAdapter(Mockito.mock(Context.class), new LinkedList<>());
-        layoutInflater.close();
-
-        Method method = CustomKeyboardButtonAdapter.class.getDeclaredMethod("execCommand", String.class, IDoTool.class, MyConnectionHandler.class);
-        method.setAccessible(true);
-
-        method.invoke(buttonAdapter, command, doTool, connectionHandler);
-        Mockito.verify(connectionHandler, Mockito.times(1)).executeShellCommand(shellCommand);
+    private void runExecTest(String command, String shellCommand, IDoTool doTool, RecordingSshTransport transport) {
+        CustomCommandDispatcher.execCommand(command, doTool, transport);
+        assertEquals(Collections.singletonList(shellCommand), transport.getCommands());
     }
 }
