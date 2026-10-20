@@ -8,6 +8,7 @@ import android.content.ClipData;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.os.AsyncTask;
+import android.preference.PreferenceManager;
 import android.text.TextUtils;
 import android.util.Log;
 import android.widget.Toast;
@@ -17,6 +18,11 @@ import com.jcraft.jsch.ChannelExec;
 import com.jcraft.jsch.JSch;
 import com.jcraft.jsch.JSchException;
 import com.jcraft.jsch.Session;
+import com.stripe1.xmouse.secrets.AndroidPrivateKeys;
+import com.stripe1.xmouse.secrets.AndroidSecretStore;
+import com.stripe1.xmouse.secrets.PrivateKeyImportException;
+import com.stripe1.xmouse.secrets.SecretStore;
+import com.stripe1.xmouse.secrets.SecretStoreException;
 
 import java.io.BufferedReader;
 import java.io.FileOutputStream;
@@ -131,12 +137,24 @@ public class MyConnectionHandler implements CommandTransport {
                 session= jsch.getSession(mUser, mHost, mPort);
 
                 if(MainActivity.setting_use_keys){
-                    if(!MainActivity.setting_key_passphrase.isEmpty()){
-                        jsch.addIdentity(MainActivity.setting_key_filename, MainActivity.setting_key_passphrase);
-                        Log.d("SshConnectTask", "attempt to add identity WITH passphrase");
-                    }else {
-                        Log.d("SshConnectTask", "attempt to add identity WITHOUT passphrase");
-                        jsch.addIdentity(MainActivity.setting_key_filename);
+                    // Task 4.7's minimal consumer bridge. No plaintext key file or path-based identity.
+                    SecretStore secrets = AndroidSecretStore.open(a);
+                    byte[] phrase = AndroidPrivateKeys.readConfiguredPassphrase(
+                            PreferenceManager.getDefaultSharedPreferences(a), secrets);
+                    byte[] key = null;
+                    try {
+                        key = AndroidPrivateKeys.open(
+                                PreferenceManager.getDefaultSharedPreferences(a), secrets)
+                                .readForAuthentication(phrase);
+                        jsch.removeAllIdentity();
+                        jsch.addIdentity("xmouse-private-key", key, null, phrase);
+                        session.setConfig("PreferredAuthentications", "publickey");
+                    } catch (JSchException ignored) {
+                        // Never expose a key parser/provider message through the legacy generic logger.
+                        throw new PrivateKeyImportException(PrivateKeyImportException.Reason.INVALID_KEY);
+                    } finally {
+                        java.util.Arrays.fill(phrase, (byte) 0);
+                        if (key != null) java.util.Arrays.fill(key, (byte) 0);
                     }
                 }else{
                     session.setConfig("PreferredAuthentications", "password,keyboard-interactive");
@@ -177,10 +195,16 @@ public class MyConnectionHandler implements CommandTransport {
                 channel.connect(3000);
 
 
+            }catch(PrivateKeyImportException e){
+                return "Private key unavailable or invalid ("+e.getReason().name()+"). Open Settings > Private Key to re-import; check Optional Key Passphrase. Existing configuration was kept.";
+            }catch(SecretStoreException e){
+                return "Protected key storage unavailable. Existing encrypted keys were kept; credential re-entry is required.";
             }catch(Exception e){
                 //Toast.makeText(a, e.toString(), Toast.LENGTH_LONG).show();
                 e.printStackTrace();
                 return e.getMessage();//.toString();
+            }finally{
+                try { jsch.removeAllIdentity(); } catch (JSchException ignored) { }
             }
             if(session.isConnected()){
 

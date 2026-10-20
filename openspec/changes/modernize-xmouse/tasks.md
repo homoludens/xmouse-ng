@@ -25,13 +25,15 @@
 
 ## 4. Modernize SSH transport, trust, and key import
 
+Execution-order note: the user approved 4.7 before 3.5 as its validated private-key producer prerequisite. IDs, complexity tags, and task scopes remain unchanged; see `docs/verification/private-key-import.md` for the handoff.
+
 - [ ] 4.1 [high] Replace the old JSch dependency with one pinned maintained fork and remove obsolete crypto/provider setup after adding required replacements; verify the dependency graph contains one JSch implementation and API 24 instrumentation can initialize its crypto providers.
 - [ ] 4.2 [high] Extract blocking SSH/channel operations from Activity, `AsyncTask`, dialogs, and static UI references; verify transport tests run without Android UI objects and connection/exec I/O is dispatched off the main thread.
 - [ ] 4.3 [high] Implement a host-key repository keyed by logical endpoint and port, plus cancellable first-trust approval before authentication; verify accepting persists trust, rejecting sends no credentials/commands, and a changed DHCP address with the same trusted hostname/key remains accepted.
 - [ ] 4.4 [high] Add host-key mismatch blocking and an explicit trust-management replacement action; verify a changed key cannot authenticate through reconnect, alternate-address retry, or discovered-service selection without deliberate trust replacement.
 - [ ] 4.5 [high] Preserve password and encrypted RSA/ECDSA authentication with modern negotiation; verify SSH integration tests cover password success/failure, passphrase failure, ECDSA, and RSA SHA-2 against a server with SHA-1 RSA signatures disabled.
 - [ ] 4.6 [high] Add finite resolution/connection/channel/exec deadlines, finite SSH keepalive failure handling, and stdout/stderr draining; verify stalled handshakes, closed channels, and sustained remote output produce bounded, classified outcomes without UI blocking.
-- [ ] 4.7 [high] Replace `FileDialog` key selection with the system document picker and validate/encrypt key bytes before atomic replacement; verify provider import, subsequent source removal, cancelled/invalid selection, and inaccessible legacy paths preserve the previous usable configuration or request re-import.
+- [x] 4.7 [high] Replace `FileDialog` key selection with the system document picker and validate/encrypt key bytes before atomic replacement; verify provider import, subsequent source removal, cancelled/invalid selection, and inaccessible legacy paths preserve the previous usable configuration or request re-import.
 - [ ] 4.8 [high] Remove obsolete storage-permission requests and declarations once key import is integrated; verify key authentication works without broad storage permission on API 24 and current Android.
 
 ## 5. Keep sessions alive across app switching

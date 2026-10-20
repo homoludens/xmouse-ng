@@ -1,0 +1,20 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Synthetic, memory-only provider, installed ONLY with the test APK. -->
+        <provider
+            android:name="com.stripe1.xmouse.secrets.SyntheticKeyFixtureControlProvider"
+            android:authorities="com.stripe1.xmouse.test.synthetic.keys.control"
+            android:exported="true"
+            android:permission="android.permission.INTERNET" />
+        <provider
+            android:name="com.stripe1.xmouse.secrets.SyntheticKeyDocumentsProvider"
+            android:authorities="com.stripe1.xmouse.test.synthetic.keys"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+    </application>
+</manifest>

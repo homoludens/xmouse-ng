@@ -1,12 +1,8 @@
 package com.stripe1.xmouse;
 
 
-import android.Manifest;
-import android.app.AlertDialog;
 import android.content.Context;
-import android.content.DialogInterface;
-import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
+import android.content.Intent;
 import android.media.Ringtone;
 import android.media.RingtoneManager;
 import android.net.Uri;
@@ -18,14 +14,11 @@ import android.preference.PreferenceCategory;
 import android.preference.PreferenceManager;
 import android.preference.RingtonePreference;
 import android.text.TextUtils;
-import android.util.Log;
 import android.view.MenuItem;
 
-import androidx.core.app.ActivityCompat;
 import androidx.core.app.NavUtils;
-import androidx.core.content.ContextCompat;
 
-import java.io.File;
+import com.stripe1.xmouse.secrets.PrivateKeySettingsController;
 
 /**
  * A {@link PreferenceActivity} that presents a set of application settings. On
@@ -40,7 +33,7 @@ import java.io.File;
  */
 public class SettingsActivity extends AppCompatPreferenceActivity {
 
-    private static final int REQUEST_WRITE_STORAGE = 112;
+    private PrivateKeySettingsController keyImport;
 
     static int selectedHostIndex=0;
     CharSequence[] hostsNames;
@@ -199,77 +192,7 @@ public class SettingsActivity extends AppCompatPreferenceActivity {
         addPreferencesFromResource(R.xml.pref_auth);
         //addPreferencesFromResource(R.xml.ssh_conn);
         final Preference myPref = (Preference) findPreference("pref_addkeybutton");
-
-
-        myPref.setOnPreferenceClickListener(new Preference.OnPreferenceClickListener() {
-            public boolean onPreferenceClick(Preference preference) {
-
-                //check if we have permissions via android 6
-
-
-                //ask for the permission in android M
-                int permission = ContextCompat.checkSelfPermission(SettingsActivity.this,
-                        Manifest.permission.WRITE_EXTERNAL_STORAGE);
-
-                if (permission != PackageManager.PERMISSION_GRANTED) {
-                    Log.i("SettingsActivity", "Permission to record denied");
-
-                    if (ActivityCompat.shouldShowRequestPermissionRationale(SettingsActivity.this,
-                            Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
-                        AlertDialog.Builder builder = new AlertDialog.Builder(SettingsActivity.this);
-                        builder.setMessage("Access the SD-CARD is required.")
-                                .setTitle("Permission required");
-
-                        builder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
-
-                            public void onClick(DialogInterface dialog, int id) {
-                                Log.i("SettingsActivity", "Clicked ok for permission");
-
-                                ActivityCompat.requestPermissions(SettingsActivity.this,
-                                        new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
-                                        REQUEST_WRITE_STORAGE);
-                            }
-                        });
-
-                        AlertDialog dialog = builder.create();
-                        dialog.show();
-
-                    } else {
-
-                        ActivityCompat.requestPermissions(SettingsActivity.this,
-                                new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
-                                REQUEST_WRITE_STORAGE);
-                    }
-                }
-
-                //open browser or intent here
-
-                //File mPath = new File(Environment.getExternalStorageDirectory(), null);
-                FileDialog fileDialog = new FileDialog(SettingsActivity.this, null);
-                //fileDialog.setFileEndsWith(".txt");
-                //fileDialog.setSelectDirectoryOption(true);
-                fileDialog.addFileListener(new FileDialog.FileSelectedListener() {
-                    public void fileSelected(File file) {
-                        Log.d(getClass().getName(), "selected file " + file.toString());
-                        //SharedPreferences settings = getSharedPreferences(String n, MODE_PRIVATE);
-                        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(SettingsActivity.this);
-                        SharedPreferences.Editor editor = settings.edit();
-                        editor.putString("pref_addkeybutton", file.toString());
-                        editor.commit();
-                        myPref.setSummary(file.toString());
-                    }
-                });
-                //fileDialog.addDirectoryListener(new FileDialog.DirectorySelectedListener() {
-                //  public void directorySelected(File directory) {
-                //      Log.d(getClass().getName(), "selected dir " + directory.toString());
-                //  }
-                //});
-                //fileDialog.setSelectDirectoryOption(false);
-                fileDialog.showDialog();
-
-                return true;
-            }
-        });
+        keyImport = new PrivateKeySettingsController(this, myPref);
 
         //listPrefKeys = (ListPreference)this.findPreference("pref_usekeyauth_list");
         //listPrefKeys = new ListPreference(this);
@@ -316,7 +239,6 @@ public class SettingsActivity extends AppCompatPreferenceActivity {
 
         //bindPreferenceSummaryToValue(findPreference("setting_pass"));
         //bindPreferenceSummaryToValue(findPreference("autologin_checkbox"));
-        bindPreferenceSummaryToValue(findPreference("pref_addkeybutton"));
         bindPreferenceSummaryToValue(findPreference("sensitivity_list"));
         bindPreferenceSummaryToValue(findPreference("delay_list"));
         bindPreferenceSummaryToValue(findPreference("mdelay_list"));
@@ -329,25 +251,16 @@ public class SettingsActivity extends AppCompatPreferenceActivity {
 
     }
     @Override
-    public void onRequestPermissionsResult(int requestCode,
-                                           String permissions[], int[] grantResults) {
-        switch (requestCode) {
-            case REQUEST_WRITE_STORAGE: {
-
-                if (grantResults.length == 0
-                        || grantResults[0] !=
-                        PackageManager.PERMISSION_GRANTED) {
-
-                    Log.i("SettingsActivity", "Permission has been denied by user");
-
-                } else {
-
-                    Log.i("SettingsActivity", "Permission has been granted by user");
-
-                }
-                return;
-            }
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (keyImport == null || !keyImport.onActivityResult(requestCode, resultCode, data)) {
+            super.onActivityResult(requestCode, resultCode, data);
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (keyImport != null) keyImport.destroy();
+        super.onDestroy();
     }
     /**
      * A preference value change listener that updates the preference's summary

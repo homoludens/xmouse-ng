@@ -21,6 +21,7 @@
         android:selectAllOnFocus="true"
         android:singleLine="true"
         android:title="Optional Key Passphrase"
+        android:summary="For an encrypted key, set its passphrase before importing. Import never changes this choice."
         />
    <!-- <ListPreference
         android:defaultValue=""

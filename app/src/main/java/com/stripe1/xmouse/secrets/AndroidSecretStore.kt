@@ -15,7 +15,7 @@ import java.security.ProviderException
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 
-/** No production caller is wired yet. Keystore wraps arbitrary secret bytes, including SSH key files. */
+/** Keystore wraps arbitrary secret bytes; the validated private-key importer is a production caller. */
 object AndroidSecretStore {
     internal const val DIRECTORY = "secrets"
     internal const val KEY_ALIAS = "com.stripe1.xmouse.secrets.aes-gcm.v1"
