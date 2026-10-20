@@ -36,8 +36,10 @@ No existing production authentication, database, preference, UI, manifest, or de
 - Reads never generate keys. Writes permit initial key creation only when no record/recovery artifact
   exists (the empty lock file alone does not count). A missing, invalidated, or unusable key is not
   deleted/replaced; an unreadable record is not overwritten. There is deliberately no implicit reset API.
-  Explicit credential re-entry/reset policy and UI remain **3.2**. Migration/integration/legacy backup
-  exclusions remain **3.3–3.6**; existing legacy plaintext is unchanged and is not claimed protected yet.
+  Task **3.2** adds the [explicit, cancellable re-entry presentation contract](credential-reentry.md),
+  with in-memory use for one attempt only and no reset. End-user UI/authentication wiring,
+  migration/integration/legacy backup exclusions remain **3.3–3.6**; existing legacy plaintext is
+  unchanged and is not claimed protected yet.
 
 ## Commands and results
 

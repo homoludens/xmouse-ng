@@ -16,7 +16,7 @@
 ## 3. Protect storage and migrate existing configuration
 
 - [x] 3.1 [high] Implement versioned Keystore-backed AES-GCM secret storage with unique nonces and application-private non-backup persistence; verify encrypted round trips, ciphertext tampering rejection, and absence of plaintext in stored files.
-- [ ] 3.2 [high] Handle unavailable or invalidated device keys without erasing non-secret configuration; verify an invalid-key instrumentation test requests credential re-entry while preserving host/script records.
+- [x] 3.2 [high] Handle unavailable or invalidated device keys without erasing non-secret configuration; verify an invalid-key instrumentation test requests credential re-entry while preserving host/script records.
 - [ ] 3.3 [high] Replace destructive `DatabaseHandler` upgrade/downgrade behavior with additive migrations for credential references and discovered-service locator metadata; verify version-2 fixtures retain every host/script ID and unsupported downgrade attempts do not drop tables.
 - [ ] 3.4 [high] Add restartable migration checkpoints that verify encrypted replacements before clearing plaintext database/preferences fields; verify fault-injection tests at each checkpoint preserve a usable credential representation and do not duplicate records.
 - [ ] 3.5 [high] Route host/default password and global key/passphrase reads and writes through the protected repository, preserving selected-host and authentication choices; verify no active save path writes new plaintext secrets and both legacy preference and database cases migrate correctly.
