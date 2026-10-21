@@ -391,11 +391,17 @@ class PrivateKeyImportAndroidTest {
             ActivityScenario.launch<SettingsActivity>(Intent(target, SettingsActivity::class.java)).use { scenario ->
                 scenario.onActivity { activity ->
                     val pref = activity.findPreference(AndroidPrivateKeys.LEGACY_PATH)
-                    assertTrue(pref.onPreferenceClickListener.onPreferenceClick(pref))
+                    val list = activity.listView
+                    val position = (0 until list.adapter.count).first { list.adapter.getItem(it) === pref }
+                    val row = list.adapter.getView(position, null, list)
+                    assertTrue("Settings preference row should dispatch its click", list.performItemClick(
+                        row, position, list.adapter.getItemId(position),
+                    ))
                 }
                 waitFor { preferences.contains(LegacyCredentialReferences.GLOBAL_PRIVATE_KEY) }
                 awaitKeyWorker(scenario)
                 assertEquals(1, monitor.hits)
+                StoragePermissionAssertions.assertNoBroadStoragePermissions(target)
                 scenario.onActivity { activity ->
                     assertEquals("Imported SSH private key", activity.findPreference(AndroidPrivateKeys.LEGACY_PATH).summary)
                 }
@@ -405,10 +411,6 @@ class PrivateKeyImportAndroidTest {
                 assertTrue(preferences.getBoolean("pref_usekeyauth", false))
                 assertFalse(preferences.contains("pref_key_passphrase"))
                 assertArrayEquals(byteArrayOf(), AndroidPrivateKeys.readConfiguredPassphrase(preferences, AndroidSecretStore.open(target)))
-                assertEquals(android.content.pm.PackageManager.PERMISSION_DENIED,
-                    target.checkSelfPermission("android.permission.READ_EXTERNAL_STORAGE"))
-                assertEquals(android.content.pm.PackageManager.PERMISSION_DENIED,
-                    target.checkSelfPermission("android.permission.WRITE_EXTERNAL_STORAGE"))
             }
         } finally { instrumentation.removeMonitor(monitor); removeDocument(uri) }
     }
