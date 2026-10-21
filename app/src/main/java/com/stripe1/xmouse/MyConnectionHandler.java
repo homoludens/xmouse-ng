@@ -247,7 +247,7 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
                 : failure == SshTransport.Failure.HOST_TRUST ? "Host trust was not approved. No authentication or commands were sent."
                 : operation == SshTransport.Operation.WRITE ? "Command could not be sent."
                 : operation == SshTransport.Operation.EXEC ? "Command execution failed."
-                : "Connection or authentication failed. Existing configuration was kept.";
+                : "Connection or authentication failed. Check the selected password/key and network, then retry. Existing configuration was kept.";
         Toast.makeText(activity, message, Toast.LENGTH_LONG).show();
         screen.performCallback();
     }
