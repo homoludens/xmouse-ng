@@ -26,7 +26,7 @@ object AndroidCredentials {
 class CredentialRepositoryException : Exception("Protected credentials unavailable; existing configuration was kept")
 
 /** Contains only non-secret metadata and an opaque reference. */
-class CredentialHost(
+data class CredentialHost(
     val id: Long, val alias: String?, val host: String?, val user: String?, val port: String?,
     val passwordReference: String?, val legacyPasswordPresent: Boolean,
     val credentialReentryRequired: Boolean = false,
@@ -218,15 +218,29 @@ class CredentialRepository internal constructor(
 
     /** All asynchronous continuations return to this worker; no worker blocks waiting for a dialog. */
     fun authenticate(prompts: CredentialPrompts, completion: AuthenticationCallback) {
+        authenticate(authenticationSelection(), prompts, completion)
+    }
+
+    /** Capture after prepare, on this worker. Includes profile ID and fresh opaque secret references. */
+    fun authenticationSelection(): AuthenticationSelection {
         offMain()
-        val host = selectedHost()
-        val useKey = preferences.getBoolean("pref_usekeyauth", false)
-        val keyRef = preferences.getString(LegacyCredentialReferences.GLOBAL_PRIVATE_KEY, null)
-        val reference = if (useKey) preferences.getString(LegacyCredentialReferences.GLOBAL_PASSPHRASE, null) else host.passwordReference
-        val legacy = if (useKey) preferences.contains("pref_key_passphrase") ||
-            preferences.getBoolean(CredentialMetadataBackup.PASSPHRASE_REENTRY, false) else host.legacyPasswordPresent
-        val restoredReentry = if (useKey) preferences.getBoolean(CredentialMetadataBackup.PASSPHRASE_REENTRY, false)
-            else host.credentialReentryRequired
+        return AuthenticationSelection(selectedHost(), preferences.getBoolean("pref_usekeyauth", false),
+            preferences.getString(LegacyCredentialReferences.GLOBAL_PASSPHRASE, null),
+            preferences.contains("pref_key_passphrase"),
+            preferences.getBoolean(CredentialMetadataBackup.PASSPHRASE_REENTRY, false),
+            preferences.getString(LegacyCredentialReferences.GLOBAL_PRIVATE_KEY, null),
+            preferences.getBoolean(CredentialMetadataBackup.PRIVATE_KEY_REENTRY, false),
+            preferences.getString(AndroidPrivateKeys.LEGACY_PATH, null))
+    }
+
+    fun authenticate(selection: AuthenticationSelection, prompts: CredentialPrompts, completion: AuthenticationCallback) {
+        offMain()
+        val host = selection.host
+        val useKey = selection.useKey
+        val keyRef = selection.privateKeyReference
+        val reference = if (useKey) selection.passphraseReference else host.passwordReference
+        val legacy = if (useKey) selection.legacyPassphrasePresent || selection.passphraseReentry else host.legacyPasswordPresent
+        val restoredReentry = if (useKey) selection.passphraseReentry else host.credentialReentryRequired
         readAttempt(reference, legacy, if (useKey) CredentialKind.PASSPHRASE else CredentialKind.PASSWORD, prompts,
             done = { credential, error ->
             if (credential == null) { completion.complete(null, error); return@readAttempt }
@@ -238,7 +252,7 @@ class CredentialRepository internal constructor(
                         if (key == null) { credential.fill(0); completion.complete(null, keyError) }
                         else completeKeyAuthentication(host, credential, key, completion)
                     })
-                } else if (preferences.getBoolean(CredentialMetadataBackup.PRIVATE_KEY_REENTRY, false)) {
+                } else if (selection.privateKeyReentry) {
                     requestMemoryOnly(CredentialKind.PRIVATE_KEY, prompts) { key, keyError ->
                         if (key == null) { credential.fill(0); completion.complete(null, keyError) }
                         else completeKeyAuthentication(host, credential, key, completion)
@@ -246,6 +260,11 @@ class CredentialRepository internal constructor(
                 } else {
                     try {
                         // The approved importer validates/encrypts readable legacy bytes before use.
+                        // Do not substitute a newly selected/imported key for this captured attempt.
+                        if (preferences.getString(LegacyCredentialReferences.GLOBAL_PRIVATE_KEY, null) != keyRef ||
+                            preferences.getString(AndroidPrivateKeys.LEGACY_PATH, null) != selection.legacyPrivateKeyPath) {
+                            throw CredentialRepositoryException()
+                        }
                         val key = AndroidPrivateKeys.open(preferences, secrets).readForAuthentication(credential)
                         completion.complete(AuthenticationMaterial(host, true, byteArrayOf(), credential, key), null)
                     } catch (_: Exception) {

@@ -45,6 +45,32 @@ class CredentialRepositoryAndroidTest {
     private val target get() = ApplicationProvider.getApplicationContext<Context>()
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
 
+    @Test fun capturedAuthenticationSelectionCannotReadAnotherProfileOrNewCredentialAfterSelectionChanges() = fixture { f ->
+        assertTrue(f.repository.prepare())
+        f.preferences.edit(commit = true) { putBoolean("pref_usekeyauth", false) }
+        val snapshot = f.repository.authenticationSelection()
+        assertEquals(42L, snapshot.host.id)
+        val originalPassword = f.repository.readPassword(snapshot.host)
+        f.repository.saveHost(snapshot.host, "edited", snapshot.host.host!!, snapshot.host.user!!, snapshot.host.port!!,
+            "NOT_REAL_replacement_password".toByteArray())
+        f.repository.selectHost(7)
+        f.preferences.edit(commit = true) { putBoolean("pref_usekeyauth", true) }
+        val choices = f.preferences.all
+        val done = CountDownLatch(1)
+        val result = AtomicReference<AuthenticationMaterial?>()
+        f.repository.execute {
+            f.repository.authenticate(snapshot, { _, request -> request.cancel() }) { material, _ -> result.set(material); done.countDown() }
+        }
+        assertTrue(done.await(10, TimeUnit.SECONDS))
+        val material = requireNotNull(result.get())
+        try {
+            assertEquals(snapshot.host, material.host); assertFalse(material.useKey)
+            assertArrayEquals(originalPassword, material.password)
+            assertEquals(7L, f.repository.selectedHost().id)
+            assertEquals(choices, f.preferences.all)
+        } finally { originalPassword.fill(0); material.close() }
+    }
+
     @Test fun v2DatabaseAndBothPreferenceSourcesMigrateBeforeWritesWithoutChangingNonsecretChoices() = fixture { f ->
         val scripts = f.rows("scripts")
         val before = f.rows("contacts").map { it.take(6) }

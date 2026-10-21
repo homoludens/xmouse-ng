@@ -14,9 +14,10 @@ class ConnectionStateTest {
     @Test
     fun snapshotsRepresentEachConnectionPhaseWithTheIntendedEndpoint() {
         val states = listOf(
+            ConnectionState.PreparingCredentials(endpoint),
             ConnectionState.Resolving(endpoint), ConnectionState.Connecting(endpoint),
             ConnectionState.AwaitingTrust(endpoint), ConnectionState.Authenticating(endpoint),
-            ConnectionState.Connected(endpoint), ConnectionState.Disconnected(endpoint),
+            ConnectionState.Connected(endpoint), ConnectionState.Closing(endpoint), ConnectionState.Disconnected(endpoint),
             ConnectionState.Error(endpoint, ConnectionFailure.Resolution(ConnectionFailure.ResolutionReason.NOT_FOUND)),
         )
         assertEquals(ConnectionState.Phase.entries, states.map { it.phase })
@@ -26,6 +27,7 @@ class ConnectionStateTest {
     @Test
     fun onlyUsableCommandChannelConnectedSnapshotIsReady() {
         val states = listOf(
+            ConnectionState.PreparingCredentials(endpoint), ConnectionState.Closing(endpoint),
             ConnectionState.Resolving(endpoint), ConnectionState.Connecting(endpoint),
             ConnectionState.AwaitingTrust(endpoint), ConnectionState.Authenticating(endpoint),
             ConnectionState.Disconnected(endpoint),

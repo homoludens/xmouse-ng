@@ -62,4 +62,15 @@ replacement_ui = (source / "trust" / "HostTrustReplacementUi.kt").read_text()
 assert "class HostTrustReplacementUi" in replacement_ui
 assert "Replace trusted key" in replacement_ui and "Review replacement" in replacement_ui
 assert not re.search(r"import\s+com\.stripe1\.xmouse\.(transport|secrets)|\b(SshTransport|AuthenticationMaterial|CredentialRepository)\b", replacement_ui)
+for file in (source / "session").glob("*.kt"):
+    if file.name == "AndroidSessionOwner.kt":
+        continue
+    text = re.sub(r"/\*.*?\*/|//[^\n]*", "", file.read_text(), flags=re.S)
+    assert not re.search(r"import\s+(android\.|androidx\.)|\b(Activity|Context|View|AlertDialog|Handler|MainActivity)\b", text), file
+    assert not re.search(r"\b(Log\.|System\.(out|err)|printStackTrace|KeyStore)\b", text), file
+assert "closeConfirmed" in core and "while (!scope.released)" in core
+controller = (source / "session" / "SessionController.kt").read_text()
+assert "entry.closeCompleted" in controller and "current.cleanupUnconfirmed" in controller
+assert "WeakReference(observer)" in controller
+assert "repository.authenticate(selection, prompts, completion)" in (source / "session" / "AndroidSessionOwner.kt").read_text()
 print("SSH extraction/trust source boundaries passed; no unverified-host fallback.")

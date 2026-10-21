@@ -40,7 +40,7 @@ Complexity amendment (2026-10-21): the user approved promoting 4.1 to `[high]` a
 
 ## 5. Keep sessions alive across app switching
 
-- [ ] 5.1 [high] Implement the serialized session controller with idempotent connect, explicit disconnect, attempt-generation cancellation, and desired-host state; verify repeated connect, in-flight host changes, and late callbacks never toggle off or duplicate the active session.
+- [x] 5.1 [high] Implement the serialized session controller with idempotent connect, explicit disconnect, attempt-generation cancellation, and desired-host state; verify repeated connect, in-flight host changes, and late callbacks never toggle off or duplicate the active session.
 - [ ] 5.2 [low] Add the started-and-bound `connectedDevice` foreground service with required manifest permissions, prompt foreground disclosure, and non-sticky lifecycle; verify a foreground Connect starts it legally and no boot/background-only startup path is introduced.
 - [ ] 5.3 [low] Publish Open controls/Disconnect notification actions and handle notification permission grant/denial by OS version; verify notification disconnect closes transport and the denial case explains visibility limits while retaining in-app session controls.
 - [ ] 5.4 [low] Bind `MainActivity` to session state and remove activity-owned connection construction/shutdown and toggle-based auto-connect; verify Activity recreation and return with auto-connect enabled reattach to one existing session.

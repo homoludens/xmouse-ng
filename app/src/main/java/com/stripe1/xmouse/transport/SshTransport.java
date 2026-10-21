@@ -29,6 +29,8 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Serial asynchronous command boundary. The coordinator never performs blocking provider I/O.
  * Finite waits, bounded process-wide quarantine, and per-attempt resource ledgers allow cancellation
@@ -45,6 +47,8 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
         default void mismatch(HostKeyMismatch mismatch) { }
     }
     public interface LossListener { void lost(Failure failure); }
+    public enum Progress { RESOLVING, CONNECTING }
+    public interface ProgressListener { void changed(Progress progress); }
     private static final OutputStream DISCARD = new OutputStream() {
         @Override public void write(int value) { }
         @Override public void write(byte[] bytes, int offset, int length) { }
@@ -59,6 +63,10 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
     private volatile Scope owner;
     private volatile Future<?> active;
     private volatile LossListener lossListener;
+    private volatile ProgressListener progressListener;
+    private final Set<Scope> retained = ConcurrentHashMap.newKeySet();
+    private final CompletableFuture<Failure> termination = new CompletableFuture<>();
+    private volatile boolean cleanupUncertain;
     private int queued;
 
     public static ExecutorService newWorker() {
@@ -70,6 +78,12 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
         this.backend = backend; this.worker = worker; this.limits = limits; this.runtime = runtime;
     }
     public void setLossListener(LossListener listener) { lossListener = listener; }
+    public void setProgressListener(ProgressListener listener) { progressListener = listener; }
+    private void progress(Scope scope, Progress progress) {
+        synchronized (submission) {
+            if (scope.current() && progressListener != null) progressListener.changed(progress);
+        }
+    }
     public boolean isConnected() { return ready; }
     public boolean isConnecting() { return connecting; }
 
@@ -87,12 +101,14 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
                         authentication.close(); connecting = false; callback.failure(Failure.CAPACITY); return;
                     }
                     scope = new Scope(token);
+                    retained.add(scope);
                     owner = scope;
                 }
                 Failure failure = null;
                 HostKeyMismatch mismatch = null;
                 AtomicBoolean authenticationClaimed = new AtomicBoolean();
                 try {
+                    progress(scope, Progress.RESOLVING);
                     SshConnectionRequest resolved = await(scope, runtime.resolution, limits.resolution,
                             Failure.RESOLUTION_TIMEOUT, () -> backend.resolve(request));
                     scope.session = await(scope, runtime.operations, limits.preparation, Failure.CONNECTION_TIMEOUT, () -> {
@@ -105,6 +121,7 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
                         } finally { authentication.close(); }
                     });
                     await(scope, runtime.operations, limits.connection, Failure.CONNECTION_TIMEOUT, () -> {
+                        progress(scope, Progress.CONNECTING);
                         scope.session.configure(limits);
                         scope.session.connect(limits.connection);
                         check(scope);
@@ -276,12 +293,35 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
             });
         }
     }
-    @Override public void close() {
+    @Override public void close() { closeConfirmed(null); }
+    /** Terminal, bounded physical-ownership barrier. Unlike logical disconnect, success requires all
+     * real operations and their late resource handoffs/cleanup to finish. Failure MUST NOT authorize
+     * another host. Quarantined resources still close independently after the deadline. */
+    public void closeConfirmed(Callback<Void> callback) {
+        if (callback != null) termination.thenAccept(failure -> {
+            if (failure == null) callback.success(null); else callback.failure(failure);
+        });
         synchronized (submission) {
             if (disposed) return;
-            disposed = true; lossListener = null;
-            Scope old = invalidate();
-            worker.execute(() -> { if (old != null) old.close(); });
+            disposed = true; lossListener = null; progressListener = null;
+            invalidate();
+            worker.execute(() -> {
+                long deadline = runtime.clock.getAsLong() + TimeUnit.MILLISECONDS.toNanos(limits.cleanup);
+                Failure failure = null;
+                for (Scope scope : retained) {
+                    scope.startClose();
+                    synchronized (scope) {
+                        while (!scope.released) {
+                            long remaining = deadline - runtime.clock.getAsLong();
+                            if (remaining <= 0) { failure = Failure.CLEANUP_TIMEOUT; break; }
+                            try { TimeUnit.NANOSECONDS.timedWait(scope, remaining); }
+                            catch (InterruptedException ignored) { Thread.currentThread().interrupt(); failure = Failure.CLEANUP_TIMEOUT; break; }
+                        }
+                    }
+                }
+                if (failure == null && cleanupUncertain) failure = Failure.IO;
+                termination.complete(failure);
+            });
             worker.shutdown();
         }
     }
@@ -405,7 +445,9 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
         final CompletableFuture<Void> done = new CompletableFuture<>();
         Slot(Scope scope, Close action) { this.scope = scope; this.action = action; }
         void perform() {
-            try { action.run(); done.complete(null); } catch (Exception ignored) { done.completeExceptionally(new IOException()); }
+            try { action.run(); done.complete(null); } catch (Exception ignored) {
+                cleanupUncertain = true; done.completeExceptionally(new IOException());
+            }
             finally { synchronized (scope) { scope.slots.remove(this); scope.releaseIfDone(); } }
         }
         void schedule() { if (claimed.compareAndSet(false, true)) runtime.cleanup.execute(this::perform); }
@@ -453,7 +495,9 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
             return failure;
         }
         synchronized void releaseIfDone() {
-            if (closing && inFlight == 0 && slots.isEmpty() && !released) { released = true; runtime.owners.release(); }
+            if (closing && inFlight == 0 && slots.isEmpty() && !released) {
+                released = true; retained.remove(this); runtime.owners.release(); notifyAll();
+            }
         }
     }
     private void closeTemporary(Slot... slots) throws Exception {

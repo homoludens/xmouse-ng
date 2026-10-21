@@ -6,7 +6,10 @@ import com.stripe1.xmouse.transport.JschSshBackend
 import java.util.function.BooleanSupplier
 
 /** JSch calls check AFTER verifying the KEX signature, BEFORE sending ANY authentication request. */
-class HostTrustPolicy(private val requests: HostTrustRequests) : JschSshBackend.SessionPolicy {
+class HostTrustPolicy @JvmOverloads constructor(
+    private val requests: HostTrustRequests,
+    private val trusted: Runnable = Runnable { },
+) : JschSshBackend.SessionPolicy {
     override fun configure(jsch: JSch, session: Session, endpoint: Endpoint) =
         configure(jsch, session, endpoint, BooleanSupplier { true })
 
@@ -22,6 +25,8 @@ class HostTrustPolicy(private val requests: HostTrustRequests) : JschSshBackend.
                 if (host != alias) trustFailure(HostTrustException.Reason.MISMATCH)
                 val parsed = ApprovedHostKey.parse(key)
                 requests.verify(endpoint, parsed, current)
+                if (!current.asBoolean) trustFailure(HostTrustException.Reason.CANCELLED)
+                trusted.run()
                 checked = HostKey(alias, parsed.bytes())
                 return com.jcraft.jsch.HostKeyRepository.OK
             }
