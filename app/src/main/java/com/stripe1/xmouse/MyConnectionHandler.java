@@ -18,7 +18,10 @@ import com.stripe1.xmouse.secrets.AuthenticationMaterial;
 import com.stripe1.xmouse.secrets.CredentialRepository;
 import com.stripe1.xmouse.secrets.CredentialUi;
 import com.stripe1.xmouse.transport.JschSshBackend;
-import com.stripe1.xmouse.transport.LegacySshPolicy;
+import com.stripe1.xmouse.trust.AndroidHostTrust;
+import com.stripe1.xmouse.trust.HostTrustPolicy;
+import com.stripe1.xmouse.trust.HostTrustRequests;
+import com.stripe1.xmouse.trust.HostTrustUi;
 import com.stripe1.xmouse.transport.SshConnectionRequest;
 import com.stripe1.xmouse.transport.SshTransport;
 import com.stripe1.xmouse.transport.TransportPresentation;
@@ -40,10 +43,20 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
     private AlertDialog output;
     private int authenticationGeneration;
     private boolean readingCredentials;
+    private HostTrustUi trustUi;
 
     public MyConnectionHandler(Activity activity, MyInterface screen) {
-        this(activity, screen, new SshTransport(
-                new JschSshBackend(LegacySshPolicy.unverifiedHostKeys()), SshTransport.newWorker()));
+        this(activity, screen, productionTrust(activity));
+    }
+
+    private static HostTrustRequests productionTrust(Activity activity) {
+        Handler main = new Handler(Looper.getMainLooper());
+        return new HostTrustRequests(AndroidHostTrust.open(activity), main::post);
+    }
+
+    MyConnectionHandler(Activity activity, MyInterface screen, HostTrustRequests trust) {
+        this(activity, screen, new SshTransport(new JschSshBackend(new HostTrustPolicy(trust)), SshTransport.newWorker()));
+        trustUi = new HostTrustUi(activity, trust);
     }
 
     MyConnectionHandler(Activity activity, MyInterface screen, SshTransport transport) {
@@ -59,10 +72,12 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
     public void startCredentialUi() {
         if (activity == null) return;
         credentialUi.start();
+        if (trustUi != null) trustUi.start();
         presentation.attach(this);
     }
 
     public void stopCredentialUi() {
+        if (trustUi != null) trustUi.stop();
         presentation.detach();
         dismissDialogs();
         if (credentialUi != null && !credentialUi.hasPicker()) {
@@ -137,6 +152,7 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
     public void xMouseDisconnect() {
         authenticationGeneration++;
         readingCredentials = false;
+        if (trustUi != null) { trustUi.stop(); trustUi.start(); }
         if (credentialUi != null) { credentialUi.stop(); credentialUi.start(); }
         presentation.detach(); // Invalidate outstanding output/connect callbacks, not only credentials.
         if (activity != null) presentation.attach(this);
@@ -150,6 +166,8 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
         authenticationGeneration++;
         presentation.detach();
         if (credentialUi != null) credentialUi.stop();
+        if (trustUi != null) trustUi.stop();
+        trustUi = null;
         dismissDialogs();
         credentialUi = null;
         screen = null;
@@ -202,6 +220,9 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
         Log.w(TAG, "ssh_operation_failed");
         String message = failure == SshTransport.Failure.PRIVATE_KEY
                 ? "Private key unavailable or invalid. Open Settings > Private Key to re-import; check Optional Key Passphrase. Existing configuration was kept."
+                : failure == SshTransport.Failure.HOST_MISMATCH ? "Host identity changed. Connection blocked. The saved trusted key was kept."
+                : failure == SshTransport.Failure.TRUST_STORAGE ? "Host trust could not be read or saved. Connection blocked; existing records were kept."
+                : failure == SshTransport.Failure.HOST_TRUST ? "Host trust was not approved. No authentication or commands were sent."
                 : operation == SshTransport.Operation.WRITE ? "Command could not be sent."
                 : operation == SshTransport.Operation.EXEC ? "Command execution failed."
                 : "Connection or authentication failed. Existing configuration was kept.";

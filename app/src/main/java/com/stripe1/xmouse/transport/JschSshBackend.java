@@ -13,6 +13,9 @@ import java.io.OutputStream;
 public final class JschSshBackend implements SshBackend {
     public interface SessionPolicy {
         void configure(JSch jsch, com.jcraft.jsch.Session session, Endpoint endpoint) throws Exception;
+        default void configure(JSch jsch, com.jcraft.jsch.Session session, Endpoint endpoint,
+                               java.util.function.BooleanSupplier current) throws Exception { configure(jsch, session, endpoint); }
+        default void cancelPendingTrust() { }
     }
 
     private final SessionPolicy policy;
@@ -20,11 +23,18 @@ public final class JschSshBackend implements SshBackend {
     public JschSshBackend(SessionPolicy policy) { this.policy = policy; }
 
     @Override public Session create(SshConnectionRequest request, AuthenticationMaterial authentication) throws Exception {
+        return create(request, authentication, () -> true);
+    }
+
+    @Override public void cancelPendingTrust() { policy.cancelPendingTrust(); }
+
+    @Override public Session create(SshConnectionRequest request, AuthenticationMaterial authentication,
+                                    java.util.function.BooleanSupplier current) throws Exception {
         JSch jsch = new JSch();
         com.jcraft.jsch.Session session = null;
         try {
             session = jsch.getSession(authentication.getHost().getUser(), request.address, request.endpoint.getPort());
-            policy.configure(jsch, session, request.endpoint);
+            policy.configure(jsch, session, request.endpoint, current);
             if (authentication.getUseKey()) {
                 // All source parsing and JSch identity publication MUST stay inside this boundary.
                 BoundedSshKey.addIdentity(jsch, authentication.getPrivateKey(), authentication.getPassphrase());

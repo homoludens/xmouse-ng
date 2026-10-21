@@ -31,6 +31,16 @@ assert identity_calls == ["secrets/BoundedSshKey.kt"], identity_calls
 backend = (transport / "JschSshBackend.java").read_text()
 assert "BoundedSshKey.addIdentity(" in backend
 assert '"StrictHostKeyChecking"' not in backend
-assert '"StrictHostKeyChecking", "no"' in (transport / "LegacySshPolicy.java").read_text()
-assert "policy.configure(jsch, session, request.endpoint)" in backend
-print("SSH extraction source boundaries passed; legacy unverified-host policy remains isolated and INSECURE.")
+assert not (transport / "LegacySshPolicy.java").exists()
+assert "policy.configure(jsch, session, request.endpoint, current)" in backend
+assert "new HostTrustPolicy(trust)" in presenter
+for file in source.rglob("*"):
+    if file.suffix in (".java", ".kt"):
+        assert not re.search(r'StrictHostKeyChecking"\s*,\s*"no', file.read_text()), file
+for file in (source / "trust").glob("*.kt"):
+    if file.name == "AndroidHostTrust.kt":
+        continue
+    text = re.sub(r"/\*.*?\*/|//[^\n]*", "", file.read_text(), flags=re.S)
+    assert not re.search(r"import\s+(android\.|androidx\.)|\b(Activity|Context|View|AlertDialog|Handler)\b", text), file
+    assert not re.search(r"\b(Log\.|System\.(out|err)|printStackTrace|KeyStore|SecretStore)\b", text), file
+print("SSH extraction/trust source boundaries passed; no unverified-host fallback.")

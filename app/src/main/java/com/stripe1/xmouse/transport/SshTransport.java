@@ -3,6 +3,7 @@ package com.stripe1.xmouse.transport;
 import com.stripe1.xmouse.CommandTransport;
 import com.stripe1.xmouse.secrets.AuthenticationMaterial;
 import com.stripe1.xmouse.secrets.PrivateKeyImportException;
+import com.stripe1.xmouse.trust.HostTrustException;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -24,7 +25,7 @@ import java.util.concurrent.Executors;
  */
 public final class SshTransport implements CommandTransport, AutoCloseable {
     public enum Operation { CONNECT, WRITE, EXEC, SCP, DISCONNECT }
-    public enum Failure { CONNECTION, PRIVATE_KEY, IO, CLOSED }
+    public enum Failure { CONNECTION, PRIVATE_KEY, IO, CLOSED, HOST_TRUST, HOST_MISMATCH, TRUST_STORAGE }
     public interface Callback<T> {
         void success(T value);
         void failure(Failure failure);
@@ -63,13 +64,14 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
             if (disposed) { authentication.close(); callback.failure(Failure.CLOSED); return; }
             ready = false;
             long token = ++generation;
+            backend.cancelPendingTrust();
             connecting = true;
             worker.execute(() -> {
                 Failure failure = null;
                 try {
                     closeResources();
                     if (token != generation) return;
-                    session = backend.create(request, authentication);
+                    session = backend.create(request, authentication, () -> token == generation);
                     if (token != generation) return;
                     session.connect();
                     if (token != generation) return;
@@ -84,6 +86,12 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
                     if (!session.isConnected() || shell.isClosed()) throw new IOException();
                     synchronized (submission) {
                         if (token == generation) ready = true;
+                    }
+                } catch (HostTrustException rejected) {
+                    switch (rejected.getReason()) {
+                        case MISMATCH: failure = Failure.HOST_MISMATCH; break;
+                        case STORAGE: case INVALID_REPOSITORY: failure = Failure.TRUST_STORAGE; break;
+                        default: failure = Failure.HOST_TRUST;
                     }
                 } catch (PrivateKeyImportException ignored) { failure = Failure.PRIVATE_KEY; }
                 catch (Exception ignored) { failure = Failure.CONNECTION; }
@@ -165,6 +173,7 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
             ready = false;
             connecting = false;
             ++generation; // Invalidate queued interactions immediately; never send them to a later session.
+            backend.cancelPendingTrust();
             if (disposed) return;
             worker.execute(() -> {
                 boolean clean = closeResources();
@@ -182,6 +191,7 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
             ready = false;
             connecting = false;
             ++generation;
+            backend.cancelPendingTrust();
             worker.execute(this::closeResources);
             worker.shutdown(); // Queued cleanup still runs, never awaitTermination on the UI.
         }
