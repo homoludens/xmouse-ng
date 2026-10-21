@@ -93,6 +93,47 @@ class SessionControllerTest {
             assertEquals(b, f.controller.current.desiredHost); assertEquals(2, f.attempts.size)
         }
     }
+    @Test fun foregroundConnectEpochRejectsCallbackAlreadyQueuedBehindExplicitDisconnect() {
+        Fixture().use { f ->
+            val beforeDisconnect = f.controller.captureDisconnectEpoch()
+            f.controller.disconnect()
+            assertTrue("disconnect invalidates service callbacks synchronously",
+                f.controller.captureDisconnectEpoch() > beforeDisconnect)
+            f.controller.connectIfNotDisconnectedSince(a, beforeDisconnect)
+            f.queue.drain()
+            assertNull(f.controller.current.desiredHost)
+            assertTrue(f.controller.current.automaticConnectSuppressed)
+            assertTrue(f.attempts.isEmpty())
+
+            f.controller.connectIfNotDisconnectedSince(b, f.controller.captureDisconnectEpoch())
+            f.queue.drain()
+            assertEquals(b, f.controller.current.desiredHost)
+            assertEquals(1, f.attempts.size)
+        }
+    }
+    @Test fun foregroundConnectGuardsAreRecheckedWhenTheSerializedQueueRuns() {
+        Fixture().use { f ->
+            val epoch = f.controller.captureDisconnectEpoch()
+            val permit = f.controller.automaticConnectPermit()
+            var isCurrent = true
+            f.controller.connectIfNotDisconnectedSince(a, epoch, isCurrentRequest = { isCurrent })
+            isCurrent = false
+            f.queue.drain()
+            assertTrue(f.attempts.isEmpty())
+
+            isCurrent = true
+            f.controller.connectAutomaticallyIfCurrent(a, permit, epoch,
+                isCurrentRequest = { isCurrent }, onDecision = {})
+            isCurrent = false
+            f.queue.drain()
+            assertTrue("superseded auto-connect must be rejected on the owner queue", f.attempts.isEmpty())
+
+            f.controller.connectIfNotDisconnectedSince(b, f.controller.captureDisconnectEpoch())
+            f.queue.drain()
+            assertEquals(b, f.controller.current.desiredHost)
+            assertEquals(1, f.attempts.size)
+        }
+    }
     @Test fun involuntaryLossRetainsIntentButNeverPretendsReadyOrAutomaticallyRecovers() {
         Fixture().use { f ->
             f.connect(a); val old = f.attempts.single(); old.listener.ready(); f.queue.drain()

@@ -5,6 +5,7 @@ import com.stripe1.xmouse.connection.ConnectionState
 import java.lang.ref.WeakReference
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /** One attempt owns credentials, prompts and transport, including every late completion's cleanup. */
@@ -43,6 +44,8 @@ class SessionController @JvmOverloads constructor(
     @Volatile var current = SessionSnapshot()
         private set
     private var generation = 0L
+    /** Invalidates service metadata callbacks immediately, before the serialized disconnect event runs. */
+    private val disconnectEpoch = AtomicLong()
     private var owned: Owned? = null
     private var resumeAfterClose = false
     private val observers = mutableListOf<Observation>()
@@ -54,21 +57,59 @@ class SessionController @JvmOverloads constructor(
 
     /** Capture BEFORE asynchronous preference/credential preparation, not when its result returns. */
     fun automaticConnectPermit() = AutoConnectPermit(current.intentVersion)
-    fun connectAutomatically(host: SessionHost, permit: AutoConnectPermit) { events.post {
-        val old = owned
-        if (!current.closed && !current.automaticConnectSuppressed && permit.version == current.intentVersion &&
-            (current.desiredHost == null || (old != null && (!old.closing || resumeAfterClose) &&
-                current.desiredHost!!.sameRequest(host)))) request(host)
-    } }
+    fun connectAutomatically(host: SessionHost, permit: AutoConnectPermit) {
+        events.post { connectAutomaticallyOnQueue(host, permit) }
+    }
+    internal fun connectAutomaticallyIfCurrent(
+        host: SessionHost,
+        permit: AutoConnectPermit,
+        expectedDisconnectEpoch: Long,
+        isCurrentRequest: () -> Boolean,
+        onDecision: (Boolean) -> Unit,
+    ) {
+        val posted = events.post {
+            val accepted = disconnectEpoch.get() == expectedDisconnectEpoch && isCurrentRequest() &&
+                connectAutomaticallyOnQueue(host, permit)
+            onDecision(accepted)
+        }
+        if (!posted) onDecision(false)
+    }
 
-    fun connectIfNeeded(host: SessionHost) { events.post {
-        if (current.closed) return@post
+    private fun connectAutomaticallyOnQueue(host: SessionHost, permit: AutoConnectPermit): Boolean {
+        val old = owned
+        if (current.closed || current.automaticConnectSuppressed || permit.version != current.intentVersion ||
+            (current.desiredHost != null && (old == null || (old.closing && !resumeAfterClose) ||
+                !current.desiredHost!!.sameRequest(host)))) return false
+        request(host)
+        return true
+    }
+
+    fun connectIfNeeded(host: SessionHost) { events.post { connectExplicitly(host) } }
+
+    /** Service Connects are accepted only if no explicit disconnect intervened during metadata lookup. */
+    internal fun captureDisconnectEpoch(): Long = disconnectEpoch.get()
+    internal fun connectIfNotDisconnectedSince(
+        host: SessionHost,
+        expectedEpoch: Long,
+        isCurrentRequest: () -> Boolean = { true },
+        onDecision: (Boolean) -> Unit = {},
+    ) {
+        val posted = events.post {
+            val accepted = disconnectEpoch.get() == expectedEpoch && isCurrentRequest() && connectExplicitly(host)
+            onDecision(accepted)
+        }
+        if (!posted) onDecision(false)
+    }
+
+    private fun connectExplicitly(host: SessionHost): Boolean {
+        if (current.closed) return false
         val old = owned
         if (current.desiredHost?.sameRequest(host) == true && old != null && (!old.closing || resumeAfterClose) &&
-            !current.automaticConnectSuppressed) return@post
+            !current.automaticConnectSuppressed) return true
         publish(current.copy(intentVersion = current.intentVersion + 1, automaticConnectSuppressed = false))
         request(host)
-    } }
+        return true
+    }
 
     private fun request(host: SessionHost) {
         val old = owned
@@ -81,8 +122,14 @@ class SessionController @JvmOverloads constructor(
         }
     }
 
-    fun disconnect() { events.post { stop(false) } }
-    override fun close() { events.post { stop(true) } }
+    fun disconnect() {
+        disconnectEpoch.incrementAndGet()
+        events.post { stop(false) }
+    }
+    override fun close() {
+        disconnectEpoch.incrementAndGet()
+        events.post { stop(true) }
+    }
     private fun stop(terminal: Boolean) {
         if (current.closed) return
         if (!terminal && current.desiredHost == null && current.automaticConnectSuppressed) return

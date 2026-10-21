@@ -12,12 +12,12 @@ import java.util.concurrent.Executor
 /** Composition root for the next started/bound service, NOT an Activity singleton or lifecycle hook. */
 class AndroidSessionOwner private constructor(
     private val credentials: CredentialRepository,
-    val interactions: SessionInteractions,
-    val controller: SessionController,
-) : AutoCloseable {
+    override val interactions: SessionInteractions,
+    override val controller: SessionController,
+) : SessionServiceOwner, AutoCloseable {
     /** Caller captures an auto-connect permit BEFORE this asynchronous operation when applicable.
      * Completion is worker-only; a detached screen must not retain or apply an obsolete selection. */
-    fun selectedHost(shell: String, initialCommand: String?, completion: (SessionHost?) -> Unit) {
+    override fun selectedHost(shell: String, initialCommand: String?, completion: (SessionHost?) -> Unit) {
         credentials.execute {
             val host = try {
                 credentials.prepare() // Preserves all existing migration/key-loss/re-entry contracts.

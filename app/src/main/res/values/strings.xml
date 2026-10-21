@@ -1,4 +1,8 @@
 <resources>
+    <string name="session_notification_channel_name">Remote session</string>
+    <string name="session_notification_channel_description">Visibility for a requested XMouse network-device session.</string>
+    <string name="session_notification_title">XMouse remote session</string>
+    <string name="session_notification_text">XMouse is preparing or maintaining a requested network-device connection.</string>
     <string name="app_name">XMouse</string>
     <string name="app_version">v2.0.26</string>
     <string name="navigation_drawer_open">Open navigation drawer</string>
