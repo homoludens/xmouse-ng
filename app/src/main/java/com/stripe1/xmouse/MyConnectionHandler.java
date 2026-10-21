@@ -17,6 +17,7 @@ import com.stripe1.xmouse.secrets.AndroidCredentials;
 import com.stripe1.xmouse.secrets.AuthenticationMaterial;
 import com.stripe1.xmouse.secrets.CredentialRepository;
 import com.stripe1.xmouse.secrets.CredentialUi;
+import com.stripe1.xmouse.session.SessionForegroundService;
 import com.stripe1.xmouse.transport.JschSshBackend;
 import com.stripe1.xmouse.trust.AndroidHostTrust;
 import com.stripe1.xmouse.trust.HostTrustPolicy;
@@ -34,6 +35,17 @@ import com.stripe1.xmouse.transport.TransportPresentation;
  */
 public class MyConnectionHandler implements CommandTransport, TransportPresentation.Listener {
     private static final String TAG = "MyConnectionHandler";
+    public interface LegacyConnectAttemptProbe { boolean interceptAttempt(); }
+    private static volatile LegacyConnectAttemptProbe legacyConnectAttemptProbeForTests;
+
+    /** Test-only safe boundary: intercepts a legacy connect attempt before credential or transport I/O. */
+    public static AutoCloseable installLegacyConnectAttemptProbeForTests(LegacyConnectAttemptProbe probe) {
+        legacyConnectAttemptProbeForTests = probe;
+        return () -> {
+            if (legacyConnectAttemptProbeForTests == probe) legacyConnectAttemptProbeForTests = null;
+        };
+    }
+
     private Activity activity;
     private MyInterface screen;
     private volatile CredentialUi credentialUi;
@@ -111,8 +123,19 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
     }
     public boolean isConnected() { return transport.isConnected(); }
 
+    /** Used by the staged foreground-session entry point to avoid parallel legacy/service sessions. */
+    public boolean hasPendingConnection() {
+        return readingCredentials || transport.isConnecting() || transport.isConnected();
+    }
+
     public void xMouseTryConnect() {
         if (activity == null || readingCredentials || transport.isConnecting()) return;
+        if (SessionForegroundService.blocksLegacyConnect(activity)) {
+            showForegroundSessionGuidance();
+            return;
+        }
+        LegacyConnectAttemptProbe probe = legacyConnectAttemptProbeForTests;
+        if (probe != null && probe.interceptAttempt()) return;
         dismissMismatchReview();
         if (isConnected()) { xMouseDisconnect(); return; } // Legacy toggle; 5.1/5.4 replace it.
         if (TextUtils.isEmpty(MainActivity.setting_user) || TextUtils.isEmpty(MainActivity.setting_host)) {
@@ -139,6 +162,11 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
                         if (error != null) Toast.makeText(activity, error, Toast.LENGTH_LONG).show();
                         return;
                     }
+                    if (SessionForegroundService.blocksLegacyConnect(activity)) {
+                        material.close();
+                        showForegroundSessionGuidance();
+                        return;
+                    }
                     try {
                         Endpoint endpoint = Endpoint.manual(material.getHost().getHost(), material.getHost().getPort());
                         beginSsh(material, new SshConnectionRequest(endpoint, material.getHost().getHost(), shell, initialCommand));
@@ -157,10 +185,23 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
     }
 
     void beginSsh(AuthenticationMaterial material, SshConnectionRequest request) {
+        if (activity == null || SessionForegroundService.blocksLegacyConnect(activity)) {
+            material.close();
+            showForegroundSessionGuidance();
+            return;
+        }
         dismissMismatchReview();
         showProgress("Connecting to " + material.getHost().getUser() + "@" + request.address + ":" + request.endpoint.getPort());
         Log.d(TAG, "connection_attempt");
         transport.connect(request, material, presentation.connection(request.initialCommand));
+    }
+
+    private void showForegroundSessionGuidance() {
+        if (activity instanceof MainActivity) {
+            ((MainActivity) activity).showLegacyConnectBlockedGuidance();
+        } else if (activity != null) {
+            Toast.makeText(activity, R.string.session_controls_pending_legacy_guidance, Toast.LENGTH_LONG).show();
+        }
     }
 
     public void xMouseDisconnect() {

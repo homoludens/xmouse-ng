@@ -10,8 +10,11 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.preference.PreferenceManager;
+import android.provider.Settings;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.util.Log;
@@ -33,6 +36,8 @@ import android.widget.ToggleButton;
 
 import androidx.appcompat.app.ActionBarDrawerToggle;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.widget.Toolbar;
 import androidx.core.view.GravityCompat;
 import androidx.drawerlayout.widget.DrawerLayout;
@@ -41,6 +46,8 @@ import androidx.fragment.app.FragmentManager;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.google.android.material.navigation.NavigationView;
 import com.stripe1.xmouse.secrets.AndroidCredentials;
+import com.stripe1.xmouse.session.ForegroundConnectRequestResult;
+import com.stripe1.xmouse.session.SessionForegroundService;
 
 import java.io.BufferedReader;
 import java.io.FileInputStream;
@@ -57,6 +64,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		myDialogFragment.NoticeDialogListener,
 		SensorEventListener{
 	private static final String TAG = "MainActivity";
+	public static final String ACTION_OPEN_SESSION_CONTROLS = "com.stripe1.xmouse.action.OPEN_SESSION_CONTROLS";
+	private static final String PREF_NOTIFICATION_PERMISSION_REQUESTED = "session_notification_permission_requested";
+	private static final String POST_NOTIFICATIONS_PERMISSION = "android.permission.POST_NOTIFICATIONS";
 
 	MenuItem conDiscButton = null;
 	MenuItem KeyLockButton = null;
@@ -66,6 +76,10 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	public static DatabaseHandler db;
 	public static MyConnectionHandler conn;
 	private MyConnectionHandler screenConnection;
+	private ActivityResultLauncher<String> notificationPermissionLauncher;
+	private boolean suppressLegacyAutoConnectOnResume;
+	private String pendingForegroundStartTicket;
+	private String pendingNotificationPermissionTicket;
 	public static IDoTool doTool;
 	LinearLayout mouseLayout;
 	LinearLayout keyboardLayout;
@@ -179,6 +193,11 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
+		suppressLegacyAutoConnectOnResume = isNotificationOpenIntent(getIntent());
+		notificationPermissionLauncher = registerForActivityResult(
+				new ActivityResultContracts.RequestPermission(), granted -> {
+					onNotificationPermissionResult(granted);
+				});
 		setContentView(R.layout.activity_main);
 		Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
 		setSupportActionBar(toolbar);
@@ -503,6 +522,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	protected void onResume() {
 		super.onResume();
 		Log.d(TAG, "activity_resumed");
+		final boolean openedFromNotification = suppressLegacyAutoConnectOnResume;
+		suppressLegacyAutoConnectOnResume = false;
 		// The activity has become visible (it is now "resumed").
 		getPreferences();
 
@@ -514,11 +535,25 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		final com.stripe1.xmouse.secrets.CredentialRepository credentialRepository = AndroidCredentials.get(getApplicationContext());
 		credentialRepository.execute(() -> {
 			if (!credentialOwner.credentialWorkCurrent(credentialToken)) return;
-			boolean ready = credentialRepository.prepare();
+			final boolean ready;
+			try {
+				ready = credentialRepository.prepare();
+			} catch (IllegalStateException unavailableRepository) {
+				// Activity/test teardown can retire an injected database while this serialized retry is
+				// already running. Keep a stale repository callback from crashing the process or
+				// falling through to a credential/transport attempt.
+				Log.w(TAG, "credential preparation unavailable", unavailableRepository);
+				return;
+			}
 			runOnUiThread(() -> {
 				if (!credentialOwner.credentialsCurrent(credentialToken)) return;
 				if (!ready) Toast.makeText(this, com.stripe1.xmouse.secrets.CredentialRepository.RECOVERY_MESSAGE, Toast.LENGTH_LONG).show();
-				if (setting_autoconnect) credentialOwner.xMouseTryConnect();
+				// Notification Open controls is navigation only. Also avoid starting the legacy transport
+				// beside a retained foreground-service session while 5.4 is still staged separately.
+				if (setting_autoconnect && !openedFromNotification &&
+						!SessionForegroundService.suppressesLegacyAutoConnect(getApplicationContext())) {
+					credentialOwner.xMouseTryConnect();
+				}
 			});
 		});
 
@@ -530,6 +565,289 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		initMenu();
 		showConnectionStat();
 		initDoTool();
+	}
+	@Override
+	protected void onNewIntent(Intent intent) {
+		super.onNewIntent(intent);
+		suppressLegacyAutoConnectOnResume = isNotificationOpenIntent(intent);
+	}
+
+	private static boolean isNotificationOpenIntent(Intent intent) {
+		return intent != null && ACTION_OPEN_SESSION_CONTROLS.equals(intent.getAction());
+	}
+
+	/** In-app entry point retained when notification-tray visibility is denied or later revoked. */
+	public void showSessionControls() {
+		if (isFinishing() || isDestroyed()) return;
+		boolean active = SessionForegroundService.hasRetainedSession(this);
+		boolean pending = SessionForegroundService.hasPendingStart(this);
+		if (pending && !active) {
+			AlertDialog.Builder pendingDialog = new AlertDialog.Builder(this)
+					.setTitle(R.string.session_controls_title)
+					.setMessage(R.string.session_controls_pending_message);
+			if (pendingForegroundStartTicket != null) {
+				pendingDialog.setPositiveButton(R.string.session_controls_continue_request,
+						(dialog, which) -> continueForegroundSessionRequest());
+				pendingDialog.setNegativeButton(R.string.session_controls_cancel_request,
+						(dialog, which) -> cancelPendingForegroundSessionRequest());
+			} else {
+				pendingDialog.setPositiveButton(R.string.session_controls_close, null)
+						.setNegativeButton(R.string.session_controls_disconnect,
+								(dialog, which) -> disconnectForegroundSessionFromUi());
+			}
+			pendingDialog.show();
+			return;
+		}
+		String message;
+		if (!active) {
+			message = getString(R.string.session_controls_idle_message);
+		} else if (SessionForegroundService.areSessionNotificationsVisible(this)) {
+			message = getString(R.string.session_controls_active_message);
+		} else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+			message = getString(R.string.session_controls_hidden_api33_message);
+		} else {
+			message = getString(R.string.session_controls_hidden_older_message);
+		}
+		new AlertDialog.Builder(this)
+				.setTitle(R.string.session_controls_title)
+				.setMessage(message)
+				.setPositiveButton(active ? R.string.session_controls_open : R.string.session_controls_connect,
+						(dialog, which) -> { if (!active) requestForegroundSessionFromUi(); })
+				.setNegativeButton(active ? R.string.session_controls_disconnect : R.string.session_controls_close,
+						(dialog, which) -> { if (active) disconnectForegroundSessionFromUi(); })
+				.show();
+	}
+
+	/** Keeps an in-progress permission flow intact while directing a legacy connect tap to it. */
+	public void showLegacyConnectBlockedGuidance() {
+		if (pendingForegroundStartTicket != null) {
+			android.widget.Toast.makeText(this, R.string.session_controls_pending_legacy_guidance,
+					android.widget.Toast.LENGTH_LONG).show();
+		} else {
+			showSessionControls();
+		}
+	}
+
+	private void requestForegroundSessionFromUi() {
+		if (pendingForegroundStartTicket != null) {
+			continueForegroundSessionRequest();
+			return;
+		}
+		if (SessionForegroundService.hasRetainedSession(this)) {
+			showSessionControls();
+			return;
+		}
+		if (SessionForegroundService.hasPendingStart(this)) {
+			showSessionControls();
+			return;
+		}
+		if (screenConnection != null && screenConnection.hasPendingConnection()) {
+			new AlertDialog.Builder(this)
+					.setTitle(R.string.session_controls_title)
+					.setMessage(R.string.session_controls_legacy_active)
+					.setPositiveButton(android.R.string.ok, null)
+					.show();
+			return;
+		}
+		pendingForegroundStartTicket = SessionForegroundService.reserveConnectRequest(this, false);
+		if (pendingForegroundStartTicket == null) {
+			android.widget.Toast.makeText(this, R.string.session_start_rejected, android.widget.Toast.LENGTH_LONG).show();
+			return;
+		}
+		continueForegroundSessionRequest();
+	}
+
+	private void continueForegroundSessionRequest() {
+		if (pendingForegroundStartTicket == null) {
+			pendingForegroundStartTicket = SessionForegroundService.reserveConnectRequest(this, false);
+			if (pendingForegroundStartTicket == null) {
+				android.widget.Toast.makeText(this, R.string.session_start_rejected, android.widget.Toast.LENGTH_LONG).show();
+				return;
+			}
+		}
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+				checkSelfPermission(POST_NOTIFICATIONS_PERMISSION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+			SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
+			boolean requestedBefore = preferences.getBoolean(PREF_NOTIFICATION_PERMISSION_REQUESTED, false);
+			if (requestedBefore && !shouldShowRequestPermissionRationale(POST_NOTIFICATIONS_PERMISSION)) {
+				showNotificationSettingsExplanation(true);
+			} else {
+				showNotificationPermissionRationale();
+			}
+			return;
+		}
+
+		if (!SessionForegroundService.areSessionNotificationsVisible(this)) {
+			showNotificationSettingsExplanation(false);
+			return;
+		}
+		startForegroundSession();
+	}
+
+	private void showNotificationPermissionRationale() {
+		new AlertDialog.Builder(this)
+				.setTitle(R.string.session_permission_rationale_title)
+				.setMessage(R.string.session_permission_rationale_message)
+				.setPositiveButton(R.string.session_permission_request, (dialog, which) -> {
+					String ticket = pendingForegroundStartTicket;
+					if (ticket == null || !SessionForegroundService.hasReservedStart(this, ticket) ||
+							pendingNotificationPermissionTicket != null) {
+						if (ticket != null && ticket.equals(pendingForegroundStartTicket) &&
+								!SessionForegroundService.hasReservedStart(this, ticket)) {
+							pendingForegroundStartTicket = null;
+						}
+						return;
+					}
+					pendingNotificationPermissionTicket = ticket;
+					PreferenceManager.getDefaultSharedPreferences(this).edit()
+						.putBoolean(PREF_NOTIFICATION_PERMISSION_REQUESTED, true).apply();
+					notificationPermissionLauncher.launch(POST_NOTIFICATIONS_PERMISSION);
+				})
+				.setNegativeButton(R.string.session_permission_continue_without,
+						(dialog, which) -> startForegroundSession())
+				.setNeutralButton(R.string.session_permission_not_now,
+						(dialog, which) -> cancelPendingForegroundSessionRequest())
+				.setOnCancelListener(dialog -> cancelPendingForegroundSessionRequest())
+				.show();
+	}
+
+	/** A permission result is only UI for the exact still-reserved request that launched it. */
+	private void onNotificationPermissionResult(boolean granted) {
+		handleNotificationPermissionResult(pendingNotificationPermissionTicket, granted);
+	}
+
+	private void handleNotificationPermissionResult(String requestTicket, boolean granted) {
+		if (requestTicket == null || !requestTicket.equals(pendingNotificationPermissionTicket)) return;
+		boolean reservationPending = SessionForegroundService.hasReservedStart(this, requestTicket);
+		if (!requestTicket.equals(pendingForegroundStartTicket) || !reservationPending) {
+			if (requestTicket.equals(pendingNotificationPermissionTicket)) {
+				pendingNotificationPermissionTicket = null;
+			}
+			if (requestTicket.equals(pendingForegroundStartTicket) && !reservationPending) {
+				pendingForegroundStartTicket = null;
+			}
+			return;
+		}
+		pendingNotificationPermissionTicket = null;
+		if (isFinishing() || isDestroyed()) {
+			cancelPendingForegroundSessionRequest();
+			return;
+		}
+		if (granted && SessionForegroundService.areSessionNotificationsVisible(this)) {
+			startForegroundSession(requestTicket);
+		} else if (granted) {
+			showNotificationSettingsExplanation(false);
+		} else {
+			showNotificationPermissionDenied();
+		}
+	}
+
+	private void showNotificationPermissionDenied() {
+		new AlertDialog.Builder(this)
+				.setTitle(R.string.session_permission_denied_title)
+				.setMessage(R.string.session_permission_denied_message)
+				.setPositiveButton(R.string.session_permission_continue_without,
+						(dialog, which) -> startForegroundSession())
+				.setNegativeButton(R.string.session_permission_not_now,
+						(dialog, which) -> cancelPendingForegroundSessionRequest())
+				.setNeutralButton(R.string.session_permission_open_settings,
+						(dialog, which) -> openNotificationSettings())
+				.setOnCancelListener(dialog -> cancelPendingForegroundSessionRequest())
+				.show();
+	}
+
+	private void showNotificationSettingsExplanation(boolean permanentDenial) {
+		int message = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+				? R.string.session_permission_older_settings_message
+				: permanentDenial ? R.string.session_permission_settings_message
+				: R.string.session_permission_denied_message;
+		new AlertDialog.Builder(this)
+				.setTitle(permanentDenial ? R.string.session_permission_settings_title : R.string.session_permission_denied_title)
+				.setMessage(message)
+				.setPositiveButton(permanentDenial ? R.string.session_permission_open_settings
+						: R.string.session_permission_continue_without,
+						(dialog, which) -> {
+							if (permanentDenial) openNotificationSettings();
+							else startForegroundSession();
+						})
+				.setNegativeButton(permanentDenial ? R.string.session_permission_continue_without
+						: R.string.session_permission_not_now,
+						(dialog, which) -> {
+							if (permanentDenial) startForegroundSession();
+							else cancelPendingForegroundSessionRequest();
+						})
+				.setNeutralButton(permanentDenial ? R.string.session_permission_not_now
+						: R.string.session_permission_open_settings,
+						(dialog, which) -> {
+							if (!permanentDenial) openNotificationSettings();
+							else cancelPendingForegroundSessionRequest();
+						})
+				.setOnCancelListener(dialog -> cancelPendingForegroundSessionRequest())
+				.show();
+	}
+
+	private void openNotificationSettings() {
+		Intent settings = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+				.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+		try {
+			startActivity(settings);
+		} catch (RuntimeException ignored) {
+			startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+					Uri.fromParts("package", getPackageName(), null)));
+		}
+	}
+
+	private void startForegroundSession() {
+		if (pendingForegroundStartTicket == null && SessionForegroundService.hasRetainedSession(this)) {
+			showSessionControls();
+			return;
+		}
+		if (pendingForegroundStartTicket == null && SessionForegroundService.hasPendingStart(this)) {
+			showSessionControls();
+			return;
+		}
+		if (pendingForegroundStartTicket == null && screenConnection != null && screenConnection.hasPendingConnection()) {
+			new AlertDialog.Builder(this)
+					.setTitle(R.string.session_controls_title)
+					.setMessage(R.string.session_controls_legacy_active)
+					.setPositiveButton(android.R.string.ok, null)
+					.show();
+			return;
+		}
+		if (pendingForegroundStartTicket == null) {
+			pendingForegroundStartTicket = SessionForegroundService.reserveConnectRequest(this, false);
+		}
+		if (pendingForegroundStartTicket == null) {
+			android.widget.Toast.makeText(this, R.string.session_start_rejected, android.widget.Toast.LENGTH_LONG).show();
+			return;
+		}
+		String ticket = pendingForegroundStartTicket;
+		ForegroundConnectRequestResult result = SessionForegroundService.startReservedConnect(this, ticket);
+		pendingForegroundStartTicket = null;
+		if (result != ForegroundConnectRequestResult.ACCEPTED) {
+			SessionForegroundService.cancelReservedConnect(this, ticket);
+			android.widget.Toast.makeText(this, R.string.session_start_rejected, android.widget.Toast.LENGTH_LONG).show();
+		}
+	}
+
+	/** Permission callbacks dispatch only their original reservation; they never create a new request. */
+	private void startForegroundSession(String requiredTicket) {
+		if (requiredTicket == null || !requiredTicket.equals(pendingForegroundStartTicket) ||
+				!SessionForegroundService.hasReservedStart(this, requiredTicket)) return;
+		startForegroundSession();
+	}
+
+	private void cancelPendingForegroundSessionRequest() {
+		String ticket = pendingForegroundStartTicket;
+		pendingForegroundStartTicket = null;
+		pendingNotificationPermissionTicket = null;
+		if (ticket != null) SessionForegroundService.cancelReservedConnect(this, ticket);
+	}
+
+	private void disconnectForegroundSessionFromUi() {
+		if (!SessionForegroundService.requestDisconnect(this)) {
+			android.widget.Toast.makeText(this, R.string.session_start_rejected, android.widget.Toast.LENGTH_LONG).show();
+		}
 	}
 	@Override
 	protected void onPause() {
@@ -548,6 +866,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 	@Override
 	protected void onDestroy() {
+		cancelPendingForegroundSessionRequest();
 		super.onDestroy();
 		// The activity is about to be destroyed.
 		screenConnection.destroy();
@@ -680,6 +999,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		if (id == R.id.action_settings) {
 			Intent intent = new Intent(this, SettingsActivity.class);
 			startActivity(intent);
+		} else if (id == R.id.action_session_controls) {
+			showSessionControls();
+			return true;
 		} else if (id == R.id.action_conn_disc) {
 
 			if(conn.isConnected()){
@@ -761,7 +1083,11 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 							runOnUiThread(() -> {
 								if (!owner.credentialsCurrent(token)) return;
 								getPreferences();
-								owner.xMouseTryConnect();
+								if (SessionForegroundService.suppressesLegacyAutoConnect(getApplicationContext())) {
+									showSessionControls();
+								} else {
+									owner.xMouseTryConnect();
+								}
 							});
 						} catch (Exception ignored) {
 							runOnUiThread(() -> Toast.makeText(this, "Host selection could not be saved. Existing credentials were kept.", Toast.LENGTH_LONG).show());

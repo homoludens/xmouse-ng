@@ -1,5 +1,6 @@
 package com.stripe1.xmouse.session
 
+import java.util.HashSet
 import java.util.UUID
 
 /** Application-owned interface retained independently of started/bound Service instances. */
@@ -22,6 +23,8 @@ class SessionOwnerRegistry internal constructor(private val ownerFactory: () -> 
     private val lock = Any()
     @Volatile private var retainedOwner: SessionServiceOwner? = null
     private val pendingStarts = LinkedHashMap<String, SessionStartMode>()
+    private val dispatchedStarts = HashSet<String>()
+    private val activeStarts = HashSet<String>()
 
     internal fun owner(): SessionServiceOwner = retainedOwner ?: synchronized(lock) {
         retainedOwner ?: ownerFactory().also { retainedOwner = it }
@@ -31,19 +34,51 @@ class SessionOwnerRegistry internal constructor(private val ownerFactory: () -> 
     internal fun retainedOwnerOrNull(): SessionServiceOwner? = retainedOwner
 
     internal fun issueStart(mode: SessionStartMode): String? = synchronized(lock) {
-        if (pendingStarts.size >= MAX_PENDING_STARTS) return@synchronized null
+        if (pendingStarts.size + activeStarts.size >= MAX_PENDING_STARTS) return@synchronized null
         val ticket = UUID.randomUUID().toString()
         pendingStarts[ticket] = mode
         ticket
     }
 
+    /** Reserves the single-use ticket for dispatch after any point-of-use permission flow completes. */
+    internal fun dispatchStart(ticket: String): SessionStartMode? = synchronized(lock) {
+        val mode = pendingStarts[ticket] ?: return@synchronized null
+        if (!dispatchedStarts.add(ticket)) return@synchronized null
+        mode
+    }
+
+    /** True only for a live reservation that has not already been dispatched to the Service. */
+    internal fun hasReservedStart(ticket: String?): Boolean = synchronized(lock) {
+        ticket != null && pendingStarts.containsKey(ticket) && ticket !in dispatchedStarts
+    }
+
     internal fun consumeStart(action: String?, ticket: String?): SessionStartMode? = synchronized(lock) {
         if (ticket.isNullOrBlank()) return@synchronized null
         val mode = pendingStarts.remove(ticket) ?: return@synchronized null
-        mode.takeIf { it.action == action }
+        if (!dispatchedStarts.remove(ticket)) return@synchronized null
+        if (mode.action != action) return@synchronized null
+        activeStarts.add(ticket)
+        mode
     }
 
-    internal fun cancelStart(ticket: String) = synchronized(lock) { pendingStarts.remove(ticket) }
+    internal fun cancelStart(ticket: String) = synchronized(lock) {
+        pendingStarts.remove(ticket)
+        dispatchedStarts.remove(ticket)
+        activeStarts.remove(ticket)
+    }
+
+    internal fun completeStart(ticket: String) = synchronized(lock) { activeStarts.remove(ticket) }
+
+    internal fun cancelAllStarts() = synchronized(lock) {
+        pendingStarts.clear()
+        dispatchedStarts.clear()
+        activeStarts.clear()
+    }
+
+    /** Includes permission-flow reservations and service requests waiting for selected-host metadata. */
+    internal fun hasPendingStart(): Boolean = synchronized(lock) {
+        pendingStarts.isNotEmpty() || activeStarts.isNotEmpty()
+    }
 
     /** Test-only owner injection; runtime code never replaces or clears a retained owner. */
     internal fun installOwnerForTests(owner: SessionServiceOwner): AutoCloseable = synchronized(lock) {

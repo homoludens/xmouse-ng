@@ -46,12 +46,15 @@ class RecordingSshBackend : SshBackend {
         return object : SshBackend.Session {
             @Volatile var connected = false
             @Volatile var aborted = false
+            private var openedChannel = false
             override fun connect() { record("session.connect"); if (aborted) throw IOException(); connected = true }
             override fun abort() { aborted = true; connected = false }
             override fun clearAuthentication() = record("session.clearAuthentication")
             override fun openChannel(type: String): SshBackend.Channel {
                 record("session.open")
-                return RecordingChannel(if (channels.isEmpty()) "shell" else "exec", type).also(channels::add)
+                val channelName = if (openedChannel) "exec" else "shell"
+                openedChannel = true
+                return RecordingChannel(channelName, type).also(channels::add)
             }
             override fun isConnected(): Boolean { record("session.isConnected"); return connected }
             override fun close() { aborted = true; connected = false; record("session.close") }
