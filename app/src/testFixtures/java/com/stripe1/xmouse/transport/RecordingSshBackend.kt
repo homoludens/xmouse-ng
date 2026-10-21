@@ -20,6 +20,8 @@ class RecordingSshBackend : SshBackend {
     val writes = CopyOnWriteArrayList<String>()
     var failAt: String? = null
     var blockAt: String? = null
+    var ignoreInterrupts = false
+    var blockAllCloses = false
     val entered = CountDownLatch(1)
     val release = CountDownLatch(1)
     var stdout = "out one\nout two\n".toByteArray()
@@ -28,9 +30,13 @@ class RecordingSshBackend : SshBackend {
 
     fun record(name: String) {
         events.add(Event(name, Thread.currentThread()))
-        if (name == blockAt) {
+        if (name == blockAt || (blockAllCloses && name.endsWith("close"))) {
             entered.countDown()
-            check(release.await(10, TimeUnit.SECONDS)) { "Synthetic backend barrier timed out" }
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (true) {
+                try { check(release.await(maxOf(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS)); break }
+                catch (interrupted: InterruptedException) { if (!ignoreInterrupts) throw interrupted }
+            }
         }
         if (name == failAt) throw IOException("NOT_REAL_provider_password_key_typed_content")
     }
@@ -38,7 +44,7 @@ class RecordingSshBackend : SshBackend {
     override fun create(request: SshConnectionRequest, authentication: AuthenticationMaterial): SshBackend.Session {
         record("create")
         return object : SshBackend.Session {
-            var connected = false
+            @Volatile var connected = false
             override fun connect() { record("session.connect"); connected = true }
             override fun clearAuthentication() = record("session.clearAuthentication")
             override fun openChannel(type: String): SshBackend.Channel {
@@ -52,7 +58,7 @@ class RecordingSshBackend : SshBackend {
 
     inner class RecordingChannel(val name: String, val type: String) : SshBackend.Channel {
         var command: String? = null
-        var closed = false
+        @Volatile var closed = false
         var timeout = -1
         private var out: OutputStream? = null
         private var err: OutputStream? = null

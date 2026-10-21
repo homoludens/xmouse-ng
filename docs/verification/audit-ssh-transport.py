@@ -33,6 +33,21 @@ assert "BoundedSshKey.addIdentity(" in backend
 assert '"StrictHostKeyChecking"' not in backend
 assert not (transport / "LegacySshPolicy.java").exists()
 assert "policy.configure(jsch, session, request.endpoint, current)" in backend
+assert "InetAddress.getByName(request.address)" in backend and "request.resolvedAddress" in backend
+assert "created.connect(new InetSocketAddress(request.resolvedAddress, port), limits.tcp)" in backend
+assert "session.connect(timeoutMillis)" in backend and "session.connect()" not in backend
+assert "setServerAliveCountMax(limits.keepaliveMisses)" in backend
+assert "setServerAliveInterval(limits.keepaliveInterval)" in backend
+assert backend.index("setServerAliveInterval(limits.keepaliveInterval)") < backend.index("session.connect(timeoutMillis)")
+assert "lastInbound" in backend and "owned.close()" in backend
+runtime = (transport / "SshRuntime.java").read_text()
+assert "CallerRunsPolicy" not in runtime and "newCachedThreadPool" not in runtime
+assert "new Semaphore(4)" in runtime and "new SynchronousQueue" in runtime
+assert "pool(2, 0" in runtime and "pool(4, 0" in runtime and "pool(32, 32" in runtime
+core = (transport / "SshTransport.java").read_text()
+assert "Failure.OUTPUT_LIMIT" in core and "channel.exitStatus() < 0" in core
+assert "queued >= 128" in core and "future.get(budget, TimeUnit.MILLISECONDS)" in core
+assert "scope.token != generation" in core and "scope.expired = true" in core
 assert "new HostTrustPolicy(trust)" in presenter
 for file in source.rglob("*"):
     if file.suffix in (".java", ".kt"):

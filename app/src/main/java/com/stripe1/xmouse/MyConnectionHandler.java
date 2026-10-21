@@ -71,6 +71,8 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
         credentialUi = new CredentialUi(activity);
         presentation = new TransportPresentation(main::post);
         presentation.attach(this);
+        TransportPresentation dispatch = presentation;
+        transport.setLossListener(failure -> dispatch.completion(SshTransport.Operation.MONITOR).failure(failure));
         replacementUi = new HostTrustReplacementUi(activity, mismatch -> {
             if (this.activity == null || !mismatch.isCurrent()) return;
             replacingMismatch = mismatch;
@@ -245,6 +247,8 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
                 : failure == SshTransport.Failure.HOST_MISMATCH ? "Host identity changed. Connection blocked. The saved trusted key was kept."
                 : failure == SshTransport.Failure.TRUST_STORAGE ? "Host trust could not be read or saved. Connection blocked; existing records were kept."
                 : failure == SshTransport.Failure.HOST_TRUST ? "Host trust was not approved. No authentication or commands were sent."
+                : failure == SshTransport.Failure.RESOLUTION || failure == SshTransport.Failure.RESOLUTION_TIMEOUT ? "Name resolution failed or timed out. Check the hostname and network, then retry."
+                : failure == SshTransport.Failure.SESSION_LOST || failure == SshTransport.Failure.CHANNEL_CLOSED ? "SSH connection closed or stopped responding. Unsent input was discarded; connect again to retry."
                 : operation == SshTransport.Operation.WRITE ? "Command could not be sent."
                 : operation == SshTransport.Operation.EXEC ? "Command execution failed."
                 : "Connection or authentication failed. Check the selected password/key and network, then retry. Existing configuration was kept.";
