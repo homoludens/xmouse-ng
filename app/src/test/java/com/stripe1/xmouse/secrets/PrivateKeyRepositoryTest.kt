@@ -214,6 +214,48 @@ class PrivateKeyRepositoryTest {
         assertEquals(before, f.refs.state)
     }
 
+    @Test fun deterministicParserFailuresKeepPreviousUsableKeyAndEveryReference() {
+        val f = Fixture()
+        f.import(syntheticKey(KeyPair.RSA, 1024))
+        val before = f.refs.state
+        val records = f.store.values.mapValues { it.value.toList() }
+        val phrase = byteArrayOf(9, 8, 7)
+        val candidates = listOf(
+            BoundedKeyFixtures.pem("RSA PRIVATE KEY", BoundedKeyFixtures.malformedDer()) to byteArrayOf(),
+            BoundedKeyFixtures.encryptedMalformed(phrase) to phrase,
+        )
+        candidates.forEach { (bytes, password) ->
+            expect<PrivateKeyImportException> { f.import(bytes, password) }
+            assertEquals(before, f.refs.state)
+            assertEquals(records, f.store.values.mapValues { it.value.toList() })
+            val previous = f.repository.readForAuthentication(byteArrayOf())
+            try { BoundedSshKey.validate(previous, byteArrayOf()) } finally { previous.fill(0) }
+        }
+    }
+
+    @Test fun savedEncryptedKeyIsRevalidatedForEachAuthenticationWithoutRewritingRecord() {
+        val f = Fixture()
+        val phrase = byteArrayOf(1, 2, -128, 0)
+        val bytes = syntheticKey(KeyPair.RSA, 1024, phrase)
+        f.import(bytes, phrase)
+        val before = f.refs.state
+        val records = f.store.values.mapValues { it.value.toList() }
+        assertEquals(PrivateKeyImportException.Reason.PASSPHRASE_REQUIRED_OR_INVALID,
+            expect<PrivateKeyImportException> { f.repository.readForAuthentication(byteArrayOf(2, 3)) }.reason)
+        assertEquals(before, f.refs.state)
+        assertEquals(records, f.store.values.mapValues { it.value.toList() })
+        assertArrayEquals(bytes, f.repository.readForAuthentication(phrase))
+    }
+
+    @Test fun oldProtectedRecordCannotBypassParserWhenImportGuardDidNotProduceIt() {
+        val f = Fixture()
+        val malformed = BoundedKeyFixtures.pem("RSA PRIVATE KEY", BoundedKeyFixtures.malformedDer())
+        f.store.values[f.oldId] = malformed.copyOf()
+        expect<PrivateKeyImportException> { f.repository.readForAuthentication(byteArrayOf()) }
+        assertArrayEquals(malformed, f.store.values[f.oldId])
+        assertEquals(f.original, f.refs.state)
+    }
+
     private class Fixture {
         val oldId = SecretId("old_key")
         val oldBytes = "NOT_REAL_previous_protected_representation".toByteArray()

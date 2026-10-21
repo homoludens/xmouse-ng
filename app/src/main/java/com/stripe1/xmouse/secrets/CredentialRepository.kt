@@ -236,12 +236,12 @@ class CredentialRepository internal constructor(
                 if (keyRef != null) {
                     readAttempt(keyRef, false, CredentialKind.PRIVATE_KEY, prompts, done = { key, keyError ->
                         if (key == null) { credential.fill(0); completion.complete(null, keyError) }
-                        else completion.complete(AuthenticationMaterial(host, true, byteArrayOf(), credential, key), null)
+                        else completeKeyAuthentication(host, credential, key, completion)
                     })
                 } else if (preferences.getBoolean(CredentialMetadataBackup.PRIVATE_KEY_REENTRY, false)) {
                     requestMemoryOnly(CredentialKind.PRIVATE_KEY, prompts) { key, keyError ->
                         if (key == null) { credential.fill(0); completion.complete(null, keyError) }
-                        else completion.complete(AuthenticationMaterial(host, true, byteArrayOf(), credential, key), null)
+                        else completeKeyAuthentication(host, credential, key, completion)
                     }
                 } else {
                     try {
@@ -255,6 +255,14 @@ class CredentialRepository internal constructor(
                 }
             }
         }, forceReentry = restoredReentry)
+    }
+
+    private fun completeKeyAuthentication(host: CredentialHost, phrase: ByteArray, key: ByteArray, completion: AuthenticationCallback) {
+        val failure = try { BoundedSshKey.validate(key, phrase); null } catch (failure: PrivateKeyImportException) { failure }
+        if (failure != null) {
+            phrase.fill(0); key.fill(0)
+            completion.complete(null, "Private key unavailable or invalid (${failure.reason.name}). Check Optional Key Passphrase or re-import; existing configuration was kept.")
+        } else completion.complete(AuthenticationMaterial(host, true, byteArrayOf(), phrase, key), null)
     }
 
     private fun readAttempt(reference: String?, legacy: Boolean, kind: CredentialKind, prompts: CredentialPrompts,

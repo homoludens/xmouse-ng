@@ -140,7 +140,7 @@ class CredentialUi(private val activity: Activity) : CredentialPrompts {
                     throw CredentialRepositoryException()
                 }
                 // Same bounded/closed/cancellable reader as imports; no persistence or reference change.
-                // The existing SSH consumer validates/unlocks these bytes before authenticating.
+                // The repository and final SSH consumer both use BoundedSshKey before key use.
                 val bytes = PrivateKeyRepository.readForReentry(stream, reading)
                 main.post {
                     try { if (finish(pending, cancel = false)) request.useForThisAttempt(bytes) }

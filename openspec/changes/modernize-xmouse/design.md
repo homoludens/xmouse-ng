@@ -18,7 +18,7 @@ Observed implementation:
 | Input | Gyro sampling starts at creation without lifecycle cleanup; touch cancellation does not reliably release remote held input. |
 | Tests | Existing unit tests cover selected command translations. Instrumentation consists of an obsolete application smoke test; lifecycle, permissions, trust, migrations, and editing are not covered. |
 
-The user confirmed Android 7 / API 24 as the new minimum. This is a deliberate compatibility break, not an implementation default. The configured SDK directory exists and contains stable API 36 and API 37.0 platforms; the shell provides JDK 21. No Android build was run during planning because that would write implementation-side build outputs.
+The user initially confirmed Android 7 / API 24 as the new minimum. After task 4.1 diagnostics proved that the maintained JSch ECDSA path fails there because no default `AlgorithmParameters.EC` service exists, the user approved Android 8 / API 26 instead, conditional on the unchanged dependency migration passing an actual API 26 crypto/import gate. That gate passed on 2026-10-20. The current minimum is API 26; API 24 remains a documented historical failure, not a compatibility target. This is an explicit compatibility amendment, not an implementation default. The configured SDK directory contains stable API 36 and API 37.0 platforms; the shell provides JDK 21. No Android build was run during the original planning.
 
 ## Goals / Non-Goals
 
@@ -39,7 +39,7 @@ The user confirmed Android 7 / API 24 as the new minimum. This is a deliberate c
 
 ### 1. Upgrade the platform deliberately; introduce Kotlin only at new boundaries
 
-Set minimum API 24 and compile/target API 37. Pin a stable, mutually compatible AGP/Gradle/Kotlin/Compose/AndroidX matrix that supports that range; avoid adopting a newer library that silently requires API 25+ or compile SDK 37.1+. Use the installed JDK 21 only with a compatible Gradle runtime, and align Java/Kotlin bytecode targets. Do not attempt the old Gradle 7.3.3 wrapper under JDK 21 as a meaningful baseline.
+Set minimum API 26 and compile/target API 37. Pin a stable, mutually compatible AGP/Gradle/Kotlin/Compose/AndroidX matrix that supports that range; avoid adopting a newer library that silently requires an even higher minimum or compile SDK 37.1+. Use the installed JDK 21 only with a compatible Gradle runtime, and align Java/Kotlin bytecode targets. Do not attempt the old Gradle 7.3.3 wrapper under JDK 21 as a meaningful baseline.
 
 Replace JCenter with Google/Maven Central, define the Android namespace, and address modern AGP behavior such as non-final resource IDs in existing Java `switch` statements. Keep the application ID unchanged. Replace the obsolete instrumentation setup and restore meaningful lint checks rather than suppressing all failures.
 
@@ -98,7 +98,7 @@ Suspend remote input when the control surface loses activity: unregister gyro li
 
 Represent a manual endpoint as its original host string plus validated port; preserve the display string while normalizing only its trust/lookup identity. Resolve anew for each connection, retaining IPv6 scope identifiers and all useful current address candidates. Try reachable candidates within an overall deadline; authentication or host-key failures stop the attempt instead of being hidden by address retries.
 
-Use the platform resolver first. Modern Android's resolver can resolve `.local` directly, but this cannot be assumed on every API 24 device. Isolate a query-only RFC 6762 mDNS fallback for `.local` A/AAAA lookups when native resolution is unavailable. Bind it to the intended accessible local network, make it cancellable, strictly bound packet/compression parsing and response matching, and hold a Wi-Fi multicast lock only during the lookup when needed. Use a reviewed Android-compatible DNS codec rather than implementing an unrestricted recursive resolver. The fallback must work without an SSH DNS-SD advertisement; do not misuse a service resolver as a bare-hostname resolver.
+Use the platform resolver first. Modern Android's resolver can resolve `.local` directly, but this cannot be assumed on every API 26 device. Isolate a query-only RFC 6762 mDNS fallback for `.local` A/AAAA lookups when native resolution is unavailable. Bind it to the intended accessible local network, make it cancellable, strictly bound packet/compression parsing and response matching, and hold a Wi-Fi multicast lock only during the lookup when needed. Use a reviewed Android-compatible DNS codec rather than implementing an unrestricted recursive resolver. The fallback must work without an SSH DNS-SD advertisement; do not misuse a service resolver as a bare-hostname resolver.
 
 There is no subnet port scan, router reconfiguration, location/Wi-Fi scan request, or perpetual multicast listener. Respect the active network/VPN constraints; report local resolution unavailability rather than silently routing around a VPN policy. Multicast-isolated or routed networks remain outside reliable mDNS operation and require manual reachable DNS/IP entry.
 
@@ -106,7 +106,7 @@ There is no subnet port scan, router reconfiguration, location/Wi-Fi scan reques
 
 ### 5. Discover SSH services on demand and retain resolvable identities
 
-Use Android `NsdManager` for `_ssh._tcp` discovery. Keep its ownership tied to the visible discovery flow, not the session service; stop discovery on leaving/backgrounding without affecting an established session. Adapt API 24 resolution callbacks and newer service-info callbacks behind one interface. Use modern address lists where available and deduplicate results by network, service instance, type, and domain.
+Use Android `NsdManager` for `_ssh._tcp` discovery. Keep its ownership tied to the visible discovery flow, not the session service; stop discovery on leaving/backgrounding without affecting an established session. Keep the legacy API 24 resolution-callback adapter (still needed at the API 26 floor) and newer service-info callbacks behind one interface. Use modern address lists where available and deduplicate results by network, service instance, type, and domain.
 
 Selecting a result opens host configuration with its advertised port and available endpoint data; the user supplies/chooses authentication and explicitly saves it if desired. Prefer a stable advertised target hostname when the API exposes one. Older NSD APIs may expose only addresses: preserve the service instance/type/domain as a discoverable locator and re-resolve that service on future connections rather than presenting a DHCP address as a stable hostname. Network handles and resolved addresses are attempt-local observations, not permanent profile identities.
 
@@ -125,6 +125,39 @@ Persist approved SHA-256 host-key fingerprints/full keys in an application-priva
 Use Android Keystore-backed AES-GCM envelope encryption for saved passwords, private-key bytes, and any retained passphrase; use unique nonces and versioned ciphertext. Keystore protects the wrapping key, not an assumption that arbitrary imported SSH keys can be directly imported as hardware SSH identities. Supply decrypted bytes to the SSH library in memory rather than retaining plaintext key files. Keep encrypted secrets outside automatic backup, and configure both legacy backup rules and current data-extraction rules so neither migration intermediates nor old credential sources leak into backups. Non-secret hosts/scripts/layouts can remain eligible for backup; loss of a device key requires credential re-entry. Never log typed content, authentication material, or private-key contents.
 
 Use Android's document picker to read, validate, encrypt, and atomically commit an imported key. Cancelled/invalid imports keep the previous key. Existing raw paths that are still readable can migrate; inaccessible ones need an explicit re-import message, not a broad-storage-permission workaround.
+
+**Approved task-4.1 hardening amendment (2026-10-21):** the user approved `[high]` routing after JSch
+2.28.8 attempted an allocation from an unchecked ASN.1 length during wrong-passphrase key decryption.
+The earlier API 26 minimum amendment remains valid; changing the floor or heap size is not a parser fix.
+Use one `BoundedSshKey` boundary for import, saved-key reads, repository authentication, attempt-only
+key re-entry, and the final legacy SSH identity handoff. It uses maintained BC 1.86 PEM decryption,
+ASN.1/key parsing and OpenSSH utilities before JSch sees any key material. JSch receives only canonical,
+unencrypted in-memory output produced from the parsed key, never the untrusted source or decrypted
+malformed structure. Prove private-key usability by signing and verifying a synthetic message.
+
+Keep the original imported bytes encrypted at rest with the existing opaque reference/publication
+protocol. Normalization is attempt-local only; do not replace stored records, reset a lost device key,
+persist plaintext keys, alter global authentication choices, register a global provider, or enable old
+SSH algorithms. A later incorrect passphrase must go through the boundary again. Temporary owned byte
+arrays are cleared best-effort; immutable library objects and VM/provider copies are not guaranteed
+zeroizable. No private-key/parser/provider content is retained in error messages.
+
+The resource policy is explicit: document bytes remain capped at 1 MiB, decoded key structures at 16 KiB,
+passphrases at 1024 raw bytes, definite DER at 16 constructed levels/128 nodes and 2049 bytes per INTEGER
+(up to 16384-bit RSA), with length/remaining-input checks before parsing. Supported EC curves are NIST
+P-256/P-384/P-521. OpenSSH outer SSH strings and the single-key envelope are checked before BC parsing;
+BC checks private strings against remaining decrypted bytes before copying. Bcrypt rounds are 1..64 with
+16..64-byte salts. PKCS#8 PBES2 permits AES-CBC with PBKDF2 (1..600000 rounds, SHA-1/224/256/384/512 PRF)
+or scrypt (at most 32 MiB primary memory, `N*r*p <= 2^20`, `r <= 8`, `p <= 16`), and 8..64-byte salts.
+Traditional RSA/SEC1 EC PEM permits plain or DES-EDE3/AES-128/192/256-CBC-encrypted input; passphrase bytes
+are preserved without UTF-8 round trips. PKCS#8 and OpenSSH RSA/EC/EdDSA use the same boundary where
+supported by the maintained parser; other containers/ciphers/KDFs are explicitly unsupported, not passed
+through to JSch. These limits are validation errors, never permission to overwrite an existing key.
+
+Verify deterministic malformed plain and decrypted structures without invoking the unsafe old parser or
+allocating their declared lengths, fixed encrypted wrong-passphrase fixtures, previous-key preservation,
+and every authentication entry point on API 26 and API 35. Keep the historical OOM evidence separate from
+the new regression fixtures; the exact earlier randomized input was not retained.
 
 **Alternatives:** disabling verification to make discovery easier exposes credentials to impersonation. Replacing SSH entirely expands desktop deployment scope without solving these user requests.
 
@@ -150,10 +183,10 @@ The legacy reader handles `keyLayoutFile.csv`, `keyFileOne.csv`, `keyFileTwo.csv
 
 ## Risks / Trade-offs
 
-- [Minimum-version change] -> API 24 was explicitly approved; document the break and do not increase it again implicitly through dependencies.
+- [Minimum-version change] -> API 26 was explicitly approved on 2026-10-20 after the API 24 ECDSA failure and successful actual API 26 gate; document the break and do not increase it again implicitly through dependencies.
 - [Foreground service is not immortal] -> make session state honest, support foreground recovery, and test app switching separately from non-guaranteed screen-off behavior.
 - [Permission or notification denial] -> distinguish LAN denial from SSH failure; explain system session visibility and keep explicit controls to stop a session.
-- [Legacy devices lack native mDNS] -> use a short-lived, cancellable `.local` fallback and test it on API 24; never claim service discovery alone resolves arbitrary hostnames.
+- [Legacy devices lack native mDNS] -> use a short-lived, cancellable `.local` fallback and test it on API 26; never claim service discovery alone resolves arbitrary hostnames.
 - [Discovery advertisements or multicast unavailable] -> retain manual DNS/IP entry and explain host/network prerequisites.
 - [Remote key/crypto compatibility changes] -> verify existing RSA/ECDSA/password flows against current OpenSSH, without globally enabling obsolete algorithms.
 - [Partially migrated data or storage failure] -> use additive transactions, verified encrypted replacements, deterministic layout IDs, atomic writes, and fault-injection tests.
@@ -164,12 +197,12 @@ The legacy reader handles `keyLayoutFile.csv`, `keyFileOne.csv`, `keyFileTwo.csv
 ## Migration Plan
 
 1. Add characterization fixtures and tests from the actual database/preferences/layout formats before altering storage or lifecycle behavior.
-2. Modernize and pin the build for API 24..37 with the specified SDK environment. Establish an executable unit/instrumentation/lint baseline.
+2. Modernize and pin the build for API 26..37 with the specified SDK environment. Establish an executable unit/instrumentation/lint baseline.
 3. Introduce protected storage, trust handling, document import, and additive migrations behind the new repositories. Verify failure/restart behavior before enabling migrated writes.
 4. Introduce the session service and adapt the existing remote controls through the command boundary. Remove activity-owned session shutdown and toggle-based auto-connect only after lifecycle regressions pass.
 5. Add native/fallback hostname resolution, permissions, and visible on-demand SSH discovery. Re-resolve stable manual/service locators on new attempts.
 6. Migrate layouts and introduce the independent editor/profile picker. Retire old editor entry points and autosave only after successful migration, not before.
-7. Verify API 24, 31, 33/34, 35, 36, and 37 behavior as available, plus a real-device/Linux LAN matrix. Document any unavailable test environment rather than marking it passed.
+7. Verify API 26, 31, 33/34, 35, 36, and 37 behavior as available, plus a real-device/Linux LAN matrix. Document any unavailable test environment rather than marking it passed.
 
 Keep application identity and non-secret data paths stable. Recovery uses retained layout sources and a forward-compatible migration/restore path; encrypted secrets are not backed up in plaintext as a rollback mechanism. Any release rollback requiring an older database schema needs an explicit conversion path and is not provided by installing the old APK over migrated data.
 

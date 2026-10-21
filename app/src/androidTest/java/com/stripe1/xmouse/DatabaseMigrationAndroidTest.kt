@@ -2,8 +2,6 @@ package com.stripe1.xmouse
 
 import android.content.ContentValues
 import android.content.Context
-import android.content.ContextWrapper
-import android.database.DatabaseErrorHandler
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
 import android.database.sqlite.SQLiteOpenHelper
@@ -13,6 +11,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.stripe1.xmouse.connection.Endpoint
 import com.stripe1.xmouse.connection.EndpointHost
 import com.stripe1.xmouse.connection.EndpointLocator
+import com.stripe1.xmouse.secrets.IsolatedDatabaseContext
 import com.stripe1.xmouse.secrets.SecretId
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -28,7 +27,7 @@ import java.util.UUID
 @RunWith(AndroidJUnit4::class)
 class DatabaseMigrationAndroidTest {
     private lateinit var root: File
-    private lateinit var context: Context
+    private lateinit var context: IsolatedDatabaseContext
     private val databaseName = "contactsManager"
     private val hostFields = listOf("Alias", "Host", "Username", "Port", "Password")
     private val scriptFields = listOf("Alias", "Script")
@@ -66,6 +65,7 @@ class DatabaseMigrationAndroidTest {
         assertEquals(listOf("13", "29"), before.tables.getValue("scripts").rows.map { it[0] })
         DatabaseHandler(context, declarations(hostFields), declarations(scriptFields)).use { helper ->
             val db = helper.writableDatabase
+            context.assertDatabasePath(db, databaseName)
             assertEquals(3, db.version)
             assertLegacyPreserved(before, db)
             val oldHosts = before.tables.getValue("contacts")
@@ -299,22 +299,9 @@ class DatabaseMigrationAndroidTest {
         assertFalse(invalid.getDatabasePath(databaseName).exists())
     }
 
-    private fun isolatedContext(directory: String): Context {
+    private fun isolatedContext(directory: String): IsolatedDatabaseContext {
         val target = ApplicationProvider.getApplicationContext<Context>()
-        return object : ContextWrapper(target) {
-            override fun getApplicationContext(): Context = this
-            override fun getDatabasePath(name: String): File = File(root, "$directory/$name").also {
-                // Modern helpers open this path directly, without Context.openOrCreateDatabase.
-                check(it.parentFile!!.isDirectory || it.parentFile!!.mkdirs())
-            }
-            override fun openOrCreateDatabase(name: String, mode: Int, factory: SQLiteDatabase.CursorFactory?): SQLiteDatabase =
-                SQLiteDatabase.openOrCreateDatabase(getDatabasePath(name), factory)
-            override fun openOrCreateDatabase(
-                name: String, mode: Int, factory: SQLiteDatabase.CursorFactory?, errorHandler: DatabaseErrorHandler?,
-            ): SQLiteDatabase = SQLiteDatabase.openOrCreateDatabase(
-                getDatabasePath(name).path, factory, errorHandler,
-            )
-        }
+        return IsolatedDatabaseContext(target, File(root, directory))
     }
 
     private fun seed(): SQLiteDatabase = raw().also { db ->

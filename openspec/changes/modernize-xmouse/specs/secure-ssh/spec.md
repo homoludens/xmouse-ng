@@ -33,6 +33,31 @@ The application SHALL support password and existing RSA/ECDSA private-key authen
 - **THEN** valid credentials SHALL authenticate successfully
 - **AND** an invalid passphrase SHALL produce an authentication explanation without altering the saved host or key
 
+### Requirement: Resource-bounded private-key handling at every entry point
+Private-key documents, legacy sources, saved encrypted records, and attempt-only re-entry SHALL use the
+same bounded validation boundary before reaching SSH identity loading. The boundary SHALL validate
+source/decoded sizes, structure lengths and nesting, and permitted cipher/KDF work before invoking
+potentially expensive processing. It SHALL use maintained parsing/cryptographic APIs and provide
+sanitized unsupported-format, resource-limit, or invalid-key/passphrase errors without relying on
+catching memory-exhaustion errors. Supported plain/encrypted RSA and ECDSA keys SHALL remain usable
+without the source document; canonicalization for the SSH handoff SHALL remain in memory and SHALL NOT
+rewrite the saved source representation or globally replace Android cryptographic providers.
+
+#### Scenario: Malformed or incorrectly decrypted key structure
+- **WHEN** a selected key has truncated, overflowing or oversized structure lengths, or incorrect decryption yields malformed key data
+- **THEN** validation SHALL fail before an input-derived oversized allocation or SSH identity publication
+- **AND** the prior usable key, reference, recovery context and authentication choices SHALL remain unchanged
+
+#### Scenario: Wrong passphrase for a previously imported encrypted key
+- **WHEN** a saved encrypted key is read later with an incorrect passphrase
+- **THEN** the same bounded boundary SHALL reject it with a sanitized explanation before authentication
+- **AND** the encrypted record and reference SHALL remain available for a retry with the correct passphrase
+
+#### Scenario: Malformed key supplied for one attempt after device-key loss
+- **WHEN** the user supplies malformed key input through explicit attempt-only re-entry
+- **THEN** validation SHALL reject it without returning usable authentication material or bypassing the bounded identity handoff
+- **AND** the unavailable device key and saved ciphertext SHALL NOT be reset, recreated or replaced
+
 ### Requirement: Protected secrets and safe backups
 Saved passwords, private-key material, and retained passphrases SHALL be encrypted at rest using device-protected key material and SHALL NOT appear in application logs, ordinary configuration backups, or layout files. A device-key loss SHALL require credential re-entry without discarding non-secret host metadata, scripts, or layouts.
 

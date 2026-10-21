@@ -4,7 +4,6 @@ import android.app.AlertDialog
 import android.app.Activity
 import android.app.Instrumentation
 import android.content.Context
-import android.content.ContextWrapper
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
@@ -170,7 +169,7 @@ class CredentialRepositoryAndroidTest {
         assertTrue(auth.done.await(10, TimeUnit.SECONDS))
         auth.result.get()!!.use { material ->
             assertTrue(material.useKey); assertArrayEquals(bytes, material.privateKey); assertArrayEquals(phrase, material.passphrase)
-            val jsch = JSch(); jsch.addIdentity("synthetic", material.privateKey, null, material.passphrase)
+            val jsch = JSch(); BoundedSshKey.addIdentity(jsch, material.privateKey, material.passphrase)
             try { assertNotNull((jsch.identityRepository.identities.single() as com.jcraft.jsch.Identity).getSignature(byteArrayOf(1))) }
             finally { jsch.removeAllIdentity() }
         }
@@ -203,6 +202,49 @@ class CredentialRepositoryAndroidTest {
         auth.result.get()!!.use { assertArrayEquals(bytes, it.privateKey); assertArrayEquals(phrase, it.passphrase) }
         assertEquals(files, f.encryptedFiles()); assertEquals(preferences, f.preferences.all); assertEquals(rows, f.rows("contacts"))
         assertFalse(f.keystore().containsAlias(f.alias)); bytes.fill(0); phrase.fill(0)
+    }
+
+    @Test fun savedKeyWrongPassphraseFailsBeforeAuthenticationWithoutRewritingCredentials() = fixture { f ->
+        assertTrue(f.repository.prepare())
+        val phrase = f.repository.readPassphrase()
+        val bytes = instrumentation.context.assets.open("ssh-crypto/rsa1024-encrypted.pem").use { it.readBytes() }
+        val correct = "NOT_REAL_XMOUSE_FIXTURE".toByteArray()
+        try {
+            val keys = AndroidPrivateKeys.open(f.preferences, f.store)
+            keys.importKey(keys.beginImport(), ByteArrayInputStream(bytes), correct)
+            // The retained global phrase deliberately does not unlock this encrypted key.
+            val before = f.preferences.all
+            val files = f.encryptedFiles()
+            val auth = authentication(f.repository, expectPrompt = false)
+            assertTrue(auth.done.await(10, TimeUnit.SECONDS))
+            assertNull(auth.result.get()); assertTrue(auth.error.get()!!.contains("PASSPHRASE_REQUIRED_OR_INVALID"))
+            assertEquals(before, f.preferences.all); assertEquals(files, f.encryptedFiles())
+            assertArrayEquals(bytes, keys.readForAuthentication(correct))
+        } finally { bytes.fill(0); phrase.fill(0); correct.fill(0) }
+    }
+
+    @Test fun malformedAttemptOnlyKeyCannotBypassValidationOrResetLostDeviceKey() = fixture { f ->
+        assertTrue(f.repository.prepare())
+        val phrase = f.repository.readPassphrase()
+        val valid = KeyPair.genKeyPair(JSch(), KeyPair.RSA, 1024)
+        val bytes = try { ByteArrayOutputStream().also { valid.writePrivateKey(it, phrase) }.toByteArray() } finally { valid.dispose() }
+        val keys = AndroidPrivateKeys.open(f.preferences, f.store)
+        keys.importKey(keys.beginImport(), ByteArrayInputStream(bytes), phrase)
+        val before = f.preferences.all
+        val files = f.encryptedFiles()
+        f.deleteKey()
+        val auth = authentication(f.repository)
+        assertEquals(CredentialKind.PASSPHRASE, auth.kind.get())
+        assertTrue(auth.request.get()!!.useForThisAttempt(phrase))
+        waitFor { auth.kind.get() == CredentialKind.PRIVATE_KEY }
+        val candidate = BoundedKeyFixtures.encryptedMalformed(phrase)
+        try {
+            assertTrue(auth.request.get()!!.useForThisAttempt(candidate))
+            assertTrue(auth.done.await(10, TimeUnit.SECONDS))
+            assertNull(auth.result.get()); assertNotNull(auth.error.get())
+            assertEquals(before, f.preferences.all); assertEquals(files, f.encryptedFiles())
+            assertFalse(f.keystore().containsAlias(f.alias))
+        } finally { bytes.fill(0); phrase.fill(0); candidate.fill(0) }
     }
 
     @Test fun absentProtectedRecordNeverFallsBackToRetainedLegacyPreferenceText() = fixture { f ->
@@ -339,12 +381,14 @@ class CredentialRepositoryAndroidTest {
             snapshotError.get()?.let { throw AssertionError(it) }
             val snapshot = snapshotRef.get()!!
             try {
+                restored.context.assertDatabasePath(restored.helper.writableDatabase, "contactsManager")
                 restored.helper.writableDatabase.apply {
                     delete("contacts", null, null)
                     delete("scripts", null, null)
                 }
                 restored.preferences.edit(commit = true) { clear() }
                 CredentialMetadataBackup.restore(restored.context, snapshot)
+                restored.context.assertDatabasePath(restored.helper.writableDatabase, "contactsManager")
                 assertTrue(restored.preferences.getBoolean(CredentialMetadataBackup.PASSPHRASE_REENTRY, false))
                 assertEquals(setOf("7", "42"), restored.preferences.getStringSet(CredentialMetadataBackup.HOST_REENTRY_IDS, emptySet()))
                 assertTrue(restored.onRepositoryWorker(restored.repository) { restored.repository.prepare() })
@@ -720,10 +764,8 @@ class CredentialRepositoryAndroidTest {
         private val preferenceName = "credential-repository-test-$unique"
         val preferences: SharedPreferences = if (ui) PreferenceManager.getDefaultSharedPreferences(target) else target.getSharedPreferences(preferenceName, Context.MODE_PRIVATE)
         val originalPreferences = preferences.all.toMap()
-        val context = object : ContextWrapper(target) {
-            override fun getApplicationContext(): Context = this
+        val context = object : IsolatedDatabaseContext(target, File(root, "databases")) {
             override fun getNoBackupFilesDir(): File = File(root, "no_backup")
-            override fun getDatabasePath(name: String): File = File(root, "databases/$name").also { check(it.parentFile!!.isDirectory || it.parentFile!!.mkdirs()) }
         }
         var helper = DatabaseHandler(context)
         val store = AndroidSecretStore.open(context, alias)
@@ -734,6 +776,7 @@ class CredentialRepositoryAndroidTest {
             SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath("contactsManager"), null).use { db ->
                 sql.lineSequence().filterNot { it.trimStart().startsWith("--") }.joinToString("\n").split(';').map(String::trim).filter(String::isNotEmpty).forEach { db.execSQL(it) }
             }
+            context.assertDatabasePath(helper.writableDatabase, "contactsManager")
             rows("contacts").forEach { passwords[it[0]!!.toLong()] = it[6]!! }
             preferences.edit(commit = true) {
                 clear(); putString("hostPreferenceList", "42"); putBoolean("pref_usekeyauth", true)
@@ -742,7 +785,12 @@ class CredentialRepositoryAndroidTest {
                 putString(AndroidPrivateKeys.LEGACY_PATH, "/NOT_REAL_missing/key")
             }
         }
-        fun reopen() { helper.close(); helper = DatabaseHandler(context); repository = CredentialRepository(helper, preferences, store) }
+        fun reopen() {
+            helper.close()
+            helper = DatabaseHandler(context)
+            context.assertDatabasePath(helper.writableDatabase, "contactsManager")
+            repository = CredentialRepository(helper, preferences, store)
+        }
         fun rows(table: String): List<List<String?>> = helper.readableDatabase.rawQuery("SELECT * FROM $table ORDER BY id", null).use { c -> buildList { while (c.moveToNext()) add((0 until c.columnCount).map(c::getString)) } }
         fun encryptedFiles() = File(context.noBackupFilesDir, "secrets").listFiles()!!.associate { it.name to it.readBytes().toList() }
         fun keystore() = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }

@@ -11,7 +11,7 @@ XMouse remains useful as a local, SSH-based Linux remote, but its Android 12-era
 - Introduce a Kotlin grid editor with explicit edit mode, drag-and-drop ordering, width resizing, undo/redo, color selection, and named layouts. Keep the ten-column flow model and existing custom-command behavior.
 - Preserve hosts, scripts, authentication choices, and legacy layout files through non-destructive, repeatable migrations.
 - Adopt Kotlin incrementally at new boundaries; do not rewrite the touchpad, command backends, or every existing screen.
-- **BREAKING:** raise the minimum Android version from API 14 to API 24 (Android 7), as confirmed by the user. Devices running older Android versions retain the legacy release rather than receiving this update.
+- **BREAKING:** raise the minimum Android version from API 14 to API 26 (Android 8). API 24 / Android 7 was the original selection; on 2026-10-20 the user explicitly approved API 26 after ECDSA failed on API 24 and the unchanged dependency migration passed its focused API 26 crypto/import gate. This is a floor change, not an API 24 compatibility fix. Devices below API 26 retain the legacy release rather than receiving this update.
 
 ## Capabilities
 

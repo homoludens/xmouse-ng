@@ -5,7 +5,7 @@ Keep XMouse's local remote-control functions usable on supported Android release
 ## ADDED Requirements
 
 ### Requirement: Supported Android versions and usable system UI
-The application SHALL support Android 7 / API 24 and later and target Android 17 / API 37. Remote controls, connection actions, and editor controls SHALL remain reachable with gesture navigation, display cutouts, system bars, and the on-screen keyboard. System Back SHALL close an open drawer or editor according to its visible state before leaving that screen.
+The application SHALL support Android 8 / API 26 and later and target Android 17 / API 37. Remote controls, connection actions, and editor controls SHALL remain reachable with gesture navigation, display cutouts, system bars, and the on-screen keyboard. System Back SHALL close an open drawer or editor according to its visible state before leaving that screen.
 
 #### Scenario: Current Android system navigation
 - **WHEN** the user opens controls on Android 15, 16, or 17 and shows or hides the keyboard
@@ -13,7 +13,7 @@ The application SHALL support Android 7 / API 24 and later and target Android 17
 - **AND** Back SHALL dismiss the active overlay or navigate back without silently applying editor changes
 
 #### Scenario: Minimum supported device
-- **WHEN** the application runs on an Android 7 device without a gyroscope
+- **WHEN** the application runs on an Android 8 device without a gyroscope
 - **THEN** touchpad, keyboard, saved scripts, host management, and layout editing SHALL remain available
 - **AND** unavailable gyro functionality SHALL NOT prevent installation or use
 

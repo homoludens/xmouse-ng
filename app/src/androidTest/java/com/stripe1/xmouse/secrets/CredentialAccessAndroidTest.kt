@@ -1,9 +1,7 @@
 package com.stripe1.xmouse.secrets
 
 import android.content.Context
-import android.content.ContextWrapper
 import android.content.SharedPreferences
-import android.database.DatabaseErrorHandler
 import android.database.sqlite.SQLiteDatabase
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import androidx.core.content.edit
@@ -31,7 +29,7 @@ import java.util.UUID
 @RunWith(AndroidJUnit4::class)
 class CredentialAccessAndroidTest {
     private lateinit var target: Context
-    private lateinit var context: Context
+    private lateinit var context: IsolatedDatabaseContext
     private lateinit var root: File
     private lateinit var alias: String
     private lateinit var preferencesName: String
@@ -52,17 +50,8 @@ class CredentialAccessAndroidTest {
         root = File(target.noBackupFilesDir, "credential-access-test-$unique")
         alias = AndroidSecretStore.KEY_ALIAS + ".reentry-test." + unique
         preferencesName = "credential-access-test-$unique"
-        context = object : ContextWrapper(target) {
-            override fun getApplicationContext(): Context = this
+        context = object : IsolatedDatabaseContext(target, File(root, "databases")) {
             override fun getNoBackupFilesDir(): File = File(root, "no_backup")
-            override fun getDatabasePath(name: String): File = File(root, "databases/$name").also {
-                check(it.parentFile!!.isDirectory || it.parentFile!!.mkdirs())
-            }
-            override fun openOrCreateDatabase(name: String, mode: Int, factory: SQLiteDatabase.CursorFactory?): SQLiteDatabase =
-                SQLiteDatabase.openOrCreateDatabase(getDatabasePath(name), factory)
-            override fun openOrCreateDatabase(
-                name: String, mode: Int, factory: SQLiteDatabase.CursorFactory?, errorHandler: DatabaseErrorHandler?,
-            ): SQLiteDatabase = SQLiteDatabase.openOrCreateDatabase(getDatabasePath(name).path, factory, errorHandler)
         }
         SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath("contactsManager"), null).use { db ->
             val sql = asset("legacy/v2/contactsManager-v2.sql").bufferedReader().use { it.readText() }
@@ -195,6 +184,7 @@ class CredentialAccessAndroidTest {
         val scripts: List<List<String?>>
         helper.use {
             val db = helper.readableDatabase
+            context.assertDatabasePath(db, "contactsManager")
             assertEquals(DatabaseHandler.DATABASE_VERSION, db.version)
             hosts = rows(db, "contacts")
             scripts = rows(db, "scripts")

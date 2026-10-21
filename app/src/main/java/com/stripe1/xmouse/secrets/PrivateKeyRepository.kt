@@ -1,7 +1,5 @@
 package com.stripe1.xmouse.secrets
 
-import com.jcraft.jsch.JSch
-import com.jcraft.jsch.KeyPair
 import java.io.FileInputStream
 import java.io.IOException
 import java.io.InputStream
@@ -12,6 +10,7 @@ class PrivateKeyImportException(val reason: Reason) : Exception(reason.name) {
     enum class Reason {
         INVALID_KEY, PASSPHRASE_REQUIRED_OR_INVALID, TOO_LARGE, READ_FAILURE, CANCELLED,
         SOURCE_CHANGED, MISSING_KEY, INVALID_REFERENCE, VERIFICATION_FAILED, STORAGE_FAILURE,
+        UNSUPPORTED_FORMAT, RESOURCE_LIMIT,
     }
 }
 
@@ -60,7 +59,7 @@ class PrivateKeyRepository internal constructor(
         val bytes = readSource(source, attempt)
         try {
             attempt.checkActive()
-            validate(bytes, passphrase)
+            BoundedSshKey.validate(bytes, passphrase)
             // A new import is not permission to reset an unreadable device key/ciphertext.
             attempt.expected.reference?.let { readReference(it).fill(0) }
             attempt.checkActive()
@@ -107,8 +106,15 @@ class PrivateKeyRepository internal constructor(
     fun readForAuthentication(passphrase: ByteArray): ByteArray {
         val attempt = beginImport()
         if (attempt.expected.reference == null) importLegacy(attempt, passphrase)
-        return synchronized(lock) {
+        val bytes = synchronized(lock) {
             readReference(references.snapshot().reference ?: keyImportFail(PrivateKeyImportException.Reason.MISSING_KEY))
+        }
+        try {
+            BoundedSshKey.validate(bytes, passphrase)
+            return bytes
+        } catch (failure: Exception) {
+            bytes.fill(0)
+            throw failure
         }
     }
 
@@ -178,27 +184,6 @@ class PrivateKeyRepository internal constructor(
             }
         }
 
-        private fun validate(bytes: ByteArray, passphrase: ByteArray) {
-            val key = try { KeyPair.load(JSch(), bytes, null) } catch (_: Exception) {
-                keyImportFail(PrivateKeyImportException.Reason.INVALID_KEY)
-            } ?: keyImportFail(PrivateKeyImportException.Reason.INVALID_KEY)
-            try {
-                if (key.isEncrypted && !key.decrypt(passphrase)) {
-                    keyImportFail(PrivateKeyImportException.Reason.PASSPHRASE_REQUIRED_OR_INVALID)
-                }
-                if (key.publicKeyBlob == null) keyImportFail(PrivateKeyImportException.Reason.INVALID_KEY)
-                // Parsing a public blob/header is not evidence of a usable private identity.
-                val signature = key.getSignature("XMouse synthetic import validation".toByteArray(Charsets.US_ASCII))
-                    ?: keyImportFail(PrivateKeyImportException.Reason.INVALID_KEY)
-                signature.fill(0)
-            } catch (failure: PrivateKeyImportException) {
-                throw failure
-            } catch (_: Exception) {
-                keyImportFail(PrivateKeyImportException.Reason.INVALID_KEY)
-            } finally {
-                key.dispose()
-            }
-        }
     }
 }
 

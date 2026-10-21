@@ -2,11 +2,15 @@
 
 Selected and verified **2026-10-20** for `modernize-xmouse` task **1.1**, then applied and configuration-verified in **1.3**. Task 1.4 compiles the existing application, and 1.5 updates its tests/lint.
 
+## Current supported floor (user-approved amendment, 2026-10-20)
+
+The current minimum is **API 26 / Android 8**. Task 1.1 originally selected API 24 / Android 7; after task 4.1 diagnostics established that ECDSA signing and import fail on API 24 because the platform has no default `AlgorithmParameters.EC` service, the user approved API 26 only if the unchanged API-24-minimum APK first passed the crypto/import gate on an actual API 26 emulator. That gate passed: RSA-SHA2 and ECDSA JSch sign/verify passed, four external RSA/ECDSA plain/encrypted document-import fixtures remained usable after provider removal/revocation, and the import regression class passed. This is an approved support-floor change, not an API 24 fix; API 24 remains unsupported by the modernized release. The detailed historic API 24 failure and final API 26/API 35 verification are in `docs/verification/ssh-crypto.md`.
+
 ## Selected pins
 
 | Component | Selection | Compatibility evidence |
 | --- | --- | --- |
-| Android SDK | `minSdk = 24`, `compileSdk = 37`, `targetSdk = 37` | Exactly Android 17 / **37.0**, not 37.1; no minimum-version increase. |
+| Android SDK | `minSdk = 26`, `compileSdk = 37`, `targetSdk = 37` | Current floor is Android 8 / API 26 after the explicit amendment above. Compile/target remain Android 17 / **37.0**, not 37.1. The original 1.1 selection and its API-24 verification are retained below as historical evidence. |
 | Android Gradle plugin | `com.android.tools.build:gradle:9.1.1` | [Android's API support table](https://developer.android.com/build/releases/about-agp#api-level-support) names 9.1.1 as the minimum for 37.0. Its [release compatibility table](https://developer.android.com/build/releases/agp-9-1-0-release-notes#compatibility) supports 37.0 and specifies Gradle 9.3.1 / Build Tools 36.0.0 / minimum JDK 17. |
 | Gradle wrapper | **9.3.1**, `gradle-9.3.1-bin.zip` | [Gradle 9.3.1 Java matrix](https://docs.gradle.org/9.3.1/userguide/compatibility.html#java_runtime) supports running on JDK 21; the old 7.3.3 wrapper does not. |
 | Build JVM | **JDK 21 LTS** (verification used Temurin **21.0.7+6**) | Runtime/toolchain JDK, not the Android bytecode/API level. Do not commit a local JDK path. |
@@ -49,7 +53,7 @@ Resolved from **Google Maven and Maven Central**, not JCenter or a mirror. The i
 - Inspected `r8-version.properties` in the published `com.android.tools.build:builder:9.1.1` JAR and the running plugin: bundled **R8 9.1.31**, above the [official Kotlin 2.4 requirement of R8 9.1.29](https://developer.android.com/build/kotlin-support). No R8 override is needed.
 - Read Compose BOM constraints and Android variant redirects, e.g. [`ui:1.10.4.module`](https://dl.google.com/dl/android/maven2/androidx/compose/ui/ui/1.10.4/ui-1.10.4.module) selects **`ui-android:1.10.4`**. Checked Android AARs, not only multiplatform facade POMs.
 - Resolved `debugRuntimeClasspath` and `debugAndroidTestRuntimeClasspath`: **111 unique module coordinates; 87 unique AARs**. Unzipped every AAR's `AndroidManifest.xml` and, where present, `META-INF/com/android/build/gradle/aar-metadata.properties`. Maximum declared **minSdk 23**, **minCompileSdk 36**, **minAndroidGradlePluginVersion 8.9.1**; no nonzero required SDK extension/minor and no declared core-library-desugaring requirement. Missing metadata was treated as missing, not proof of unrestricted compatibility.
-- Confirmed transitive selections including SavedState **1.4.0**, NavigationEvent **1.0.2**, Coroutines **1.10.2**, and Kotlin stdlib **2.4.21**. No resolved AAR raises the floor above 24 or requires 37.1. Both app/test manifest merges retained **minSdk 24 / targetSdk 37**, without `tools:overrideLibrary`.
+- Confirmed transitive selections including SavedState **1.4.0**, NavigationEvent **1.0.2**, Coroutines **1.10.2**, and Kotlin stdlib **2.4.21**. Resolved AARs declare a maximum `minSdk` of 23 and no requirement for 37.1, so API 26 remains above the audited dependency minimum. The original app/test manifest assertion was **minSdk 24 / targetSdk 37**, without `tools:overrideLibrary`; final post-amendment APK evidence is recorded in `docs/verification/ssh-crypto.md`.
 - The isolated fixture successfully compiled a Kotlin `@Composable` Material3 `Text` calling a Java method, with both bytecode targets set to 17. This is toolchain evidence, **not** an XMouse build, device test, or feature acceptance result.
 
 Commands run against that probe (set `GRADLE_9_3_1` to an unpacked Gradle 9.3.1 executable):
@@ -121,7 +125,7 @@ Logs and the assertion script remain in `/tmp/opencode/xmouse-build-task-1.3`. N
 - **Task 1.3:** Keep application ID and namespace **`com.stripe1.xmouse`**. Use AGP 9's default [built-in Kotlin](https://developer.android.com/build/migrate-to-built-in-kotlin); do **not** also apply `org.jetbrains.kotlin.android`. Pin the higher KGP through a root `buildscript` classpath as [documented by AGP](https://developer.android.com/build/releases/agp-9-0-0-release-notes#upgrade-to-a-higher-kgp-version), alongside the matching Compose compiler plugin. Keep the new DSL; use `kotlin.compilerOptions`, not `android.kotlinOptions`. Replace `proguard-android.txt` with `proguard-android-optimize.txt`, which AGP 9 requires. None of these edits were made in task 1.1.
 - Wrapper distribution: `https://services.gradle.org/distributions/gradle-9.3.1-bin.zip`; [official SHA-256](https://services.gradle.org/distributions/gradle-9.3.1-bin.zip.sha256): `b266d5ff6b90eada6dc3b20cb090e3731302e553a27c5d3e4df1f0d76beaff06`. Regenerate/verify wrapper files using compatible Gradle, not by executing 7.3.3 on JDK 21.
 - **Tasks 1.4/1.5:** Preserve non-final resource IDs and adapt Java switches rather than hiding the migration. Replace blanket lint suppression and obsolete instrumentation; the selected runner is `androidx.test.runner.AndroidJUnitRunner`. Existing Mockito/JUnit and SSH/SpongyCastle dependencies were **not** validated or replaced by this probe; their migration/verification remains with the corresponding tasks.
-- Do not use unsupported-compile-SDK suppression, manifest minimum overrides, a higher minimum, or API 37.1 to force dependency acceptance. Kotlin 2.4.21 and Gradle's embedded Kotlin 2.2.21 are different components. Device coverage on API 24 and 37 and the actual XMouse build/lint/instrumentation suites are **not run by task 1.1**.
+- Do not use unsupported-compile-SDK suppression, manifest minimum overrides, or API 37.1 to force dependency acceptance. The current API 26 floor is an explicit, evidence-based user-approved amendment, not an implicit dependency bump. Kotlin 2.4.21 and Gradle's embedded Kotlin 2.2.21 are different components. Device coverage on API 24 and 37 and the actual XMouse build/lint/instrumentation suites are **not run by task 1.1**; that historical task-1.1 statement remains unchanged.
 
 ## Existing-source compatibility verification (task 1.4)
 
@@ -159,7 +163,7 @@ Results: **BUILD SUCCESSFUL** (1m2s); Kotlin and Java compilation both executed.
 
 Successful build logs, APK badging, resource-field/Compose signatures, fixture sources, and artifact assertions remain in `/tmp/opencode/xmouse-build-task-1.4`. The pre-fix build failed on the expected 20 non-final case labels; an intermediate assemble hit the 120-second harness timeout, superseded by the successful fresh run above.
 
-**Warnings / 1.5 handoff:** existing Jetifier deprecation and deprecated-Java-API notes remain. AGP packages `libandroidx.graphics.path.so` unstripped (nonfatal). Unit tests, lint, instrumentation APK/device tests, and on-device API 24/37 behavior were **not run**. The existing lint policy/test libraries and obsolete instrumentation are deliberately unchanged for **1.5**; SSH/SpongyCastle remain for **4.1**. Only task **1.4** was completed here.
+**Warnings / 1.5 handoff (historical task-1.4 record):** existing Jetifier deprecation and deprecated-Java-API notes remain. AGP packages `libandroidx.graphics.path.so` unstripped (nonfatal). Unit tests, lint, instrumentation APK/device tests, and on-device API 24/37 behavior were **not run by task 1.4**. The existing lint policy/test libraries and obsolete instrumentation were deliberately unchanged for **1.5**. At that point SSH/SpongyCastle work was left for **4.1**; that migration and the later API-floor amendment are documented in `docs/verification/ssh-crypto.md`. Only task **1.4** was completed in this historical section.
 
 ## Test/lint migration (task 1.5 — complete)
 

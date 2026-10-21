@@ -21,6 +21,7 @@ import com.stripe1.xmouse.secrets.PrivateKeyImportException;
 import com.stripe1.xmouse.secrets.AndroidCredentials;
 import com.stripe1.xmouse.secrets.CredentialUi;
 import com.stripe1.xmouse.secrets.AuthenticationMaterial;
+import com.stripe1.xmouse.secrets.BoundedSshKey;
 import android.content.Intent;
 
 import java.io.BufferedReader;
@@ -160,7 +161,7 @@ public class MyConnectionHandler implements CommandTransport {
                 if(material.getUseKey()){
                     try {
                         jsch.removeAllIdentity();
-                        jsch.addIdentity("xmouse-private-key", material.getPrivateKey(), null, material.getPassphrase());
+                        BoundedSshKey.addIdentity(jsch, material.getPrivateKey(), material.getPassphrase());
                         session.setConfig("PreferredAuthentications", "publickey");
                     } catch (JSchException ignored) {
                         // Never expose a key parser/provider message through the legacy generic logger.

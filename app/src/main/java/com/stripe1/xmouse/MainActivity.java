@@ -46,7 +46,6 @@ import java.io.BufferedReader;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStreamReader;
-import java.security.Security;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
@@ -129,11 +128,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 
 	//private ArrayList<ArrayList<String>> scriptItems = new ArrayList<ArrayList<String>>();
-
-	static {
-		Log.d(TAG, "configure_crypto_provider");
-		Security.insertProviderAt(new org.spongycastle.jce.provider.BouncyCastleProvider(), 1);
-	}
 
 	@Override
 	public void onDialogPositiveClickValid(

@@ -99,6 +99,10 @@ class PrivateKeySettingsController(private val activity: Activity, private val p
                         "Key unlock failed. Check Optional Key Passphrase, then select the key again. The previous key was kept."
                     PrivateKeyImportException.Reason.INVALID_KEY ->
                         "Unsupported or invalid private key. The previous key was kept."
+                    PrivateKeyImportException.Reason.UNSUPPORTED_FORMAT ->
+                        "Unsupported private-key format, cipher or KDF. The previous key was kept."
+                    PrivateKeyImportException.Reason.RESOURCE_LIMIT ->
+                        "Private-key parameters exceed the supported work or size limits. The previous key was kept."
                     PrivateKeyImportException.Reason.TOO_LARGE ->
                         "The key document exceeds the 1 MiB limit. The previous key was kept."
                     PrivateKeyImportException.Reason.READ_FAILURE, PrivateKeyImportException.Reason.MISSING_KEY ->

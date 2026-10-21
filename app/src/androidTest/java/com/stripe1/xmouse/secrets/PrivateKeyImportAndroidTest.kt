@@ -18,6 +18,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.KeyPair
+import com.stripe1.xmouse.JSchTestDiagnostics
 import com.stripe1.xmouse.SettingsActivity
 import org.junit.Assert.*
 import org.junit.Test
@@ -35,33 +36,142 @@ class PrivateKeyImportAndroidTest {
     private val target get() = ApplicationProvider.getApplicationContext<Context>()
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
 
-    @Test fun realProviderRsaAndEcdsaEncryptedAndPlainImportsSurviveRemovalAndRevocation() {
-        listOf(KeyPair.RSA, KeyPair.ECDSA).forEach { type ->
-            listOf(byteArrayOf(), "NOT_REAL_fixture_passphrase".toByteArray()).forEach { phrase -> fixture { f ->
-                val bytes = key(type, phrase)
-                f.preferences.edit(commit = true) { putString("pref_key_passphrase", phrase.toString(Charsets.UTF_8)) }
-                val before = f.preferences.all.filterKeys { it != AndroidPrivateKeys.LEGACY_PATH }
-                val uri = document(bytes)
-                try {
-                    f.importProvider(uri, phrase)
-                    val ref = f.reference()
-                    assertNotNull(ref)
-                    assertNull(f.preferences.getString(AndroidPrivateKeys.LEGACY_PATH, null))
-                    before.forEach { (name, value) -> assertEquals(value, f.preferences.all[name]) }
-                    assertArrayEquals(bytes, f.store().read(SecretId(ref!!)))
-                    removeDocument(uri)
-                    expect<Exception> { target.contentResolver.openInputStream(uri)?.close() }
-                    f.assertUsable(phrase)
-                    f.records().forEach { record ->
-                        val ciphertext = record.readBytes().toString(Charsets.ISO_8859_1)
-                        assertFalse(ciphertext.contains("BEGIN RSA PRIVATE KEY"))
-                        assertFalse(ciphertext.contains("BEGIN EC PRIVATE KEY"))
-                        assertFalse(ciphertext.contains("NOT_REAL_fixture_passphrase"))
+    @Test fun importsExternalRsaTraditionalPemPlainFixture() = importExternalFixture(
+        label = "RSA traditional PEM, unencrypted",
+        asset = "ssh-crypto/rsa1024.pem",
+        beginMarker = "-----BEGIN RSA PRIVATE KEY-----",
+        phrase = byteArrayOf(),
+    )
+
+    @Test fun importsExternalRsaTraditionalPemEncryptedFixture() = importExternalFixture(
+        label = "RSA traditional PEM, encrypted with the fixture passphrase",
+        asset = "ssh-crypto/rsa1024-encrypted.pem",
+        beginMarker = "-----BEGIN RSA PRIVATE KEY-----",
+        phrase = "NOT_REAL_XMOUSE_FIXTURE".toByteArray(Charsets.US_ASCII),
+    )
+
+    @Test fun importsExternalEcdsaSec1PemPlainFixture() = importExternalFixture(
+        label = "ECDSA P-256 SEC1 PEM, unencrypted",
+        asset = "ssh-crypto/ecdsa-p256.pem",
+        beginMarker = "-----BEGIN EC PRIVATE KEY-----",
+        phrase = byteArrayOf(),
+    )
+
+    @Test fun importsExternalEcdsaSec1PemEncryptedFixture() = importExternalFixture(
+        label = "ECDSA P-256 SEC1 PEM, encrypted with the fixture passphrase",
+        asset = "ssh-crypto/ecdsa-p256-encrypted.pem",
+        beginMarker = "-----BEGIN EC PRIVATE KEY-----",
+        phrase = "NOT_REAL_XMOUSE_FIXTURE".toByteArray(Charsets.US_ASCII),
+    )
+
+    private fun importExternalFixture(label: String, asset: String, beginMarker: String, phrase: ByteArray) {
+        JSchTestDiagnostics.withCapture { diagnostics ->
+            val bytes = instrumentation.context.assets.open(asset).use { it.readBytes() }
+            try {
+                assertTrue("$label must use the established PEM marker", beginsWith(bytes, beginMarker))
+                val probeCheckpoint = diagnostics.checkpoint()
+                val directProbe = probeJschKey(label, bytes, phrase, diagnostics)
+                val directProbeLogs = diagnostics.renderSince(probeCheckpoint)
+                android.util.Log.i(
+                    "XMouseJSchTest",
+                    "Fixture [$label] direct synthetic JSch probe: $directProbe\nJSch errors:\n$directProbeLogs",
+                )
+                fixture { f ->
+                    f.preferences.edit(commit = true) {
+                        putString("pref_key_passphrase", phrase.toString(Charsets.UTF_8))
                     }
-                    assertTrue(File(f.context.noBackupFilesDir, "secrets").canonicalPath.startsWith(f.root.canonicalPath))
-                } finally { removeDocument(uri); bytes.fill(0) }
-            } }
+                    val before = f.preferences.all.filterKeys { it != AndroidPrivateKeys.LEGACY_PATH }
+                    val uri = document(bytes)
+                    try {
+                        val importCheckpoint = diagnostics.checkpoint()
+                        try {
+                            f.importProvider(uri, phrase)
+                        } catch (failure: Exception) {
+                            throw AssertionError(
+                                "Import fixture [$label] failed (${failure.javaClass.simpleName}: ${failure.message}).\n" +
+                                    "Direct JSch stage probe: $directProbe\n" +
+                                    "Direct-probe JSch errors:\n$directProbeLogs\n" +
+                                    "JSch errors during importer:\n${diagnostics.renderSince(importCheckpoint)}",
+                                failure,
+                            )
+                        }
+                        android.util.Log.i(
+                            "XMouseJSchTest",
+                            "Fixture [$label] importer completed; JSch errors during import:\n" +
+                                diagnostics.renderSince(importCheckpoint),
+                        )
+                        val ref = f.reference()
+                        assertNotNull(ref)
+                        assertNull(f.preferences.getString(AndroidPrivateKeys.LEGACY_PATH, null))
+                        before.forEach { (name, value) -> assertEquals(value, f.preferences.all[name]) }
+                        assertArrayEquals(bytes, f.store().read(SecretId(ref!!)))
+                        removeDocument(uri)
+                        expect<Exception> { target.contentResolver.openInputStream(uri)?.close() }
+                        try {
+                            f.assertUsable(phrase)
+                        } catch (failure: Throwable) {
+                            throw AssertionError(
+                                "Imported fixture [$label] was not usable after source removal.\n" +
+                                    "Direct JSch stage probe: $directProbe\n" +
+                                    "JSch errors:\n${diagnostics.renderSince()}",
+                                failure,
+                            )
+                        }
+                        f.records().forEach { record ->
+                            val ciphertext = record.readBytes().toString(Charsets.ISO_8859_1)
+                            assertFalse(ciphertext.contains("BEGIN RSA PRIVATE KEY"))
+                            assertFalse(ciphertext.contains("BEGIN EC PRIVATE KEY"))
+                            assertFalse(ciphertext.contains("NOT_REAL_XMOUSE_FIXTURE"))
+                        }
+                        assertTrue(File(f.context.noBackupFilesDir, "secrets").canonicalPath.startsWith(f.root.canonicalPath))
+                    } finally {
+                        removeDocument(uri)
+                    }
+                }
+            } finally {
+                bytes.fill(0)
+                phrase.fill(0)
+            }
         }
+    }
+
+    private fun probeJschKey(
+        label: String,
+        bytes: ByteArray,
+        phrase: ByteArray,
+        diagnostics: JSchTestDiagnostics.Capture,
+    ): String {
+        var key: KeyPair? = null
+        var stage = "KeyPair.load"
+        val checkpoint = diagnostics.checkpoint()
+        try {
+            key = KeyPair.load(JSch(), bytes, null)
+                ?: return "$label: KeyPair.load returned null"
+            stage = "KeyPair.decrypt"
+            if (key.isEncrypted && !key.decrypt(phrase)) {
+                return "$label: decrypt returned false\nJSch errors:\n${diagnostics.renderSince(checkpoint)}"
+            }
+            stage = "KeyPair.publicKeyBlob"
+            if (key.publicKeyBlob == null) return "$label: public-key blob was null"
+            stage = "KeyPair.getSignature"
+            val signature = key.getSignature("XMouse synthetic import diagnostic".toByteArray(Charsets.US_ASCII))
+                ?: return "$label: getSignature returned null\nJSch errors:\n${diagnostics.renderSince(checkpoint)}"
+            signature.fill(0)
+            return "$label: load/decrypt/public-key/signature stages succeeded (${key.keyTypeString})"
+        } catch (failure: Exception) {
+            return "$label: stage=$stage failed (${failure.javaClass.name}: ${failure.message})\n" +
+                "${failure.stackTraceToString()}\nJSch errors:\n${diagnostics.renderSince(checkpoint)}"
+        } catch (failure: LinkageError) {
+            return "$label: stage=$stage failed (${failure.javaClass.name}: ${failure.message})\n" +
+                "${failure.stackTraceToString()}\nJSch errors:\n${diagnostics.renderSince(checkpoint)}"
+        } finally {
+            key?.dispose()
+        }
+    }
+
+    private fun beginsWith(bytes: ByteArray, marker: String): Boolean {
+        val expected = marker.toByteArray(Charsets.US_ASCII)
+        return bytes.size >= expected.size && expected.indices.all { bytes[it] == expected[it] }
     }
 
     @Test fun providerInvalidOversizedAndUnavailableSourcesPreserveCurrentUsableKey() = fixture { f ->
@@ -124,6 +234,48 @@ class PrivateKeyImportAndroidTest {
             assertEquals(before, f.preferences.all)
             f.assertUsable()
         }
+    }
+
+    @Test fun deterministicMalformedPlainAndDecryptedDocumentsKeepPreviousUsableKey() = fixture { f ->
+        f.importBytes(key())
+        val before = f.preferences.all
+        val records = f.records().associate { it.name to it.readBytes().toList() }
+        val phrase = byteArrayOf(9, 8, 7, 0, -1)
+        listOf(
+            BoundedKeyFixtures.pem("RSA PRIVATE KEY", BoundedKeyFixtures.malformedDer()) to byteArrayOf(),
+            BoundedKeyFixtures.encryptedMalformed(phrase) to phrase,
+        ).forEach { (bytes, password) ->
+            val uri = document(bytes)
+            try {
+                expect<PrivateKeyImportException> { f.importProvider(uri, password) }
+                assertEquals(before, f.preferences.all)
+                assertEquals(records, f.records().associate { it.name to it.readBytes().toList() })
+                f.assertUsable()
+            } finally { removeDocument(uri); bytes.fill(0) }
+        }
+        phrase.fill(0)
+    }
+
+    @Test fun storedEncryptedKeysRejectWrongPassphraseAtReadAndFinalIdentityHandoff() = fixture { f ->
+        val bytes = instrumentation.context.assets.open("ssh-crypto/rsa1024-encrypted.pem").use { it.readBytes() }
+        val phrase = "NOT_REAL_XMOUSE_FIXTURE".toByteArray()
+        try {
+            f.importBytes(bytes, phrase)
+            val before = f.preferences.all
+            val records = f.records().associate { it.name to it.readBytes().toList() }
+            assertEquals(PrivateKeyImportException.Reason.PASSPHRASE_REQUIRED_OR_INVALID,
+                expect<PrivateKeyImportException> { f.repository().readForAuthentication(byteArrayOf(1, 2, 3)) }.reason)
+            val jsch = JSch()
+            try {
+                expect<PrivateKeyImportException> { BoundedSshKey.addIdentity(jsch, bytes, byteArrayOf(1, 2, 3)) }
+                assertTrue(jsch.identityRepository.identities.isEmpty())
+                BoundedSshKey.addIdentity(jsch, bytes, phrase)
+                assertNotNull((jsch.identityRepository.identities.single() as com.jcraft.jsch.Identity).getSignature(byteArrayOf(1)))
+            } finally { jsch.removeAllIdentity() }
+            assertEquals(before, f.preferences.all)
+            assertEquals(records, f.records().associate { it.name to it.readBytes().toList() })
+            f.assertUsable(phrase)
+        } finally { bytes.fill(0); phrase.fill(0) }
     }
 
     @Test fun realStoreWriteAndReadbackFaultsNeverReplaceThePreviousReference() = fixture { f ->

@@ -1,7 +1,6 @@
 package com.stripe1.xmouse.secrets
 
 import android.content.Context
-import android.content.ContextWrapper
 import android.content.ContentValues
 import android.content.SharedPreferences
 import android.database.sqlite.SQLiteDatabase
@@ -121,7 +120,9 @@ class CredentialMetadataBackupAndroidTest {
         assertFalse(binary.contains("not_allowlisted"))
 
         Fixture().use { destination ->
+            destination.assertDatabasePath()
             CredentialMetadataBackup.restore(destination.context, snapshot)
+            destination.assertDatabasePath()
             val restoredHosts = destination.helper.writableDatabase.rawQuery(
                 "SELECT id, Alias, Host, Username, Port, Password, PasswordCredentialRef FROM contacts ORDER BY id", null,
             ).use { cursor -> buildList {
@@ -181,6 +182,7 @@ class CredentialMetadataBackupAndroidTest {
                 super.checkpointAndCompactAfterCredentialMigration()
             }
         }
+        fixture.context.assertDatabasePath(compacting.writableDatabase, "contactsManager")
         val repository = CredentialRepository(compacting, fixture.preferences, fixture.store)
         val passwordBytes = OLD_HOST_PASSWORD.toByteArray()
         assertTrue(fixture.databaseDirectory().listFiles()!!.any { it.readBytes().containsBytes(passwordBytes) })
@@ -224,6 +226,7 @@ class CredentialMetadataBackupAndroidTest {
         try {
             Fixture().use { destination ->
                 val db = destination.helper.writableDatabase
+                destination.context.assertDatabasePath(db, "contactsManager")
                 db.delete("contacts", null, null)
                 db.delete("scripts", null, null)
                 db.insertOrThrow("contacts", null, hostValues(
@@ -330,11 +333,7 @@ class CredentialMetadataBackupAndroidTest {
         val unique = UUID.randomUUID().toString()
         private val preferencePrefix = "metadata-backup-test-$unique"
         private val root = File(target.noBackupFilesDir, preferencePrefix)
-        val context = object : ContextWrapper(target) {
-            override fun getApplicationContext(): Context = this
-            override fun getDatabasePath(name: String): File = File(root, "databases/$name").also {
-                check(it.parentFile!!.isDirectory || it.parentFile!!.mkdirs())
-            }
+        val context = object : IsolatedDatabaseContext(target, File(root, "databases")) {
             override fun getNoBackupFilesDir(): File = File(root, "no_backup").also { it.mkdirs() }
             override fun getFilesDir(): File = File(root, "files").also { it.mkdirs() }
             override fun getSharedPreferences(name: String, mode: Int) =
@@ -348,6 +347,7 @@ class CredentialMetadataBackupAndroidTest {
         fun insertLegacyV2() {
             val sql = instrumentation.context.assets.open("legacy/v2/contactsManager-v2.sql").bufferedReader().use { it.readText() }
             SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath("contactsManager"), null).use { db ->
+                context.assertDatabasePath(db, "contactsManager")
                 sql.lineSequence().filterNot { it.trimStart().startsWith("--") }
                     .joinToString("\n").split(';').map(String::trim).filter(String::isNotEmpty).forEach(db::execSQL)
             }
@@ -364,7 +364,8 @@ class CredentialMetadataBackupAndroidTest {
             }
         }
 
-        fun upgradeToCurrent() { helper.writableDatabase }
+        fun assertDatabasePath() = context.assertDatabasePath(helper.writableDatabase, "contactsManager")
+        fun upgradeToCurrent() { assertDatabasePath() }
         fun rows(table: String): List<List<String?>> = helper.readableDatabase.rawQuery("SELECT * FROM $table ORDER BY id", null).use { c ->
             buildList { while (c.moveToNext()) add((0 until c.columnCount).map(c::getString)) }
         }

@@ -2,20 +2,34 @@
 
 Baseline **`c1f7d9d`**, verified **2026-10-20**. Dependency-driven execution order within the
 user-approved change: **4.7 before 3.5**. The parent selected this existing-task prerequisite because
-3.5 needs a producer of validated protected private-key bytes. Task IDs/scopes are unchanged.
-The paused, untracked `docs/verification/credential-repository.md` is preserved unchanged.
-Only **4.7** is completed here: **14/67** total. Task **3.5** and all other pending tasks stay unchecked.
+3.5 needs a producer of validated protected private-key bytes. Task IDs/scopes are unchanged. The
+original task-4.7 verification below is historical; the task-4.1 platform follow-up is recorded near
+the end of this document.
+The paused, untracked `docs/verification/credential-repository.md` is preserved unchanged. At this
+original task-4.7 checkpoint, only **4.7** was completed: **14/67** total; task **3.5** and the other
+pending tasks remained unchecked then.
+
+**Current status (2026-10-21): 18/67 tasks complete; only 4.1 newly checked**, pending parent review/commit.
+The user approved its promotion to **[high]** and bounded-parser integration. Current imports, saved-key
+authentication and attempt-only re-entry use `BoundedSshKey`: BC parses/decrypts bounded input and emits
+canonical unencrypted in-memory material before JSch identity loading. Stored source bytes/references
+remain unchanged. Final verification: **210 JVM tests**, and **88 discovered / 86 passed / 2 opt-in
+backup-transport skips / 0 failures** on each of API 26 and API 35. Full current limits, coverage and logs:
+[`ssh-crypto.md`](ssh-crypto.md). The task-4.7 contract/results below remain historical evidence, not a
+blanket guarantee for every format or arbitrary malformed input.
 
 ## Contract / task-3.5 handoff
 
 - `AndroidPrivateKeys.open(preferences, secrets)` returns the Java-callable, blocking
   `PrivateKeyRepository`. The Context overload uses the existing default preferences and production
   `AndroidSecretStore`. Call key I/O/validation/import/read methods off the main thread.
-- `beginImport()` captures the current global key reference and legacy path. `importKey(attempt,
-  stream, passphraseBytes)` owns/closes the stream, bounds the **entire** source to **1 MiB**, validates
-  with the currently pinned JSch **0.1.55**, unlocks encrypted input, and proves private-key usability
-  by signing a fixed synthetic validation message. Unsupported/malformed/public-only input or a wrong
-  passphrase fails before any secret write. This does not add new formats or negotiation algorithms.
+- At the original task-4.7 baseline, `beginImport()` captured the current global key reference and legacy
+  path. `importKey(attempt, stream, passphraseBytes)` owned/closed the stream, bounded the **entire** source
+  to **1 MiB**, validated with then-pinned JSch **0.1.55**, unlocked encrypted input, and proved
+  private-key usability by signing a fixed synthetic validation message. The covered unsupported,
+  malformed, public-only, and wrong-passphrase cases returned before secret write. That historical
+  result does not bound allocations derived from decrypted malformed plaintext and does not establish the
+  same behavior for current JSch 2.28.8. It did not add new formats or negotiation algorithms.
 - After validation, the original source bytes (not path text and not a decrypted temporary PEM) are
   encrypted under a **fresh opaque UUID-based `SecretId`**. A successful durable write and fresh exact
   read-back comparison precede one synchronous preferences commit setting
@@ -62,15 +76,18 @@ requires reselection rather than serializing a URI, key or passphrase into insta
 Readable legacy context is recovered on the worker when Settings opens. Unreadable paths display
 **“Saved key needs import. Tap to select it with the document picker.”** and retain the original path.
 Summaries/labels are fixed non-secret descriptions, never raw paths, provider content or key material.
-Invalid content, wrong passphrases, excessive size and inaccessible documents have safe explanations.
+Invalid content, wrong passphrases, excessive size and inaccessible documents have safe user-facing
+explanations when the importer returns a handled failure; this is not a guarantee against parser
+resource-exhaustion errors.
 For an encrypted key, set **Optional Key Passphrase before import**; the controller validates with that
 configured choice. Import does not change the global auth boolean, retained passphrase, selected host,
 passwords or any host/script/layout data.
 
 `MyConnectionHandler.SshConnectTask` has only a small key-consumer adaptation: protected in-memory
-bytes go to old JSch's `addIdentity(name, byte[], null, passphrase[])`; key/parser/store failures are
-safe messages, buffers are cleared, identities are removed after the connection attempt, and key auth
-does not silently fall back to passwords. Password auth's existing branch is unchanged. No network
+bytes go to old JSch's `addIdentity(name, byte[], null, passphrase[])`; handled key/parser/store failures
+are sanitized, buffers are cleared, identities are removed after the connection attempt, and key auth
+does not silently fall back to passwords. This does not catch process-fatal `OutOfMemoryError` or prove
+resource-bounded parsing. Password auth's existing branch is unchanged. No network
 transport/session/trust/negotiation rewrite was made. The legacy static filename/passphrase fields
 are no longer consumed for key loading; **3.5 must remove/rewire their obsolete reads** as part of its
 complete repository integration.
@@ -137,8 +154,9 @@ Both broad storage permissions remain denied in the successful Settings test.
 - Final full Gradle run: **BUILD SUCCESSFUL in 2m23s, all 83 tasks executed**, without build cache.
   App/test APKs build. Lint: **0 errors/fatal, 154 existing warnings**, none in new sources; no
   suppression/baseline added. The obsolete Settings permission-request finding disappeared.
-  APK metadata retains application ID `com.stripe1.xmouse`, version **25 / 2.0.27**, API **24 / 37 / 37**.
-- Final actual instrumentation: **OK (52 tests), 18.876s**, zero failures. The unchanged standalone
+  This original task-4.7 APK metadata was application ID `com.stripe1.xmouse`, version **25 / 2.0.27**,
+  API **24 / 37 / 37**; the current API 26 floor is documented in the task-4.1 follow-up below.
+- Final actual instrumentation at that verification: **OK (52 tests), 18.876s**, zero failures. The unchanged standalone
   version-2 fixture verification also passes **4/4** cases. Fingerprint:
   `google/sdk_gphone64_x86_64/emu64xa:15/AE3A.240806.043/12960925:userdebug/dev-keys`.
   Completed tests clean up their UUID-owned fixtures and restore the UI tests' prior default preferences
@@ -151,9 +169,82 @@ barrier. The final suite waits for worker completion before asserting the result
 build command timed out at two minutes and was rerun with a sufficient timeout. A streaming adb install
 failed during startup; verified-name/boot installations using `--no-streaming` succeeded.
 
-Not run/claimed: API 24/37 device coverage, hardware-backed Keystore/biometric invalidation, physical
-power-cut durability, manual DocumentsUI interaction, modern OpenSSH/RSA SHA-2 authentication, complete
-password/passphrase integration, full backup extraction, or later-task permission cleanup.
+At the original task-4.7 verification, not run/claimed: API 24/37 device coverage, hardware-backed
+Keystore/biometric invalidation, physical power-cut durability, manual DocumentsUI interaction, modern
+OpenSSH/RSA SHA-2 authentication, complete password/passphrase integration, full backup extraction, or
+later-task permission cleanup.
+
+## Historical task-4.1 platform and fixture-isolation follow-up (2026-10-20)
+
+Status at that review was **17/67 tasks complete; 4.1 unchecked**. The API 24/Android 7 diagnostic
+exercised four independent RSA/ECDSA plain/encrypted fixtures: RSA passed, while ECDSA failed during JSch
+signing because API 24 has no default `AlgorithmParameters.EC` service. The user-approved API 26/Android
+8 minimum stands: the unchanged min-24 APK passed the focused API 26 crypto/import gate, and the current
+API 26 and API 35 full suites later passed on the updated APKs. This is a floor amendment, not an API 24
+fix.
+
+A review of the first final API 26 full run (**84 tests, 38 failures**) found that several test-only
+`ContextWrapper` fixtures changed `getDatabasePath()` but inherited `openOrCreateDatabase()`. On API 26,
+`SQLiteOpenHelper` therefore opened the base application's shared database instead of the separately
+seeded fixture. Credential migration/repository/backup fixtures now use the established two-overload
+isolated-context pattern and assert the actual `SQLiteDatabase.path`; restore destinations use the same
+wrapper. This supersedes the earlier 38-failure result as a fixture-isolation diagnosis, not as a passing
+test run.
+
+After clearing only the disposable API 26 AVD's app/test data, a review run on instrumentation APK hash
+`29ddd076c9e0bc258e7c62eee90c0f11d96e0f4c5bd0c15a38c95497c29784df` had **84 tests and 1 failure**. The
+test `invalidPassphraseLeavesExistingKeyAndGlobalPassphraseChoiceUntouched` reached JSch
+`KeyPairRSA.parse` and threw `OutOfMemoryError` requesting **1,374,342,352 bytes** while
+`PrivateKeyRepository.validate()` was executing `key.decrypt()`. The stack is at lines 1040–1049 of
+`/tmp/opencode/xmouse-task-4.1/review-api26-instrumentation.log`. The method generates synthetic
+encrypted RSA input, but the exact bytes from the failed randomized attempt were not retained; this is
+not a deterministic reproducer. A focused retest passed.
+
+Parent inspection of upstream JSch **2.28.8** explains the mechanism: `KeyPairRSA.java`'s `parseASN1DER`
+branch decodes a length from decrypted plaintext and allocates `new byte[length]` before checking that
+length fits the remaining plaintext via `System.arraycopy`. The 1 MiB input-file cap does not bound this
+derived allocation. Wrong-passphrase decryption can produce malformed plaintext that reaches this
+length handling.
+
+A fresh no-cache build produced the current instrumentation APK. The latest clean full API 26 run passed
+**84 tests, zero failures in 65.6s** (two opt-in backup-transport cases assumption-skipped); the latest
+full API 35 run passed **84/84 in 60.22s**. No parser or crypto production code changed between these
+runs. Those passes did not resolve the unchecked allocation, establish API-26 specificity, or show that
+raising minSdk to 28 would fix it. The entire invalid-import contract was therefore not treated as safe
+at that checkpoint. No key bytes or credentials were logged.
+
+### Approved task-4.1 hardening and verification (2026-10-21)
+
+The user approved promotion of 4.1 to **[high]** and implementation with `openai/gpt-6.1-sol#xhigh`.
+`BoundedSshKey` now uses BC 1.86 parsing/decryption with explicit source, binary, DER depth/node/length,
+key-parameter and KDF limits. It gives JSch canonical unencrypted temporary output; no raw imported,
+decrypted, saved or attempt-only structure bypasses that boundary. `PrivateKeyRepository` keeps original
+encrypted-at-rest bytes and reference publication unchanged. Later wrong-passphrase reads are checked
+again. Repository authentication rejects invalid saved and one-attempt keys before returning material,
+and the final legacy SSH handoff independently uses the boundary. No lost device key is regenerated.
+
+Supported RSA/ECDSA traditional PEM plain/encrypted fixtures still sign after source removal. The 1 MiB
+source cap is complemented by a 16 KiB decoded-structure cap, bounded DER and SSH strings, 1024 raw
+passphrase bytes, and explicit cipher/KDF work limits detailed in `ssh-crypto.md`. Unsupported formats
+fail specifically rather than entering JSch's unsafe parser. Canonical output is never persisted;
+temporary arrays are cleared best-effort, with no claim to wipe immutable or provider/VM copies.
+
+Deterministic tiny malformed DER and valid-padding encrypted-malformed fixtures verify rejection before
+JSch loading without allocating the declared length. A separate test confirms decryption reaches the
+malformed DER; fixed external keys also test real wrong passphrases. These are synthetic regressions for
+the mechanism, not the missing exact original randomized PEM. Previous usable keys/references/auth
+choices survive failures, including saved-record reads and attempt-only re-entry after device-key loss.
+
+The final uncached JVM suite passed **210/210**; lint reported **0 errors / 144 warnings**; both min-26 /
+target-37 APKs built. Full final API 26 and API 35 instrumentation each discovered **88 tests: 86 passed,
+2 existing opt-in backup-transport assumption skips, 0 failures**. These results apply to the exact final
+APK hashes recorded in `ssh-crypto.md`. The fix is the maintained bounded boundary, not the floor
+amendment, an OOM catch, or randomized reruns. Only task 4.1 was newly checked; no staging/commit occurred.
+
+This later evidence supersedes the original run's “not run” platform coverage only for the tests and API
+levels stated here; API 24 ECDSA remains unsupported, and no API 37 device run is claimed. Exact final
+API 26/API 35 logs, limits and device/APK identity evidence are in [`ssh-crypto.md`](ssh-crypto.md) and
+`/tmp/opencode/xmouse-task-4.1/`. Both approved disposable AVDs were stopped after verification.
 
 Final evidence: `/tmp/opencode/xmouse-4.7-{final-build.log,final-instrumentation.log,device.txt,
 app-badging.txt,emulator.log}`; JVM/lint XML under `app/build/`. Earlier iteration logs use the same

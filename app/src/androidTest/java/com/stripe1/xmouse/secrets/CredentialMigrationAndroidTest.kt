@@ -1,7 +1,6 @@
 package com.stripe1.xmouse.secrets
 
 import android.content.Context
-import android.content.ContextWrapper
 import android.content.SharedPreferences
 import android.database.sqlite.SQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
@@ -376,15 +375,11 @@ class CredentialMigrationAndroidTest {
         val alias = AndroidSecretStore.KEY_ALIAS + ".migration-test." + unique
         private val preferenceName = "credential-migration-test-$unique"
         val preferences: SharedPreferences = target.getSharedPreferences(preferenceName, Context.MODE_PRIVATE)
-        val context = object : ContextWrapper(target) {
-            override fun getApplicationContext(): Context = this
+        val context = object : IsolatedDatabaseContext(target, File(root, "databases")) {
             override fun getNoBackupFilesDir(): File = File(root, "no_backup")
-            override fun getDatabasePath(name: String): File = File(root, "databases/$name").also {
-                check(it.parentFile!!.isDirectory || it.parentFile!!.mkdirs())
-            }
         }
         var helper = DatabaseHandler(context)
-        val database get() = helper.writableDatabase
+        val database get() = helper.writableDatabase.also { context.assertDatabasePath(it, "contactsManager") }
         val originalHosts: List<List<String?>>
         val originalScripts: List<List<String?>>
         val originalPreferences: Map<String, *>
@@ -420,11 +415,14 @@ class CredentialMigrationAndroidTest {
         fun run(
             secrets: SecretStore = store(), preferences: SharedPreferences = this.preferences,
             probe: CredentialMigrationProbe = CredentialMigrationProbe { _, _ -> },
-        ) = AndroidCredentialMigration.run(helper, preferences, secrets, probe)
+        ) = AndroidCredentialMigration.run(helper.also {
+            context.assertDatabasePath(it.writableDatabase, "contactsManager")
+        }, preferences, secrets, probe)
 
         fun reopen() {
             helper.close()
             helper = DatabaseHandler(context)
+            context.assertDatabasePath(helper.writableDatabase, "contactsManager")
         }
 
         fun secretRecords() = File(context.noBackupFilesDir, "secrets").listFiles()!!.filter { it.name.endsWith(".secret") }
