@@ -827,6 +827,9 @@ class CredentialRepositoryAndroidTest {
     }
     private fun barrier() {
         assertNotEquals(Looper.getMainLooper(), Looper.myLooper())
+        // Lifecycle/picker main callbacks can enqueue repository work. Drain them BEFORE placing the
+        // worker barrier, so fixture teardown never closes SQLite under a queued onResume prepare.
+        instrumentation.waitForIdleSync()
         val latch = CountDownLatch(1); AndroidCredentials.get(target).execute { latch.countDown() }
         assertTrue(latch.await(10, TimeUnit.SECONDS)); instrumentation.waitForIdleSync()
     }

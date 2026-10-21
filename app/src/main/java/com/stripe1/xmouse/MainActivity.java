@@ -65,6 +65,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 	public static DatabaseHandler db;
 	public static MyConnectionHandler conn;
+	private MyConnectionHandler screenConnection;
 	public static IDoTool doTool;
 	LinearLayout mouseLayout;
 	LinearLayout keyboardLayout;
@@ -118,7 +119,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	private int startPosition;
 	//static ListView scriptList;
 	private FloatingActionButton fab;
-	public static TextView recentCmdTextView;
+	private TextView recentCmdTextView;
 
 
 	private Sensor gyroscope;
@@ -332,6 +333,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		initMenu();
 
 		conn = new MyConnectionHandler(MainActivity.this, MainActivity.this);
+		screenConnection = conn;
 	}
 	public void initDb(){
 
@@ -494,7 +496,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		super.onStart();
 		// The activity is about to become visible.
 		Log.d(TAG, "activity_started");
-		if (conn != null) conn.startCredentialUi();
+		if (screenConnection != null) screenConnection.startCredentialUi();
 
 	}
 	@Override
@@ -509,8 +511,10 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		//Toast.makeText(getBaseContext(), "setting_autoconnect "+String.valueOf(setting_autoconnect), Toast.LENGTH_SHORT).show();
 		final MyConnectionHandler credentialOwner = conn;
 		final int credentialToken = credentialOwner.credentialGeneration();
-		AndroidCredentials.get(this).execute(() -> {
-			boolean ready = AndroidCredentials.get(this).prepare();
+		final com.stripe1.xmouse.secrets.CredentialRepository credentialRepository = AndroidCredentials.get(getApplicationContext());
+		credentialRepository.execute(() -> {
+			if (!credentialOwner.credentialWorkCurrent(credentialToken)) return;
+			boolean ready = credentialRepository.prepare();
 			runOnUiThread(() -> {
 				if (!credentialOwner.credentialsCurrent(credentialToken)) return;
 				if (!ready) Toast.makeText(this, com.stripe1.xmouse.secrets.CredentialRepository.RECOVERY_MESSAGE, Toast.LENGTH_LONG).show();
@@ -536,22 +540,23 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 	@Override
 	protected void onStop() {
-		conn.stopCredentialUi();
+		screenConnection.stopCredentialUi();
 		super.onStop();  // Always call the superclass method first
 	}
 	@Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-		if (conn == null || !conn.onCredentialResult(requestCode, resultCode, data)) super.onActivityResult(requestCode, resultCode, data);
+		if (screenConnection == null || !screenConnection.onCredentialResult(requestCode, resultCode, data)) super.onActivityResult(requestCode, resultCode, data);
 	}
 	@Override
 	protected void onDestroy() {
 		super.onDestroy();
 		// The activity is about to be destroyed.
-		conn.xMouseDisconnect();
+		screenConnection.destroy();
+		if (conn == screenConnection) conn = null;
 	}
 
 	public void showConnectionStat(){
 		if(conDiscButton != null){
-			if(conn.session==null || !conn.session.isConnected()){
+			if(!screenConnection.isConnected()){
 				conDiscButton.setIcon(R.drawable.state_disc);
 			}else{
 				conDiscButton.setIcon(R.drawable.state_conn);
@@ -677,7 +682,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			startActivity(intent);
 		} else if (id == R.id.action_conn_disc) {
 
-			if(conn.session != null && conn.session.isConnected()){
+			if(conn.isConnected()){
 				conn.xMouseDisconnect();
 			}else {
 				conn.xMouseTryConnect();
@@ -748,9 +753,11 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 					conn.xMouseDisconnect();
 					final MyConnectionHandler owner = conn;
 					final int token = owner.credentialGeneration();
-					AndroidCredentials.get(this).execute(() -> {
+					final com.stripe1.xmouse.secrets.CredentialRepository repository = AndroidCredentials.get(getApplicationContext());
+					repository.execute(() -> {
 						try {
-							AndroidCredentials.get(this).selectHost(id);
+							if (!owner.credentialWorkCurrent(token)) return;
+							repository.selectHost(id);
 							runOnUiThread(() -> {
 								if (!owner.credentialsCurrent(token)) return;
 								getPreferences();
@@ -1182,8 +1189,11 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 
 
-	@Override
-	public void performCallback() {
+	@Override public void showRecentCommand(String command) {
+		recentCmdTextView.setText(command);
+	}
+
+	@Override public void performCallback() {
 		Log.d(TAG, "connection_state_changed");
 		showConnectionStat();
 	}

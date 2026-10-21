@@ -326,27 +326,7 @@ public class MyMouseView extends View {
                 touch_up(downEnd > 0);
                 invalidate();
 
-                /*if(MainActivity.setting_mouse_background){
-                    if(MainActivity.session!=null){
-                        if(MainActivity.session.isConnected()){
-
-                            SshScpTask scp = new SshScpTask(getActivity(),"100","100"){
-                                protected void onPostExecute(String result) {
-                                    Log.d("SshScpTask","onPostExecute");
-                                    try {
-                                        //FileInputStream fis = getActivity().openFileInput("mouse_bg.jpg");
-                                        Bitmap mBitmap = BitmapFactory.decodeFile(getActivity().getFilesDir().getAbsoluteFile()+"/mouse_bg.jpg");
-                                        //Bitmap mBitmap = Bitmap.createScaledBitmap(Bitmap src, int dstWidth, int dstHeight, boolean filter);
-                                        canvas = new Canvas(mBitmap.copy(Bitmap.Config.ARGB_8888, true));
-                                    } catch (Exception e) {
-                                        // TODO Auto-generated catch block
-                                    }
-                                }
-                            };
-                            scp.execute("");
-                        }
-                    }
-                }*/
+                // Legacy background-image SCP was disabled. Do not dispatch network work from this View.
                 break;
         }
         return true;

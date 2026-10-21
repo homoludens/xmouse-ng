@@ -4,7 +4,7 @@ package com.stripe1.xmouse;
 public interface CommandTransport {
     /**
      * Sends the command unchanged, leaving shell framing to the transport.
-     * The result reports local write success, not remote command completion.
+     * True reports local acceptance (possibly queued), not a completed write or remote execution.
      */
     boolean executeShellCommand(String command);
 }
