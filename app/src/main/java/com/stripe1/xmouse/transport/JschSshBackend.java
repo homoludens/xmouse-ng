@@ -6,6 +6,7 @@ import com.jcraft.jsch.JSch;
 import com.stripe1.xmouse.connection.Endpoint;
 import com.stripe1.xmouse.secrets.AuthenticationMaterial;
 import com.stripe1.xmouse.secrets.BoundedSshKey;
+import com.stripe1.xmouse.trust.HostKeyMismatch;
 import java.io.InputStream;
 import java.io.OutputStream;
 
@@ -16,6 +17,7 @@ public final class JschSshBackend implements SshBackend {
         default void configure(JSch jsch, com.jcraft.jsch.Session session, Endpoint endpoint,
                                java.util.function.BooleanSupplier current) throws Exception { configure(jsch, session, endpoint); }
         default void cancelPendingTrust() { }
+        default void replaceHostKey(HostKeyMismatch mismatch, java.util.function.BooleanSupplier current) throws Exception { }
     }
 
     private final SessionPolicy policy;
@@ -27,6 +29,9 @@ public final class JschSshBackend implements SshBackend {
     }
 
     @Override public void cancelPendingTrust() { policy.cancelPendingTrust(); }
+    @Override public void replaceHostKey(HostKeyMismatch mismatch, java.util.function.BooleanSupplier current) throws Exception {
+        policy.replaceHostKey(mismatch, current);
+    }
 
     @Override public Session create(SshConnectionRequest request, AuthenticationMaterial authentication,
                                     java.util.function.BooleanSupplier current) throws Exception {

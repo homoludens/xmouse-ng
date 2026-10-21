@@ -69,9 +69,138 @@ class HostTrustRequestsTest {
     }
     @Test fun changedKeyBlocksWithoutFirstTrustReplacementPrompt() = fixture { repo, requests, observer, worker ->
         val endpoint = Endpoint.manual("desk.local", 22)
-        repo.approve(endpoint.identity, syntheticHostKey(2), BooleanSupplier { true })
-        assertEquals(HostTrustException.Reason.MISMATCH, failure(verify(worker, requests)).reason)
-        assertTrue(observer.shown.isEmpty()); assertTrue(repo.find(endpoint.identity)!!.matches(syntheticHostKey(2)))
+        val trusted = syntheticHostKey(2); val candidate = syntheticHostKey(3)
+        repo.approve(endpoint.identity, trusted, BooleanSupplier { true })
+        val mismatchError = failure(worker.submit {
+            requests.verify(endpoint, candidate, BooleanSupplier { true })
+        })
+        assertEquals(HostTrustException.Reason.MISMATCH, mismatchError.reason)
+        val mismatch = requireNotNull(mismatchError.mismatch)
+        assertEquals(endpoint, mismatch.endpoint)
+        assertTrue(mismatch.trustedKey.matches(trusted)); assertTrue(mismatch.presentedKey.matches(candidate))
+        assertTrue(observer.shown.isEmpty()); assertTrue(repo.find(endpoint.identity)!!.matches(trusted))
+        assertTrue(mismatch.confirm())
+        requests.replace(mismatch, BooleanSupplier { true })
+        assertTrue(repo.find(endpoint.identity)!!.matches(candidate))
+    }
+    @Test fun cancelledOrStaleMismatchReviewCannotReplaceCurrentTrustedKey() = fixture { repo, requests, observer, worker ->
+        val endpoint = Endpoint.manual("desk.local", 22)
+        val original = syntheticHostKey(1); val candidate = syntheticHostKey(2); val concurrent = syntheticHostKey(3)
+        repo.approve(endpoint.identity, original, BooleanSupplier { true })
+        val cancelled = failure(worker.submit { requests.verify(endpoint, candidate, BooleanSupplier { true }) }).mismatch!!
+        cancelled.cancel()
+        assertFalse(cancelled.confirm())
+        assertEquals(HostTrustException.Reason.CANCELLED, assertThrows(HostTrustException::class.java) {
+            requests.replace(cancelled, BooleanSupplier { true })
+        }.reason)
+        assertTrue(repo.find(endpoint.identity)!!.matches(original))
+
+        val stale = failure(worker.submit { requests.verify(endpoint, candidate, BooleanSupplier { true }) }).mismatch!!
+        assertTrue(stale.confirm())
+        repo.replace(endpoint.identity, original, concurrent, BooleanSupplier { true })
+        assertEquals(HostTrustException.Reason.MISMATCH, assertThrows(HostTrustException::class.java) {
+            requests.replace(stale, BooleanSupplier { true })
+        }.reason)
+        assertTrue(repo.find(endpoint.identity)!!.matches(concurrent))
+        assertTrue(observer.shown.isEmpty())
+    }
+    @Test fun cancellingClaimedReplacementDuringStagingReturnsImmediatelyAndKeepsOldRecords() {
+        val directory = Files.createTempDirectory("xmouse-trust-replacement-cancel-").toFile()
+        val staged = CountDownLatch(1); val release = CountDownLatch(1)
+        val blockNextSync = AtomicBoolean(false)
+        val io = object : TrustFileIo() {
+            override fun sync(output: java.io.FileOutputStream) {
+                super.sync(output)
+                if (blockNextSync.compareAndSet(true, false)) {
+                    staged.countDown()
+                    check(release.await(10, TimeUnit.SECONDS))
+                }
+            }
+        }
+        val repository = HostKeyRepository(directory, io)
+        val requests = HostTrustRequests(repository, Executor { it.run() })
+        val worker = Executors.newSingleThreadExecutor()
+        val endpoint = Endpoint.manual("desk.local", 22)
+        val other = Endpoint.manual("other.local", 2200)
+        val old = syntheticHostKey(11); val candidate = syntheticHostKey(12); val unrelated = syntheticHostKey(13)
+        val current = BooleanSupplier { true }
+        try {
+            repository.approve(endpoint.identity, old, current)
+            repository.approve(other.identity, unrelated, current)
+            val mismatch = assertThrows(HostTrustException::class.java) {
+                requests.verify(endpoint, candidate, current)
+            }.mismatch!!
+            assertTrue(mismatch.confirm())
+            assertFalse(mismatch.confirm()) // A second confirmation cannot claim the same review.
+
+            blockNextSync.set(true)
+            val replacement = worker.submit { requests.replace(mismatch, current) }
+            assertTrue("replacement never reached staged fsync", staged.await(5, TimeUnit.SECONDS))
+            assertFalse(mismatch.confirm()) // The worker has claimed the one confirmed candidate.
+            val start = System.nanoTime()
+            mismatch.cancel()
+            assertTrue("cancellation waited for worker I/O", System.nanoTime() - start < TimeUnit.SECONDS.toNanos(1))
+            assertFalse(replacement.isDone)
+            release.countDown()
+
+            assertEquals(HostTrustException.Reason.CANCELLED, failure(replacement).reason)
+            assertFalse(mismatch.isCurrent()); assertFalse(mismatch.confirm())
+            assertEquals(HostTrustException.Reason.CANCELLED, assertThrows(HostTrustException::class.java) {
+                requests.replace(mismatch, current)
+            }.reason)
+            val reopened = HostKeyRepository(directory, TrustFileIo())
+            assertTrue(reopened.find(endpoint.identity)!!.matches(old))
+            assertTrue(reopened.find(other.identity)!!.matches(unrelated))
+        } finally {
+            release.countDown(); requests.detach(); worker.shutdownNow()
+            assertTrue(worker.awaitTermination(5, TimeUnit.SECONDS)); directory.deleteRecursively()
+        }
+    }
+
+    @Test fun cancellationAfterAtomicReplacementMayKeepOnlyTheConfirmedPairButCannotReportSuccess() {
+        val directory = Files.createTempDirectory("xmouse-trust-replacement-commit-race-").toFile()
+        val committed = CountDownLatch(1); val release = CountDownLatch(1)
+        val blockAfterRename = AtomicBoolean(false)
+        val io = object : TrustFileIo() {
+            override fun replace(source: java.io.File, destination: java.io.File) {
+                super.replace(source, destination)
+                if (blockAfterRename.compareAndSet(true, false)) {
+                    committed.countDown()
+                    check(release.await(10, TimeUnit.SECONDS))
+                }
+            }
+        }
+        val repository = HostKeyRepository(directory, io)
+        val requests = HostTrustRequests(repository, Executor { it.run() })
+        val worker = Executors.newSingleThreadExecutor()
+        val endpoint = Endpoint.manual("desk.local", 22)
+        val other = Endpoint.manual("other.local", 2200)
+        val old = syntheticHostKey(21); val candidate = syntheticHostKey(22); val unrelated = syntheticHostKey(23)
+        val current = BooleanSupplier { true }
+        try {
+            repository.approve(endpoint.identity, old, current)
+            repository.approve(other.identity, unrelated, current)
+            val mismatch = assertThrows(HostTrustException::class.java) {
+                requests.verify(endpoint, candidate, current)
+            }.mismatch!!
+            assertTrue(mismatch.confirm())
+            blockAfterRename.set(true)
+            val replacement = worker.submit { requests.replace(mismatch, current) }
+            assertTrue("atomic replacement was not reached", committed.await(5, TimeUnit.SECONDS))
+
+            mismatch.cancel() // Rename has committed; cancellation must not attempt an unsafe rollback.
+            assertFalse(mismatch.confirm())
+            release.countDown()
+
+            assertEquals(HostTrustException.Reason.CANCELLED, failure(replacement).reason)
+            val reopened = HostKeyRepository(directory, TrustFileIo())
+            assertTrue(reopened.find(endpoint.identity)!!.matches(candidate))
+            assertTrue(reopened.find(other.identity)!!.matches(unrelated))
+            assertFalse(reopened.find(endpoint.identity)!!.matches(old))
+        } finally {
+            release.countDown(); requests.detach(); worker.shutdownNow()
+            assertTrue(worker.awaitTermination(5, TimeUnit.SECONDS)); directory.deleteRecursively()
+        }
     }
     @Test fun detachDoesNotBlockOnPersistenceAndCancelsBeforePublication() {
         val directory = Files.createTempDirectory("xmouse-trust-cancel-write-").toFile()

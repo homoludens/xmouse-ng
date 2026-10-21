@@ -16,6 +16,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.stripe1.xmouse.connection.Endpoint
 import com.stripe1.xmouse.secrets.AndroidCredentials
 import com.stripe1.xmouse.secrets.AndroidSecretFileIo
+import com.stripe1.xmouse.secrets.SecretFileIo
 import com.stripe1.xmouse.trust.*
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.util.OpenSSHPublicKeyUtil
@@ -26,6 +27,7 @@ import java.io.File
 import java.lang.ref.WeakReference
 import java.util.UUID
 import java.util.concurrent.*
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.BooleanSupplier
 
 /** Real dialog/presenter/lifecycle and durable Android files; no real hosts or credentials. */
@@ -33,16 +35,29 @@ import java.util.function.BooleanSupplier
 class HostTrustAndroidTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private val target get() = ApplicationProvider.getApplicationContext<Context>()
+    private class BlockingStageIo : SecretFileIo by AndroidSecretFileIo {
+        val blockNextSync = AtomicBoolean(false)
+        val staged = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        override fun sync(output: java.io.FileOutputStream) {
+            AndroidSecretFileIo.sync(output)
+            if (blockNextSync.compareAndSet(true, false)) {
+                staged.countDown()
+                if (!release.await(10, TimeUnit.SECONDS)) throw java.io.IOException("test stage release timeout")
+            }
+        }
+    }
     private fun <T> field(owner: Any, name: String): T {
         @Suppress("UNCHECKED_CAST")
         return owner.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(owner) as T
     }
-    private class Fixture(val directory: File, val timeout: Long) {
-        val repo = HostKeyRepository(directory, AndroidSecretFileIo)
+    private class Fixture(val directory: File, val timeout: Long, fileIo: SecretFileIo) {
+        val repo = HostKeyRepository(directory, fileIo)
         val main = Handler(Looper.getMainLooper())
         val requests = HostTrustRequests(repo, { main.post(it) }, timeout)
         val worker = Executors.newSingleThreadExecutor { Thread(it, "synthetic-host-trust-worker") }
         val key = ApprovedHostKey.parse(OpenSSHPublicKeyUtil.encodePublicKey(Ed25519PrivateKeyParameters(ByteArray(32) { (it + 1).toByte() }, 0).generatePublicKey()))
+        val candidateKey = ApprovedHostKey.parse(OpenSSHPublicKeyUtil.encodePublicKey(Ed25519PrivateKeyParameters(ByteArray(32) { (it + 41).toByte() }, 0).generatePublicKey()))
         val endpoint = Endpoint.manual("Desktop.LOCAL.", 2222)
         lateinit var presenter: MyConnectionHandler
         fun destroyPresenter() { if (::presenter.isInitialized) presenter.destroy() }
@@ -51,10 +66,14 @@ class HostTrustAndroidTest {
             thread = Thread.currentThread(); requests.verify(host, key, BooleanSupplier { true })
         }
     }
-    private fun fixture(timeout: Long = 10_000, action: (Fixture, ActivityScenario<MainActivity>) -> Unit) {
+    private fun fixture(
+        timeout: Long = 10_000,
+        fileIo: SecretFileIo = AndroidSecretFileIo,
+        action: (Fixture, ActivityScenario<MainActivity>) -> Unit,
+    ) {
         val preferences = PreferenceManager.getDefaultSharedPreferences(target)
         val oldAuto = preferences.all["autologin_checkbox"] as Boolean?
-        val f = Fixture(File(target.noBackupFilesDir, "synthetic-host-trust-${UUID.randomUUID()}"), timeout)
+        val f = Fixture(File(target.noBackupFilesDir, "synthetic-host-trust-${UUID.randomUUID()}"), timeout, fileIo)
         try {
             preferences.edit(commit = true) { putBoolean("autologin_checkbox", false) }
             ActivityScenario.launch<MainActivity>(Intent(target, MainActivity::class.java)).use { scenario ->
@@ -94,6 +113,26 @@ class HostTrustAndroidTest {
             result?.let { return it }; Thread.sleep(10)
         }
         throw AssertionError("No first-trust prompt")
+    }
+    private fun mismatch(f: Fixture): HostKeyMismatch {
+        f.repo.approve(f.endpoint.identity, f.key, BooleanSupplier { true })
+        val error = assertThrows(HostTrustException::class.java) {
+            f.requests.verify(f.endpoint, f.candidateKey, BooleanSupplier { true })
+        }
+        assertEquals(HostTrustException.Reason.MISMATCH, error.reason)
+        return requireNotNull(error.mismatch)
+    }
+    private fun replacementDialog(f: Fixture, fieldName: String): AlertDialog {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (System.nanoTime() < deadline) {
+            var result: AlertDialog? = null
+            instrumentation.runOnMainSync {
+                val ui = field<HostTrustReplacementUi>(f.presenter, "replacementUi")
+                result = field<AlertDialog?>(ui, fieldName)?.takeIf { it.isShowing }
+            }
+            result?.let { return it }; Thread.sleep(10)
+        }
+        throw AssertionError("No mismatch review dialog: $fieldName")
     }
     private fun failed(future: Future<*>): HostTrustException = assertThrows(ExecutionException::class.java) { future.get(10, TimeUnit.SECONDS) }.cause as HostTrustException
 
@@ -146,5 +185,122 @@ class HostTrustAndroidTest {
         assertEquals(HostTrustException.Reason.EXPIRED, failed(future).reason)
         instrumentation.waitForIdleSync(); assertFalse(dialog.isShowing)
         request.accept(); assertNull(f.repo.find(f.endpoint.identity))
+    }
+
+    @Test fun mismatchReviewDisplaysBothKeysAndCancelNeverReplacesOrChangesAuthenticationChoice() = fixture { f, _ ->
+        val preferences = PreferenceManager.getDefaultSharedPreferences(target)
+        val previousChoice = preferences.getBoolean("pref_usekeyauth", false)
+        preferences.edit(commit = true) { putBoolean("pref_usekeyauth", true) }
+        try {
+            val mismatch = mismatch(f)
+            instrumentation.runOnMainSync { f.presenter.hostKeyMismatch(mismatch) }
+            val review = replacementDialog(f, "reviewDialog")
+            instrumentation.runOnMainSync {
+                val message = review.findViewById<TextView>(android.R.id.message).text.toString()
+                assertTrue(message.contains("Desktop.LOCAL.")); assertTrue(message.contains("2222"))
+                assertTrue(message.contains(f.key.algorithm)); assertTrue(message.contains(f.key.fingerprint))
+                assertTrue(message.contains(f.candidateKey.algorithm)); assertTrue(message.contains(f.candidateKey.fingerprint))
+                assertTrue(message.contains("changed key may indicate impersonation"))
+                assertEquals("Review replacement", review.getButton(AlertDialog.BUTTON_POSITIVE).text.toString())
+                assertEquals("Cancel", review.getButton(AlertDialog.BUTTON_NEGATIVE).text.toString())
+                review.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            }
+            val confirmation = replacementDialog(f, "confirmationDialog")
+            instrumentation.runOnMainSync {
+                val message = confirmation.findViewById<TextView>(android.R.id.message).text.toString()
+                assertTrue(message.contains(f.key.fingerprint)); assertTrue(message.contains(f.candidateKey.fingerprint))
+                assertTrue(message.contains("verifying the new fingerprint independently"))
+                assertTrue(message.contains("connect again afterward to authenticate"))
+                assertEquals("Replace trusted key", confirmation.getButton(AlertDialog.BUTTON_POSITIVE).text.toString())
+                assertEquals("Cancel", confirmation.getButton(AlertDialog.BUTTON_NEGATIVE).text.toString())
+                confirmation.getButton(AlertDialog.BUTTON_NEGATIVE).performClick()
+            }
+            instrumentation.waitForIdleSync()
+            assertFalse(mismatch.confirm())
+            assertTrue(f.repo.find(f.endpoint.identity)!!.matches(f.key))
+            assertTrue(preferences.getBoolean("pref_usekeyauth", false))
+            assertFalse(f.presenter.isConnected)
+        } finally { preferences.edit(commit = true) { putBoolean("pref_usekeyauth", previousChoice) } }
+    }
+
+    @Test fun explicitReplacementButtonDurablyReplacesOnlyTrustAndDoesNotAuthenticateBlockedAttempt() = fixture { f, _ ->
+        val mismatch = mismatch(f)
+        instrumentation.runOnMainSync { f.presenter.hostKeyMismatch(mismatch) }
+        val review = replacementDialog(f, "reviewDialog")
+        instrumentation.runOnMainSync { review.getButton(AlertDialog.BUTTON_POSITIVE).performClick() }
+        val confirmation = replacementDialog(f, "confirmationDialog")
+        instrumentation.runOnMainSync { confirmation.getButton(AlertDialog.BUTTON_POSITIVE).performClick() }
+
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        var stored: ApprovedHostKey? = null
+        while (System.nanoTime() < deadline) {
+            stored = HostKeyRepository(f.directory, AndroidSecretFileIo).find(f.endpoint.identity)
+            if (stored?.matches(f.candidateKey) == true) break
+            Thread.sleep(10)
+        }
+        assertNotNull(stored); assertTrue(stored!!.matches(f.candidateKey))
+        assertFalse(stored!!.matches(f.key)); assertFalse(f.presenter.isConnected)
+    }
+
+    @Test fun stoppingOrDestroyingMismatchReviewInvalidatesLateConfirmAndPresenterCallbacks() = fixture { f, scenario ->
+        val mismatch = mismatch(f)
+        instrumentation.runOnMainSync { f.presenter.hostKeyMismatch(mismatch) }
+        val review = replacementDialog(f, "reviewDialog")
+        instrumentation.runOnMainSync { review.getButton(AlertDialog.BUTTON_POSITIVE).performClick() }
+        val confirmation = replacementDialog(f, "confirmationDialog")
+        scenario.moveToState(Lifecycle.State.CREATED)
+        instrumentation.waitForIdleSync()
+        assertFalse(mismatch.confirm())
+        assertTrue(f.repo.find(f.endpoint.identity)!!.matches(f.key))
+        instrumentation.runOnMainSync { f.presenter.hostKeyMismatch(mismatch) }
+        scenario.moveToState(Lifecycle.State.RESUMED)
+        val laterMismatch = mismatch(f)
+        instrumentation.runOnMainSync { f.presenter.hostKeyMismatch(laterMismatch) }
+        val laterReview = replacementDialog(f, "reviewDialog")
+        instrumentation.waitForIdleSync()
+        assertFalse(review.isShowing); assertFalse(confirmation.isShowing)
+        assertTrue(f.repo.find(f.endpoint.identity)!!.matches(f.key))
+
+        instrumentation.runOnMainSync { f.destroyPresenter() }
+        instrumentation.runOnMainSync { f.presenter.hostKeyMismatch(laterMismatch) }
+        assertFalse(laterReview.isShowing)
+        assertFalse(laterMismatch.confirm())
+        assertTrue(f.repo.find(f.endpoint.identity)!!.matches(f.key))
+    }
+
+    @Test fun activityStopCancelsClaimedReplacementDuringStagingWithoutBlockingOrChangingTrust() {
+        val io = BlockingStageIo()
+        fixture(fileIo = io) { f, scenario ->
+            try {
+                val mismatch = mismatch(f)
+                val other = Endpoint.manual("unrelated.local", 2200)
+                val unrelated = ApprovedHostKey.parse(
+                    OpenSSHPublicKeyUtil.encodePublicKey(
+                        Ed25519PrivateKeyParameters(ByteArray(32) { (it + 81).toByte() }, 0).generatePublicKey(),
+                    ),
+                )
+                f.repo.approve(other.identity, unrelated, BooleanSupplier { true })
+                io.blockNextSync.set(true)
+                instrumentation.runOnMainSync { f.presenter.hostKeyMismatch(mismatch) }
+                val review = replacementDialog(f, "reviewDialog")
+                instrumentation.runOnMainSync { review.getButton(AlertDialog.BUTTON_POSITIVE).performClick() }
+                val confirmation = replacementDialog(f, "confirmationDialog")
+                instrumentation.runOnMainSync { confirmation.getButton(AlertDialog.BUTTON_POSITIVE).performClick() }
+                assertTrue("replacement never reached staged fsync", io.staged.await(5, TimeUnit.SECONDS))
+
+                val stopStarted = System.nanoTime()
+                scenario.moveToState(Lifecycle.State.CREATED)
+                assertTrue("Activity stop waited for replacement I/O", System.nanoTime() - stopStarted < TimeUnit.SECONDS.toNanos(3))
+                assertEquals("replacement worker should remain blocked until the test releases staging", 1L, io.release.count)
+                assertFalse(mismatch.isCurrent()); assertFalse(mismatch.confirm())
+                io.release.countDown()
+
+                val reopened = HostKeyRepository(f.directory, AndroidSecretFileIo)
+                assertTrue(reopened.find(f.endpoint.identity)!!.matches(f.key))
+                assertTrue(reopened.find(other.identity)!!.matches(unrelated))
+                assertFalse(reopened.find(f.endpoint.identity)!!.matches(f.candidateKey))
+                assertFalse(f.presenter.isConnected)
+            } finally { io.release.countDown() }
+        }
     }
 }

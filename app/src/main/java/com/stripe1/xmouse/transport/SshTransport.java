@@ -4,6 +4,7 @@ import com.stripe1.xmouse.CommandTransport;
 import com.stripe1.xmouse.secrets.AuthenticationMaterial;
 import com.stripe1.xmouse.secrets.PrivateKeyImportException;
 import com.stripe1.xmouse.trust.HostTrustException;
+import com.stripe1.xmouse.trust.HostKeyMismatch;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -24,11 +25,12 @@ import java.util.concurrent.Executors;
  * Comprehensive deadlines, bounded output, keepalives and failure classification remain task 4.6.
  */
 public final class SshTransport implements CommandTransport, AutoCloseable {
-    public enum Operation { CONNECT, WRITE, EXEC, SCP, DISCONNECT }
+    public enum Operation { CONNECT, WRITE, EXEC, SCP, DISCONNECT, TRUST_REPLACEMENT }
     public enum Failure { CONNECTION, PRIVATE_KEY, IO, CLOSED, HOST_TRUST, HOST_MISMATCH, TRUST_STORAGE }
     public interface Callback<T> {
         void success(T value);
         void failure(Failure failure);
+        default void mismatch(HostKeyMismatch mismatch) { }
     }
 
     private static final OutputStream DISCARD = new OutputStream() {
@@ -68,6 +70,7 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
             connecting = true;
             worker.execute(() -> {
                 Failure failure = null;
+                HostKeyMismatch mismatch = null;
                 try {
                     closeResources();
                     if (token != generation) return;
@@ -88,6 +91,7 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
                         if (token == generation) ready = true;
                     }
                 } catch (HostTrustException rejected) {
+                    mismatch = rejected.getMismatch();
                     switch (rejected.getReason()) {
                         case MISMATCH: failure = Failure.HOST_MISMATCH; break;
                         case STORAGE: case INVALID_REPOSITORY: failure = Failure.TRUST_STORAGE; break;
@@ -100,6 +104,34 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
                     if (failure != null || token != generation) closeResources();
                     if (token == generation) connecting = false;
                 }
+                if (token == generation) {
+                    if (failure == null) callback.success(null);
+                    else {
+                        if (mismatch != null) callback.mismatch(mismatch);
+                        callback.failure(failure);
+                    }
+                }
+            });
+        }
+    }
+
+    /** Persist a user-confirmed key replacement on the same worker; never resumes the blocked attempt. */
+    public void replaceHostKey(HostKeyMismatch mismatch, Callback<Void> callback) {
+        synchronized (submission) {
+            if (disposed) { callback.failure(Failure.CLOSED); return; }
+            long token = generation;
+            worker.execute(() -> {
+                Failure failure = null;
+                try {
+                    if (token != generation || !mismatch.isCurrent()) throw new HostTrustException(HostTrustException.Reason.CANCELLED);
+                    backend.replaceHostKey(mismatch, () -> token == generation && mismatch.isCurrent());
+                    if (token != generation) throw new HostTrustException(HostTrustException.Reason.CANCELLED);
+                } catch (HostTrustException rejected) {
+                    switch (rejected.getReason()) {
+                        case STORAGE: case INVALID_REPOSITORY: failure = Failure.TRUST_STORAGE; break;
+                        default: failure = Failure.HOST_MISMATCH;
+                    }
+                } catch (Exception ignored) { failure = Failure.TRUST_STORAGE; }
                 if (token == generation) {
                     if (failure == null) callback.success(null); else callback.failure(failure);
                 }

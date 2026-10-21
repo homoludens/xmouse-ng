@@ -38,9 +38,13 @@ for file in source.rglob("*"):
     if file.suffix in (".java", ".kt"):
         assert not re.search(r'StrictHostKeyChecking"\s*,\s*"no', file.read_text()), file
 for file in (source / "trust").glob("*.kt"):
-    if file.name == "AndroidHostTrust.kt":
+    if file.name in ("AndroidHostTrust.kt", "HostTrustReplacementUi.kt"):
         continue
     text = re.sub(r"/\*.*?\*/|//[^\n]*", "", file.read_text(), flags=re.S)
     assert not re.search(r"import\s+(android\.|androidx\.)|\b(Activity|Context|View|AlertDialog|Handler)\b", text), file
     assert not re.search(r"\b(Log\.|System\.(out|err)|printStackTrace|KeyStore|SecretStore)\b", text), file
+replacement_ui = (source / "trust" / "HostTrustReplacementUi.kt").read_text()
+assert "class HostTrustReplacementUi" in replacement_ui
+assert "Replace trusted key" in replacement_ui and "Review replacement" in replacement_ui
+assert not re.search(r"import\s+com\.stripe1\.xmouse\.(transport|secrets)|\b(SshTransport|AuthenticationMaterial|CredentialRepository)\b", replacement_ui)
 print("SSH extraction/trust source boundaries passed; no unverified-host fallback.")

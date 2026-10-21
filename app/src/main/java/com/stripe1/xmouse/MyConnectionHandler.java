@@ -22,6 +22,8 @@ import com.stripe1.xmouse.trust.AndroidHostTrust;
 import com.stripe1.xmouse.trust.HostTrustPolicy;
 import com.stripe1.xmouse.trust.HostTrustRequests;
 import com.stripe1.xmouse.trust.HostTrustUi;
+import com.stripe1.xmouse.trust.HostKeyMismatch;
+import com.stripe1.xmouse.trust.HostTrustReplacementUi;
 import com.stripe1.xmouse.transport.SshConnectionRequest;
 import com.stripe1.xmouse.transport.SshTransport;
 import com.stripe1.xmouse.transport.TransportPresentation;
@@ -44,6 +46,8 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
     private int authenticationGeneration;
     private boolean readingCredentials;
     private HostTrustUi trustUi;
+    private HostTrustReplacementUi replacementUi;
+    private HostKeyMismatch replacingMismatch;
 
     public MyConnectionHandler(Activity activity, MyInterface screen) {
         this(activity, screen, productionTrust(activity));
@@ -67,6 +71,11 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
         credentialUi = new CredentialUi(activity);
         presentation = new TransportPresentation(main::post);
         presentation.attach(this);
+        replacementUi = new HostTrustReplacementUi(activity, mismatch -> {
+            if (this.activity == null || !mismatch.isCurrent()) return;
+            replacingMismatch = mismatch;
+            transport.replaceHostKey(mismatch, presentation.trustReplacement());
+        });
     }
 
     public void startCredentialUi() {
@@ -78,6 +87,7 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
 
     public void stopCredentialUi() {
         if (trustUi != null) trustUi.stop();
+        dismissMismatchReview();
         presentation.detach();
         dismissDialogs();
         if (credentialUi != null && !credentialUi.hasPicker()) {
@@ -101,6 +111,7 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
 
     public void xMouseTryConnect() {
         if (activity == null || readingCredentials || transport.isConnecting()) return;
+        dismissMismatchReview();
         if (isConnected()) { xMouseDisconnect(); return; } // Legacy toggle; 5.1/5.4 replace it.
         if (TextUtils.isEmpty(MainActivity.setting_user) || TextUtils.isEmpty(MainActivity.setting_host)) {
             Toast.makeText(activity, "A connection setting is blank", Toast.LENGTH_LONG).show();
@@ -144,6 +155,7 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
     }
 
     void beginSsh(AuthenticationMaterial material, SshConnectionRequest request) {
+        dismissMismatchReview();
         showProgress("Connecting to " + material.getHost().getUser() + "@" + request.address + ":" + request.endpoint.getPort());
         Log.d(TAG, "connection_attempt");
         transport.connect(request, material, presentation.connection(request.initialCommand));
@@ -152,6 +164,7 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
     public void xMouseDisconnect() {
         authenticationGeneration++;
         readingCredentials = false;
+        dismissMismatchReview();
         if (trustUi != null) { trustUi.stop(); trustUi.start(); }
         if (credentialUi != null) { credentialUi.stop(); credentialUi.start(); }
         presentation.detach(); // Invalidate outstanding output/connect callbacks, not only credentials.
@@ -167,7 +180,10 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
         presentation.detach();
         if (credentialUi != null) credentialUi.stop();
         if (trustUi != null) trustUi.stop();
+        dismissMismatchReview();
         trustUi = null;
+        replacementUi = null;
+        replacingMismatch = null;
         dismissDialogs();
         credentialUi = null;
         screen = null;
@@ -218,8 +234,14 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
     @Override public void failed(SshTransport.Operation operation, SshTransport.Failure failure) {
         dismissProgress();
         Log.w(TAG, "ssh_operation_failed");
+        if (operation == SshTransport.Operation.TRUST_REPLACEMENT) {
+            HostKeyMismatch mismatch = replacingMismatch;
+            replacingMismatch = null;
+            if (replacementUi != null && mismatch != null) replacementUi.finish(mismatch);
+        }
         String message = failure == SshTransport.Failure.PRIVATE_KEY
                 ? "Private key unavailable or invalid. Open Settings > Private Key to re-import; check Optional Key Passphrase. Existing configuration was kept."
+                : operation == SshTransport.Operation.TRUST_REPLACEMENT ? "Host-key replacement could not be verified. Connection remains blocked; review trust before retrying."
                 : failure == SshTransport.Failure.HOST_MISMATCH ? "Host identity changed. Connection blocked. The saved trusted key was kept."
                 : failure == SshTransport.Failure.TRUST_STORAGE ? "Host trust could not be read or saved. Connection blocked; existing records were kept."
                 : failure == SshTransport.Failure.HOST_TRUST ? "Host trust was not approved. No authentication or commands were sent."
@@ -228,6 +250,24 @@ public class MyConnectionHandler implements CommandTransport, TransportPresentat
                 : "Connection or authentication failed. Existing configuration was kept.";
         Toast.makeText(activity, message, Toast.LENGTH_LONG).show();
         screen.performCallback();
+    }
+
+    @Override public void hostKeyMismatch(HostKeyMismatch mismatch) {
+        if (activity == null || replacementUi == null || !mismatch.isCurrent()) return;
+        replacementUi.show(mismatch);
+    }
+
+    @Override public void trustReplacementCompleted() {
+        HostKeyMismatch mismatch = replacingMismatch;
+        replacingMismatch = null;
+        if (activity == null || replacementUi == null || mismatch == null) return;
+        replacementUi.finish(mismatch);
+        Toast.makeText(activity, "Trusted host key replaced. Connect again to authenticate with the new key.", Toast.LENGTH_LONG).show();
+    }
+
+    private void dismissMismatchReview() {
+        if (replacementUi != null) replacementUi.stop();
+        replacingMismatch = null;
     }
 
     private void showProgress(String message) {

@@ -12,7 +12,7 @@ class HostKeyRepository internal constructor(private val directory: File, privat
     private var poisoned = false
     fun find(identity: EndpointIdentity): ApprovedHostKey? = exclusive { read()[identity] }
 
-    /** First approval only. No overwrite/replacement API; mismatches are terminal. */
+    /** First approval only. */
     internal fun approve(identity: EndpointIdentity, key: ApprovedHostKey, current: BooleanSupplier) = exclusive {
         val records = read()
         records[identity]?.let {
@@ -22,10 +22,35 @@ class HostKeyRepository internal constructor(private val directory: File, privat
         if (!current.asBoolean) trustFailure(HostTrustException.Reason.CANCELLED)
         if (records.size >= MAX_RECORDS) trustFailure(HostTrustException.Reason.INVALID_REPOSITORY)
         records[identity] = key
+        publish(records, identity, key, current)
+    }
+
+    /** Deliberate replacement uses compare-and-swap against the complete previously trusted key. */
+    internal fun replace(
+        identity: EndpointIdentity,
+        expected: ApprovedHostKey,
+        replacement: ApprovedHostKey,
+        current: BooleanSupplier,
+    ) = exclusive {
+        val records = read()
+        val existing = records[identity] ?: trustFailure(HostTrustException.Reason.MISMATCH)
+        if (!existing.matches(expected)) trustFailure(HostTrustException.Reason.MISMATCH)
+        if (!current.asBoolean) trustFailure(HostTrustException.Reason.CANCELLED)
+        records[identity] = replacement
+        publish(records, identity, replacement, current)
+    }
+
+    private fun publish(
+        records: LinkedHashMap<EndpointIdentity, ApprovedHostKey>,
+        identity: EndpointIdentity,
+        key: ApprovedHostKey,
+        current: BooleanSupplier,
+    ) {
         val bytes = encode(records)
         val pending = File.createTempFile("trust-", ".pending", directory)
         val unverified = File(directory, ".unverified")
         var publishing = false
+        var replaceAttempted = false
         try {
             io.privateFile(pending)
             FileOutputStream(pending).use { it.write(bytes); io.sync(it) }
@@ -34,6 +59,14 @@ class HostKeyRepository internal constructor(private val directory: File, privat
             publishing = true
             FileOutputStream(unverified).use { io.privateFile(unverified); it.write(1); io.sync(it) }
             io.syncDirectory(directory)
+            if (!current.asBoolean) {
+                if (!unverified.delete()) throw IOException()
+                io.syncDirectory(directory)
+                trustFailure(HostTrustException.Reason.CANCELLED)
+            }
+            // This is the final cancellation preflight. Once atomic replacement is attempted, a
+            // racing cancellation may suppress success but cannot safely roll back this exact CAS pair.
+            replaceAttempted = true
             io.replace(pending, File(directory, FILE))
             io.syncDirectory(directory)
             val verified = read(verifying = true)[identity]
@@ -42,12 +75,26 @@ class HostKeyRepository internal constructor(private val directory: File, privat
             io.syncDirectory(directory)
         } catch (failure: Exception) {
             if (publishing) {
-                poisoned = true
-                // Also retain a fail-closed marker across reopening after an uncertain final fsync.
-                try {
-                    FileOutputStream(unverified).use { io.privateFile(unverified); it.write(1); io.sync(it) }
-                    io.syncDirectory(directory)
-                } catch (_: Exception) { /* Disk failure cannot promise recovery; this owner remains closed. */ }
+                if (replaceAttempted) {
+                    poisoned = true
+                    // Once replacement is attempted, publication can be uncertain; keep it fail-closed.
+                    try {
+                        FileOutputStream(unverified).use { io.privateFile(unverified); it.write(1); io.sync(it) }
+                        io.syncDirectory(directory)
+                    } catch (_: Exception) { /* Disk failure cannot promise recovery; this owner remains closed. */ }
+                } else {
+                    // The old snapshot is known intact because atomic replacement was not attempted.
+                    try {
+                        if (unverified.exists() && !unverified.delete()) throw IOException()
+                        io.syncDirectory(directory)
+                    } catch (_: Exception) {
+                        poisoned = true
+                        try {
+                            FileOutputStream(unverified).use { io.privateFile(unverified); it.write(1); io.sync(it) }
+                            io.syncDirectory(directory)
+                        } catch (_: Exception) { /* Disk failure cannot promise recovery; this owner remains closed. */ }
+                    }
+                }
             }
             throw failure
         } finally { if (pending.exists()) pending.delete() }

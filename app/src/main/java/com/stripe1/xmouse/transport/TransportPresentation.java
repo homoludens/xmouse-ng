@@ -3,6 +3,7 @@ package com.stripe1.xmouse.transport;
 import java.lang.ref.WeakReference;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
+import com.stripe1.xmouse.trust.HostKeyMismatch;
 
 /** Weak, detach-aware presentation bridge. No UI object is retained by a transport callback. */
 public final class TransportPresentation {
@@ -14,6 +15,8 @@ public final class TransportPresentation {
         void scpCompleted();
         void disconnected();
         void failed(SshTransport.Operation operation, SshTransport.Failure failure);
+        default void hostKeyMismatch(HostKeyMismatch mismatch) { }
+        default void trustReplacementCompleted() { }
     }
 
     private final Executor presentation;
@@ -30,6 +33,9 @@ public final class TransportPresentation {
 
     public SshTransport.Callback<Void> connection(String initialCommand) {
         return callback(SshTransport.Operation.CONNECT, ignored -> target -> target.connected(initialCommand));
+    }
+    public SshTransport.Callback<Void> trustReplacement() {
+        return callback(SshTransport.Operation.TRUST_REPLACEMENT, ignored -> TransportPresentation.Listener::trustReplacementCompleted);
     }
     public synchronized SshTransport.Callback<String> exec(String command) {
         long token = generation;
@@ -49,8 +55,16 @@ public final class TransportPresentation {
     private synchronized <T> SshTransport.Callback<T> callback(SshTransport.Operation operation, Event<T> event) {
         long token = generation;
         return new SshTransport.Callback<T>() {
+            private HostKeyMismatch mismatch;
             @Override public void success(T value) { post(token, event.event(value)); }
-            @Override public void failure(SshTransport.Failure failure) { post(token, target -> target.failed(operation, failure)); }
+            @Override public void mismatch(HostKeyMismatch value) { mismatch = value; }
+            @Override public void failure(SshTransport.Failure failure) {
+                HostKeyMismatch candidate = mismatch;
+                post(token, target -> {
+                    target.failed(operation, failure);
+                    if (candidate != null) target.hostKeyMismatch(candidate);
+                });
+            }
         };
     }
     private void post(long token, Consumer<Listener> event) {

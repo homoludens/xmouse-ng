@@ -36,4 +36,7 @@ class HostTrustPolicy(private val requests: HostTrustRequests) : JschSshBackend.
         })
     }
     override fun cancelPendingTrust() = requests.cancelPending()
+
+    override fun replaceHostKey(mismatch: HostKeyMismatch, current: BooleanSupplier) =
+        requests.replace(mismatch, current)
 }

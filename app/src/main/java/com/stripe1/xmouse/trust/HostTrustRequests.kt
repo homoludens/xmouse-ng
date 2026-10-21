@@ -25,7 +25,13 @@ class HostTrustRequests @JvmOverloads constructor(
     fun verify(endpoint: Endpoint, key: ApprovedHostKey, current: BooleanSupplier) {
         if (!current.asBoolean) trustFailure(HostTrustException.Reason.CANCELLED)
         repository.find(endpoint.identity)?.let {
-            if (!it.matches(key)) trustFailure(HostTrustException.Reason.MISMATCH)
+            if (!it.matches(key)) {
+                if (!current.asBoolean) trustFailure(HostTrustException.Reason.CANCELLED)
+                throw HostTrustException(
+                    HostTrustException.Reason.MISMATCH,
+                    HostKeyMismatch(this, endpoint, it, key, current),
+                )
+            }
             if (!current.asBoolean) trustFailure(HostTrustException.Reason.CANCELLED)
             return
         }
@@ -51,6 +57,26 @@ class HostTrustRequests @JvmOverloads constructor(
             request.finish()
             synchronized(this) { if (pending === request) pending = null }
             dispatcher.execute { synchronized(this) { if (token == generation) listener.get()?.dismiss(request) } }
+        }
+    }
+
+    /** Called on the transport worker only after the user explicitly confirmed a mismatch review. */
+    fun replace(mismatch: HostKeyMismatch, current: BooleanSupplier) {
+        if (!mismatch.claimReplacement(this)) trustFailure(HostTrustException.Reason.CANCELLED)
+        try {
+            val publicationCurrent = BooleanSupplier { current.asBoolean && mismatch.publicationCurrent() }
+            if (!publicationCurrent.asBoolean) trustFailure(HostTrustException.Reason.CANCELLED)
+            repository.replace(
+                mismatch.endpoint.identity,
+                mismatch.trustedKey,
+                mismatch.presentedKey,
+                publicationCurrent,
+            )
+            if (!publicationCurrent.asBoolean || !mismatch.finishReplacement()) {
+                trustFailure(HostTrustException.Reason.CANCELLED)
+            }
+        } finally {
+            mismatch.finishReplacement()
         }
     }
 

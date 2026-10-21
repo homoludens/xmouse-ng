@@ -1,6 +1,8 @@
 package com.stripe1.xmouse.trust
 
 import com.stripe1.xmouse.connection.Endpoint
+import com.stripe1.xmouse.connection.EndpointHost
+import com.stripe1.xmouse.connection.EndpointLocator
 import com.stripe1.xmouse.transport.*
 import org.apache.sshd.common.channel.Channel
 import org.apache.sshd.common.channel.ChannelListener
@@ -25,6 +27,7 @@ import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.spec.ECGenParameterSpec
 import java.util.concurrent.*
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /** Actual maintained JSch against an in-process synthetic server, never sshd/user accounts/real hosts. */
@@ -78,8 +81,10 @@ class JschHostTrustIntegrationTest {
     private class Result : SshTransport.Callback<Void> {
         val done = CountDownLatch(1)
         var failure: SshTransport.Failure? = null
+        var mismatch: HostKeyMismatch? = null
         override fun success(value: Void?) { done.countDown() }
         override fun failure(failure: SshTransport.Failure) { this.failure = failure; done.countDown() }
+        override fun mismatch(mismatch: HostKeyMismatch) { this.mismatch = mismatch }
         fun await() { assertTrue(done.await(10, TimeUnit.SECONDS)) }
     }
     private class Fixture(timeout: Long = 5000, io: TrustFileIo = TrustFileIo()) : AutoCloseable, HostTrustRequests.Listener {
@@ -92,11 +97,17 @@ class JschHostTrustIntegrationTest {
         override fun show(request: HostTrustRequests.Request) { prompts.add(request) }
         override fun dismiss(request: HostTrustRequests.Request) { }
         fun prompt() = requireNotNull(prompts.poll(10, TimeUnit.SECONDS))
-        fun connect(server: Server, address: String = "127.0.0.1", keyAuth: Boolean = false): Result {
+        fun connect(
+            server: Server,
+            address: String = "127.0.0.1",
+            keyAuth: Boolean = false,
+            endpoint: Endpoint = Endpoint.manual("DESKTOP.local.", server.ssh.port),
+        ): Result {
             val key = if (keyAuth) requireNotNull(javaClass.classLoader!!.getResourceAsStream("ssh-crypto/ecdsa-p256.pem")).use { it.readBytes() } else byteArrayOf()
             val authentication = RecordingSshBackend.authentication(keyAuth, key)
-            return Result().also { transport.connect(SshConnectionRequest(Endpoint.manual("DESKTOP.local.", server.ssh.port), address, "", "synthetic initial command"), authentication, it) }
+            return Result().also { transport.connect(SshConnectionRequest(endpoint, address, "", "synthetic initial command"), authentication, it) }
         }
+        fun replace(mismatch: HostKeyMismatch): Result = Result().also { transport.replaceHostKey(mismatch, it) }
         override fun close() {
             requests.detach(); transport.close(); assertTrue(worker.awaitTermination(10, TimeUnit.SECONDS)); directory.deleteRecursively()
         }
@@ -160,6 +171,75 @@ class JschHostTrustIntegrationTest {
             }
         } }
     }
+    @Test fun actualJschBlocksChangedKeyAcrossReconnectAlternateAddressAndDiscoveredIdentitiesUntilConfirmedReplacement() {
+        val oldKey = Server.newKey()
+        val changedKey = Server.newKey()
+        val port = Server(key = oldKey).use { original ->
+            Fixture().use { f ->
+                val endpoint = Endpoint.manual("desktop.local", original.ssh.port)
+                val first = f.connect(original, endpoint = endpoint); f.prompt().accept(); first.await(); assertNull(first.failure)
+                val oldApproved = requireNotNull(f.repo.find(endpoint.identity))
+                val stopped = Result(); f.transport.disconnect(stopped); stopped.await()
+
+                Server("127.0.0.2", original.ssh.port, changedKey).use { reconnectWithChangedKey ->
+                    val blocked = f.connect(reconnectWithChangedKey, "127.0.0.2", endpoint = endpoint); blocked.await()
+                    assertEquals(SshTransport.Failure.HOST_MISMATCH, blocked.failure)
+                    assertNotNull(blocked.mismatch); noAuthenticationOrCommands(reconnectWithChangedKey)
+                    assertTrue(f.prompts.isEmpty()); assertTrue(f.repo.find(endpoint.identity)!!.matches(oldApproved))
+                }
+
+                Server("127.0.0.3", original.ssh.port, changedKey).use { alternateAddress ->
+                    val blocked = f.connect(alternateAddress, "127.0.0.3", endpoint = endpoint); blocked.await()
+                    assertEquals(SshTransport.Failure.HOST_MISMATCH, blocked.failure)
+                    assertNotNull(blocked.mismatch); noAuthenticationOrCommands(alternateAddress)
+                    assertTrue(f.prompts.isEmpty())
+                }
+
+                val stableService = Endpoint(
+                    EndpointLocator.DiscoveredService("Desktop SSH", "_ssh._tcp", "local", EndpointHost("desktop.local")),
+                    original.ssh.port,
+                )
+                Server("127.0.0.4", original.ssh.port, changedKey).use { discoveredStableHost ->
+                    val blocked = f.connect(discoveredStableHost, "127.0.0.4", endpoint = stableService); blocked.await()
+                    assertEquals(SshTransport.Failure.HOST_MISMATCH, blocked.failure)
+                    assertNotNull(blocked.mismatch); noAuthenticationOrCommands(discoveredStableHost)
+                    assertTrue(f.prompts.isEmpty())
+                    assertTrue(blocked.mismatch!!.confirm()) // Actual deliberate replacement action.
+                    val replacement = f.replace(blocked.mismatch!!); replacement.await()
+                    assertNull(replacement.failure)
+                    assertTrue(HostKeyRepository(f.directory, TrustFileIo()).find(endpoint.identity)!!.matches(blocked.mismatch!!.presentedKey))
+
+                    val fresh = f.connect(discoveredStableHost, "127.0.0.4", endpoint = stableService); fresh.await()
+                    assertNull(fresh.failure)
+                    assertEquals(1, discoveredStableHost.credentialAuth.get())
+                    assertEquals(1, discoveredStableHost.channelRequests.get())
+                    assertEquals(1, discoveredStableHost.commandRequests.get())
+                    val disconnected = Result(); f.transport.disconnect(disconnected); disconnected.await()
+                }
+
+                Server("127.0.0.2", original.ssh.port, oldKey).use { oldKeyReturns ->
+                    val blocked = f.connect(oldKeyReturns, "127.0.0.2", endpoint = endpoint); blocked.await()
+                    assertEquals(SshTransport.Failure.HOST_MISMATCH, blocked.failure)
+                    noAuthenticationOrCommands(oldKeyReturns); assertTrue(f.prompts.isEmpty())
+                }
+                original.ssh.port
+            }
+        }
+        assertTrue(port in 1..65535)
+
+        val serviceIdentity = Endpoint(EndpointLocator.DiscoveredService("Office SSH", "_ssh._tcp", "local"), port)
+        val serviceKey = Server.newKey()
+        Server("127.0.0.1", port, serviceKey).use { serviceFirst -> Fixture().use { f ->
+            val first = f.connect(serviceFirst, endpoint = serviceIdentity); f.prompt().accept(); first.await(); assertNull(first.failure)
+            val stopped = Result(); f.transport.disconnect(stopped); stopped.await()
+            Server("127.0.0.2", port).use { serviceChangedKey ->
+                val blocked = f.connect(serviceChangedKey, "127.0.0.2", endpoint = serviceIdentity); blocked.await()
+                assertEquals(SshTransport.Failure.HOST_MISMATCH, blocked.failure)
+                noAuthenticationOrCommands(serviceChangedKey); assertTrue(f.prompts.isEmpty())
+                assertEquals(serviceIdentity.identity, blocked.mismatch!!.endpoint.identity)
+            }
+        } }
+    }
     @Test fun actualJschCorruptRepositoryAndFailedPersistenceCannotAuthenticate() {
         for (corrupt in listOf(false, true)) Server().use { server -> Fixture(io = object : TrustFileIo() {
             override fun replace(source: File, destination: File) { throw IOException("NOT_REAL_storage_detail") }
@@ -173,6 +253,85 @@ class JschHostTrustIntegrationTest {
             result.await(); assertEquals(SshTransport.Failure.TRUST_STORAGE, result.failure)
             noAuthenticationOrCommands(server)
         } }
+    }
+    @Test fun actualJschReplacementStorageFailureKeepsOldTrustedKeyAndNeverAuthenticates() {
+        val failStagingSync = java.util.concurrent.atomic.AtomicBoolean(false)
+        val io = object : TrustFileIo() {
+            override fun sync(output: FileOutputStream) {
+                if (failStagingSync.get()) throw IOException("NOT_REAL_storage_detail")
+                super.sync(output)
+            }
+        }
+        val oldKey = Server.newKey()
+        val newKey = Server.newKey()
+        Server(key = oldKey).use { original -> Fixture(io = io).use { f ->
+            val endpoint = Endpoint.manual("desktop.local", original.ssh.port)
+            val first = f.connect(original, endpoint = endpoint); f.prompt().accept(); first.await(); assertNull(first.failure)
+            val trusted = requireNotNull(f.repo.find(endpoint.identity))
+            val stopped = Result(); f.transport.disconnect(stopped); stopped.await()
+            Server("127.0.0.2", original.ssh.port, newKey).use { changedKey ->
+                val blocked = f.connect(changedKey, "127.0.0.2", endpoint = endpoint); blocked.await()
+                assertEquals(SshTransport.Failure.HOST_MISMATCH, blocked.failure)
+                noAuthenticationOrCommands(changedKey)
+                val mismatch = requireNotNull(blocked.mismatch)
+                assertTrue(mismatch.confirm())
+                failStagingSync.set(true)
+                val replacement = f.replace(mismatch); replacement.await()
+                assertEquals(SshTransport.Failure.TRUST_STORAGE, replacement.failure)
+                noAuthenticationOrCommands(changedKey)
+                assertTrue(HostKeyRepository(f.directory, TrustFileIo()).find(endpoint.identity)!!.matches(trusted))
+            }
+        } }
+    }
+    @Test fun actualJschStopCancellationDuringReplacementStagingKeepsOldTrustAndNeverAuthenticates() {
+        val blockNextSync = AtomicBoolean(false)
+        val staged = CountDownLatch(1); val release = CountDownLatch(1)
+        val io = object : TrustFileIo() {
+            override fun sync(output: FileOutputStream) {
+                super.sync(output)
+                if (blockNextSync.compareAndSet(true, false)) {
+                    staged.countDown()
+                    check(release.await(10, TimeUnit.SECONDS))
+                }
+            }
+        }
+        val oldKey = Server.newKey(); val newKey = Server.newKey()
+        try {
+            Server(key = oldKey).use { original -> Fixture(io = io).use { f ->
+                val endpoint = Endpoint.manual("desktop.local", original.ssh.port)
+                val first = f.connect(original, endpoint = endpoint); f.prompt().accept(); first.await()
+                assertNull(first.failure)
+                val trusted = requireNotNull(f.repo.find(endpoint.identity))
+                val other = Endpoint.manual("other.local", 2200)
+                val unrelated = syntheticHostKey(91)
+                f.repo.approve(other.identity, unrelated, java.util.function.BooleanSupplier { true })
+                val disconnected = Result(); f.transport.disconnect(disconnected); disconnected.await()
+
+                Server("127.0.0.2", original.ssh.port, newKey).use { changedKey ->
+                    val blocked = f.connect(changedKey, "127.0.0.2", endpoint = endpoint); blocked.await()
+                    assertEquals(SshTransport.Failure.HOST_MISMATCH, blocked.failure)
+                    noAuthenticationOrCommands(changedKey)
+                    val mismatch = requireNotNull(blocked.mismatch)
+                    assertTrue(mismatch.confirm())
+
+                    blockNextSync.set(true)
+                    val replacement = f.replace(mismatch)
+                    assertTrue("replacement never reached staged fsync", staged.await(5, TimeUnit.SECONDS))
+                    val start = System.nanoTime()
+                    mismatch.cancel() // Same cancellation used by the dismissed Activity review.
+                    assertTrue("cancellation waited for worker I/O", System.nanoTime() - start < TimeUnit.SECONDS.toNanos(1))
+                    assertFalse(mismatch.confirm())
+                    release.countDown()
+
+                    replacement.await()
+                    assertEquals(SshTransport.Failure.HOST_MISMATCH, replacement.failure)
+                    noAuthenticationOrCommands(changedKey)
+                    val reopened = HostKeyRepository(f.directory, TrustFileIo())
+                    assertTrue(reopened.find(endpoint.identity)!!.matches(trusted))
+                    assertTrue(reopened.find(other.identity)!!.matches(unrelated))
+                }
+            } }
+        } finally { release.countDown() }
     }
     @Test fun transportDisconnectWakesPendingTrustAndOldAcceptCannotApproveTheNextAttempt() {
         Server().use { server -> Fixture().use { f ->

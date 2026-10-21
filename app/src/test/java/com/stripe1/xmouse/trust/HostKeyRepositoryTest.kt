@@ -43,6 +43,35 @@ class HostKeyRepositoryTest {
         assertEquals(HostTrustException.Reason.MISMATCH, assertThrows(HostTrustException::class.java) { repo.approve(identity, syntheticHostKey(2), yes) }.reason)
         assertTrue(repo.find(identity)!!.matches(first))
     }
+    @Test fun deliberateReplacementCompareAndSwapPreservesOtherEndpointRecords() = fixture { directory ->
+        val repo = HostKeyRepository(directory, TrustFileIo())
+        val firstIdentity = Endpoint.manual("desk.local", 22).identity
+        val otherIdentity = Endpoint.manual("other.local", 2200).identity
+        val old = syntheticHostKey(1); val replacement = syntheticHostKey(2); val other = syntheticHostKey(3)
+        repo.approve(firstIdentity, old, yes); repo.approve(otherIdentity, other, yes)
+
+        repo.replace(firstIdentity, old, replacement, yes)
+
+        val reopened = HostKeyRepository(directory, TrustFileIo())
+        assertTrue(reopened.find(firstIdentity)!!.matches(replacement))
+        assertTrue(reopened.find(otherIdentity)!!.matches(other))
+        assertEquals(HostTrustException.Reason.MISMATCH, assertThrows(HostTrustException::class.java) {
+            reopened.replace(firstIdentity, old, syntheticHostKey(4), yes)
+        }.reason)
+        assertTrue(reopened.find(firstIdentity)!!.matches(replacement))
+    }
+    @Test fun failedReplacementBeforePublicationKeepsPreviouslyTrustedKey() = fixture { directory ->
+        val identity = Endpoint.manual("desk.local", 22).identity
+        val old = syntheticHostKey(1); val candidate = syntheticHostKey(2)
+        HostKeyRepository(directory, TrustFileIo()).approve(identity, old, yes)
+        val failing = HostKeyRepository(directory, object : TrustFileIo() {
+            override fun sync(output: FileOutputStream) { throw IOException("NOT_REAL_storage_detail") }
+        })
+        assertEquals(HostTrustException.Reason.STORAGE, assertThrows(HostTrustException::class.java) {
+            failing.replace(identity, old, candidate, yes)
+        }.reason)
+        assertTrue(HostKeyRepository(directory, TrustFileIo()).find(identity)!!.matches(old))
+    }
     @Test fun corruptTruncatedOversizeFingerprintAndUnknownVersionNeverResetToUnknown() = fixture { directory ->
         val identity = Endpoint.manual("desk.local", 22).identity
         val repo = HostKeyRepository(directory, TrustFileIo()); repo.approve(identity, syntheticHostKey(), yes)

@@ -1,7 +1,10 @@
 package com.stripe1.xmouse.trust
 
 /** Fixed, bounded diagnostics only. Never retain parser, filesystem, or SSH exception content. */
-class HostTrustException(val reason: Reason) : RuntimeException(reason.name) {
+class HostTrustException @JvmOverloads constructor(
+    val reason: Reason,
+    val mismatch: HostKeyMismatch? = null,
+) : RuntimeException(reason.name) {
     enum class Reason { INVALID_KEY, INVALID_REPOSITORY, STORAGE, MISMATCH, REJECTED, CANCELLED, EXPIRED }
 }
 
