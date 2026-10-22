@@ -224,9 +224,12 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
             try {
                 check(scope);
                 channel.command(command);
+                check(scope);
                 Capture capture = new Capture(limits.outputBytes);
                 channel.output(capture.stdout, capture.stderr);
+                check(scope);
                 channel.connect(limits.channel);
+                check(scope);
                 while (!channel.isClosed()) {
                     check(scope);
                     if (capture.exceeded()) throw new Outcome(Failure.OUTPUT_LIMIT);

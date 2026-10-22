@@ -9,12 +9,18 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.ClipboardManager
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.os.SystemClock
 import android.os.Build
 import android.os.IBinder
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.View
+import android.widget.EditText
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -24,9 +30,16 @@ import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import androidx.core.content.edit
+import androidx.core.view.GravityCompat
 import androidx.appcompat.widget.Toolbar
+import androidx.drawerlayout.widget.DrawerLayout
 import com.stripe1.xmouse.MainActivity
+import com.stripe1.xmouse.DatabaseHandler
+import com.stripe1.xmouse.CustomKeyboardButtonAdapter
+import com.stripe1.xmouse.MyJSView
+import com.stripe1.xmouse.MyMouseView
 import com.stripe1.xmouse.R
+import com.stripe1.xmouse.SpanVariableGridView
 import com.stripe1.xmouse.XMouseApplication
 import com.stripe1.xmouse.connection.ConnectionFailure
 import com.stripe1.xmouse.connection.ConnectionState
@@ -68,7 +81,7 @@ import java.util.function.BooleanSupplier
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.util.OpenSSHPublicKeyUtil
 
-/** Real target service/notification and system FGS checks; session work uses synthetic recording attempts. */
+/** Real target service/notification checks with synthetic attempts or the production transport's recording backend. */
 @RunWith(AndroidJUnit4::class)
 class SessionForegroundServiceAndroidTest {
     private companion object { const val POST_NOTIFICATIONS_PERMISSION = "android.permission.POST_NOTIFICATIONS" }
@@ -93,6 +106,9 @@ class SessionForegroundServiceAndroidTest {
     private var owner: RecordingOwner? = null
     private var transportOwner: RecordingTransportOwner? = null
     private var oldAutoConnect: Boolean? = null
+    private var oldInputBackend: String? = null
+    private var oldInitialCommand: String? = null
+    private var savedScriptId = 0
     private var oldPermissionRequestedPreference: Boolean? = null
     private val device get() = UiDevice.getInstance(instrumentation)
 
@@ -204,11 +220,13 @@ class SessionForegroundServiceAndroidTest {
         private val credentialPromptReads: Int = 0,
         private val requireFirstTrust: Boolean = false,
         private val automaticallySelectedHost: SessionHost = SessionFixtures.host(),
+        blockExecConnect: Boolean = false,
     ) : SessionServiceOwner, AutoCloseable {
         val directory = File(ApplicationProvider.getApplicationContext<Context>().cacheDir,
             "notification-session-${java.util.UUID.randomUUID()}")
         val backend = RecordingSshBackend().apply {
             if (blockCloses) { blockAllCloses = true; ignoreInterrupts = true }
+            if (blockExecConnect) { blockAt = "exec.connect"; ignoreInterrupts = true }
         }
         val selectionCalls = AtomicInteger()
         val selectionsCompleted = AtomicInteger()
@@ -261,11 +279,12 @@ class SessionForegroundServiceAndroidTest {
             credentialProvider,
             HostKeyRepository(directory, AndroidSecretFileIo),
             interactions,
-            SshLimits(200, if (requireFirstTrust) 60_000 else 350, 200, 600, 250, 250, 450, 450,
-                150, 150, 2, 50, 150, 4096),
+            SshLimits(200, if (requireFirstTrust) 60_000 else 350, 200, 600,
+                if (blockExecConnect) 10_000 else 250, 250, if (blockExecConnect) 10_000 else 450, 450,
+                if (blockExecConnect) 2_000 else 150, 150, 2, 50, 150, 4096),
             SshRuntime.SHARED,
             credentialTimeoutMillis = 2_000,
-            closeTimeoutMillis = 1_000,
+            closeTimeoutMillis = if (blockExecConnect) 5_000 else 1_000,
             backendFactory = { trust, trusted ->
                 object : SshBackend {
                     override fun create(request: SshConnectionRequest, authentication: AuthenticationMaterial): SshBackend.Session =
@@ -299,7 +318,7 @@ class SessionForegroundServiceAndroidTest {
                 selectionStarted.countDown()
             } else {
                 selectionWorker.execute {
-                    completion(automaticallySelectedHost)
+                    completion(automaticallySelectedHost.copy(shell = shell, initialCommand = initialCommand))
                     selectionsCompleted.incrementAndGet()
                 }
             }
@@ -338,11 +357,50 @@ class SessionForegroundServiceAndroidTest {
         ownerLease = (context.applicationContext as XMouseApplication).sessionOwners.installOwnerForTests(owner)
     }
 
-    private fun launchVisibleActivity(autoConnect: Boolean = false): ActivityScenario<MainActivity> {
+    private fun launchVisibleActivity(
+        autoConnect: Boolean = false,
+        inputBackend: String? = null,
+        initialCommand: String? = null,
+    ): ActivityScenario<MainActivity> {
         val preferences = defaultPreferences
         oldAutoConnect = preferences.getBoolean("autologin_checkbox", false)
-        preferences.edit { putBoolean("autologin_checkbox", autoConnect) }
+        oldInputBackend = preferences.getString("setting_dotool_initial", null)
+        oldInitialCommand = preferences.getString("setting_xdotool_initial", null)
+        preferences.edit {
+            putBoolean("autologin_checkbox", autoConnect)
+            inputBackend?.let { putString("setting_dotool_initial", it) }
+            initialCommand?.let { putString("setting_xdotool_initial", it) }
+        }
         return ActivityScenario.launch(MainActivity::class.java).also { scenario = it }
+    }
+
+    private fun dispatchTouch(view: View, downTime: Long, eventTime: Long, action: Int, x: Float, y: Float) {
+        val event = MotionEvent.obtain(downTime, eventTime, action, x, y, 0)
+        try { assertTrue("legacy control rejected a touch event", view.onTouchEvent(event)) }
+        finally { event.recycle() }
+    }
+
+    private fun clickLegacyButton(activity: MainActivity, title: String) {
+        val grid = activity.findViewById<SpanVariableGridView>(R.id.key_drag_DragAndDropGridView)
+        val adapter = grid.adapter as CustomKeyboardButtonAdapter
+        val position = (0 until adapter.count).firstOrNull { adapter.getItem(it)?.getmTitle() == title }
+        assertNotNull("legacy custom button is missing: $title", position)
+        val button = grid.getChildAt(requireNotNull(position))
+        assertNotNull("legacy custom button view was not attached: $title", button)
+        assertTrue("legacy custom button did not receive its click: $title", button.performClick())
+    }
+
+    private fun addSavedScript(activity: MainActivity, alias: String, command: String): Int {
+        val database = MainActivity::class.java.getDeclaredField("db").apply { isAccessible = true }
+            .get(activity) as DatabaseHandler
+        val fields = ArrayList<ArrayList<String>>().apply {
+            add(arrayListOf("Alias", alias))
+            add(arrayListOf("Script", command))
+        }
+        database.addRow(DatabaseHandler.SCRIPT_TABLE_NAME, fields)
+        val row = database.listAll(DatabaseHandler.SCRIPT_TABLE_NAME, arrayOf("Alias", "Script", "id"))
+            .single { it[0] == alias }
+        return row[2].toInt().also { savedScriptId = it; activity.initMenu() }
     }
 
     private fun invokeToolbarConnectAction(scenario: ActivityScenario<MainActivity>) {
@@ -409,6 +467,27 @@ class SessionForegroundServiceAndroidTest {
         var prompt: SessionInteractions.Prompt? = null
         scenario.onActivity { prompt = activityPrompt(it) }
         return prompt
+    }
+
+    private fun activityPresentationToken(activity: MainActivity): SessionInteractions.PresentationToken? =
+        (MainActivity::class.java.getDeclaredField("sessionPresenter").apply { isAccessible = true }
+            .get(activity) as SessionActivityPresenter).presentationToken()
+
+    private fun recentCommandText(activity: MainActivity): String =
+        activity.findViewById<android.widget.TextView>(R.id.recentCmd).text.toString()
+
+    private fun recentCommandTextOn(scenario: ActivityScenario<MainActivity>): String {
+        var actual = ""
+        scenario.onActivity { actual = recentCommandText(it) }
+        return actual
+    }
+
+    private fun waitForRecentCommand(scenario: ActivityScenario<MainActivity>, expected: String) {
+        eventually {
+            var actual: String? = null
+            scenario.onActivity { actual = recentCommandText(it) }
+            actual == expected
+        }
     }
 
     private fun activityOutputDialog(activity: MainActivity): AlertDialog? {
@@ -617,7 +696,15 @@ class SessionForegroundServiceAndroidTest {
         transportOwner = null
         ownerLease?.close()
         ownerLease = null
+        if (savedScriptId != 0) {
+            DatabaseHandler(context).deleteRow(DatabaseHandler.SCRIPT_TABLE_NAME, savedScriptId)
+            savedScriptId = 0
+        }
         oldAutoConnect?.let { value -> defaultPreferences.edit { putBoolean("autologin_checkbox", value) } }
+        oldInputBackend?.let { value -> defaultPreferences.edit { putString("setting_dotool_initial", value) } }
+            ?: defaultPreferences.edit { remove("setting_dotool_initial") }
+        oldInitialCommand?.let { value -> defaultPreferences.edit { putString("setting_xdotool_initial", value) } }
+            ?: defaultPreferences.edit { remove("setting_xdotool_initial") }
         // Do not restore POST_NOTIFICATIONS with `pm revoke` from inside instrumentation: Android
         // terminates the target process on revocation, which also terminates this runner. The outer
         // verification invocation manages the device permission state between test runs.
@@ -882,8 +969,9 @@ class SessionForegroundServiceAndroidTest {
         var shellAccepted = false
         var execAccepted = false
         activityScenario.onActivity { activity ->
-            shellAccepted = MainActivity.commandTransport.executeShellCommand("synthetic activity command")
-            execAccepted = MainActivity.commandTransport.executeExecCommand("synthetic activity script")
+            shellAccepted = activity.commandTransport.executeShellCommand("synthetic activity command")
+            execAccepted = activity.commandTransport.executeExecCommand("synthetic activity script",
+                activityPresentationToken(activity))
         }
         assertTrue("application command proxy rejected an available service session", shellAccepted)
         assertTrue("script command proxy rejected an available service session", execAccepted)
@@ -893,6 +981,161 @@ class SessionForegroundServiceAndroidTest {
         clickText("Ok")
         SessionForegroundService.requestDisconnect(context)
         eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+    }
+
+    @Test
+    fun legacyControlsCustomButtonsAndSavedScriptsUseTheServiceCommandSink() {
+        grantNotificationPermissionForDisclosureTest()
+        val startup = "synthetic startup command must run once"
+        val rawCustomCommand = "xdotool windowminimize $(xdotool getactivewindow)"
+        val scriptAlias = "saved route ${java.util.UUID.randomUUID()}"
+        val scriptCommand = "printf 'saved script command'"
+        val keyboardText = context.getString(R.string.app_name)
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity(
+            autoConnect = true,
+            inputBackend = "xdotool",
+            initialCommand = startup,
+        )
+        eventually { recordingOwner.controller.current.connection.isReady }
+        eventually { recordingOwner.backend.writes.any { it == "$startup\r\n" } }
+        assertEquals("the initial host command is sent exactly once on the first connection", 1,
+            recordingOwner.backend.writes.count { it == "$startup\r\n" })
+
+        activityScenario.onActivity { activity ->
+            val mouseLayout = activity.findViewById<android.widget.LinearLayout>(R.id.mouse)
+            val mouse = (0 until mouseLayout.childCount)
+                .map { mouseLayout.getChildAt(it) }.filterIsInstance<MyMouseView>().single()
+            assertTrue("the touchpad must be laid out", mouse.width > 0)
+            val downTime = SystemClock.uptimeMillis()
+            val x = mouse.width / 2f
+            dispatchTouch(mouse, downTime, downTime, MotionEvent.ACTION_DOWN, x, 40f)
+            dispatchTouch(mouse, downTime, downTime + 20, MotionEvent.ACTION_MOVE, x + 30f, 55f)
+            dispatchTouch(mouse, downTime, downTime + 40, MotionEvent.ACTION_UP, x + 30f, 55f)
+            assertTrue("legacy mouse-button click was not handled",
+                activity.findViewById<View>(R.id.firstMouseButton).performClick())
+
+            assertTrue("joystick mode toggle was not handled",
+                activity.findViewById<View>(R.id.jsToggle).performClick())
+            val joystickLayout = activity.findViewById<android.widget.LinearLayout>(R.id.js)
+            val joystick = (0 until joystickLayout.childCount)
+                .map { joystickLayout.getChildAt(it) }.filterIsInstance<MyJSView>().single()
+            val size = View.MeasureSpec.makeMeasureSpec(240, View.MeasureSpec.EXACTLY)
+            joystick.measure(size, size)
+            joystick.layout(0, 0, 240, 240)
+            val joystickDown = SystemClock.uptimeMillis()
+            dispatchTouch(joystick, joystickDown, joystickDown, MotionEvent.ACTION_DOWN, 120f, 120f)
+            dispatchTouch(joystick, joystickDown, joystickDown + 20, MotionEvent.ACTION_MOVE, 160f, 90f)
+            dispatchTouch(joystick, joystickDown, joystickDown + 40, MotionEvent.ACTION_UP, 160f, 90f)
+
+            val keyboardKeyDown = SystemClock.uptimeMillis()
+            val dispatcher = KeyEvent.DispatcherState()
+            val down = KeyEvent(keyboardKeyDown, keyboardKeyDown, KeyEvent.ACTION_DOWN,
+                KeyEvent.KEYCODE_VOLUME_UP, 0)
+            dispatcher.startTracking(down, activity)
+            assertTrue("legacy volume-down/up dispatch rejected key-down",
+                activity.onKeyDown(KeyEvent.KEYCODE_VOLUME_UP, down))
+            val up = KeyEvent(keyboardKeyDown, keyboardKeyDown + 1, KeyEvent.ACTION_UP,
+                KeyEvent.KEYCODE_VOLUME_UP, 0)
+            dispatcher.handleUpEvent(up)
+            assertTrue("legacy volume shortcut was not tracked", up.isTracking)
+            assertTrue("legacy volume shortcut dispatch rejected key-up",
+                activity.onKeyUp(KeyEvent.KEYCODE_VOLUME_UP, up))
+
+            assertTrue("keyboard mode toggle was not handled", activity.findViewById<View>(R.id.fab).performClick())
+            activity.findViewById<EditText>(R.id.keyboard_input).setText(R.string.app_name)
+            assertTrue("batch keyboard send button was not handled",
+                activity.findViewById<View>(R.id.keyboard_send).performClick())
+            clickLegacyButton(activity, "Backspace")
+            clickLegacyButton(activity, "+Volume")
+            clickLegacyButton(activity, "Minimize")
+            val rawButton = (activity.findViewById<SpanVariableGridView>(R.id.key_drag_DragAndDropGridView).adapter
+                as CustomKeyboardButtonAdapter).let { adapter ->
+                (0 until adapter.count).mapNotNull { adapter.getItem(it) }.single { it.getmTitle() == "Minimize" }
+            }
+            assertEquals("the raw custom-button command must remain unchanged", rawCustomCommand,
+                rawButton.getmCommand())
+
+            addSavedScript(activity, scriptAlias, scriptCommand)
+            activity.findViewById<DrawerLayout>(R.id.drawer_layout).openDrawer(GravityCompat.START)
+        }
+
+        eventually {
+            recordingOwner.backend.writes.any { it.startsWith("xdotool mousemove_relative -- ") } &&
+                recordingOwner.backend.writes.count { it.startsWith("xdotool mousemove_relative -- ") } >= 2 &&
+                recordingOwner.backend.writes.contains("xdotool click 1\r\n") &&
+                recordingOwner.backend.writes.count { it == "xdotool key XF86AudioRaiseVolume\r\n" } >= 2 &&
+                recordingOwner.backend.writes.contains("xdotool type '$keyboardText'\r\n") &&
+                recordingOwner.backend.writes.contains("xdotool key BackSpace\r\n") &&
+                recordingOwner.backend.writes.contains("$rawCustomCommand\r\n")
+        }
+        waitForRecentCommand(activityScenario, rawCustomCommand)
+        val shellCommandsBeforeScript = recordingOwner.backend.commandOrder.toList()
+        assertTrue("the real touchpad/joystick and volume/keyboard/custom routes must reach the same shell sink",
+            shellCommandsBeforeScript.any { it.startsWith("shell:xdotool mousemove_relative -- ") } &&
+                shellCommandsBeforeScript.contains("shell:xdotool click 1") &&
+                shellCommandsBeforeScript.contains("shell:xdotool type '$keyboardText'") &&
+                shellCommandsBeforeScript.contains("shell:$rawCustomCommand"))
+
+        var scriptSelectionHandled = false
+        activityScenario.onActivity { activity ->
+            val navigation = activity.findViewById<com.google.android.material.navigation.NavigationView>(R.id.nav_view)
+            assertEquals(scriptAlias, navigation.menu.findItem(savedScriptId).title.toString())
+            scriptSelectionHandled = navigation.menu.performIdentifierAction(savedScriptId, 0)
+        }
+        assertTrue("the open Saved Scripts drawer did not route its selected item", scriptSelectionHandled)
+        eventually { recordingOwner.backend.channels.any { it.name == "exec" && it.command == scriptCommand } }
+        assertEquals("Activity shell inputs and the saved exec script must share one ordered sink",
+            shellCommandsBeforeScript + "exec:$scriptCommand", recordingOwner.backend.commandOrder.toList())
+        waitForTextContains("out one")
+        clickText("Copy")
+        var copiedOutput: String? = null
+        activityScenario.onActivity { activity ->
+            copiedOutput = activity.getSystemService(ClipboardManager::class.java)
+                .primaryClip?.getItemAt(0)?.text?.toString()
+        }
+        assertEquals("err oneerr twoout oneout two", copiedOutput)
+
+        val detachedScreenTransport = AtomicReference<SessionCommandTransport>()
+        activityScenario.onActivity { detachedScreenTransport.set(it.commandTransport) }
+        activityScenario.recreate()
+        eventually {
+            var attached = false
+            activityScenario.onActivity { activity ->
+                attached = activitySnapshot(activity)?.connection?.isReady == true && activityOutputDialog(activity) == null
+            }
+            attached
+        }
+        assertEquals("reattaching the real control Activity must not rerun the saved startup command", 1,
+            recordingOwner.backend.writes.count { it == "$startup\r\n" })
+        assertTrue(recordingOwner.controller.current.connection.isReady)
+
+        val postRecreationCommand = "synthetic exact shell command after Activity recreation"
+        var shellAccepted = false
+        activityScenario.onActivity { activity ->
+            shellAccepted = activity.commandTransport.executeShellCommand(postRecreationCommand)
+        }
+        assertTrue("the reattached Activity's current presentation must admit shell input", shellAccepted)
+        waitForRecentCommand(activityScenario, postRecreationCommand)
+
+        val detachedScreenInput = "synthetic detached screen input after reattachment"
+        assertTrue("the retained session may accept old-view input without screen feedback",
+            detachedScreenTransport.get().executeShellCommand(detachedScreenInput))
+        eventually { recordingOwner.backend.writes.any { it == "$detachedScreenInput\r\n" } }
+        assertEquals("detached input must not borrow the new screen's recent-command target",
+            postRecreationCommand, recentCommandTextOn(activityScenario))
+
+        SessionForegroundService.requestDisconnect(context)
+        eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+        var disconnectedCommandAccepted = true
+        activityScenario.onActivity { activity ->
+            disconnectedCommandAccepted = activity.commandTransport.executeShellCommand(
+                "must not appear after disconnect")
+        }
+        assertFalse("disconnected input must be rejected", disconnectedCommandAccepted)
+        assertEquals("rejected input must not replace the last accepted command",
+            postRecreationCommand, recentCommandTextOn(activityScenario))
     }
 
     @Test
@@ -1013,7 +1256,12 @@ class SessionForegroundServiceAndroidTest {
         val activityScenario = launchVisibleActivity()
         requestConnect(activityScenario)
         eventually { recordingOwner.controller.current.connection.isReady }
-        assertTrue(recordingOwner.controller.executeExecCommand("synthetic output lifecycle"))
+        var accepted = false
+        activityScenario.onActivity { activity ->
+            accepted = activity.commandTransport.executeExecCommand("synthetic output lifecycle",
+                activityPresentationToken(activity))
+        }
+        assertTrue(accepted)
         waitForTextContains("out one")
 
         val oldDialog = AtomicReference<AlertDialog>()
@@ -1034,6 +1282,85 @@ class SessionForegroundServiceAndroidTest {
         }
         assertFalse("old command output must not be replayed on the recreated screen", oldDialog.get().isShowing)
         assertTrue(recordingOwner.controller.current.connection.isReady)
+        SessionForegroundService.requestDisconnect(context)
+        eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+    }
+
+    @Test
+    fun lateExecOutputFromTheOldPresentationIsNotShownAfterActivityRecreation() {
+        grantNotificationPermissionForDisclosureTest()
+        val recordingOwner = RecordingTransportOwner(blockExecConnect = true)
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity()
+        requestConnect(activityScenario)
+        eventually { recordingOwner.controller.current.connection.isReady }
+
+        var accepted = false
+        activityScenario.onActivity { activity ->
+            accepted = activity.commandTransport.executeExecCommand("old-screen blocked output",
+                activityPresentationToken(activity))
+        }
+        assertTrue(accepted)
+        assertTrue("the script did not reach the deliberately blocked provider operation",
+            recordingOwner.backend.entered.await(5, TimeUnit.SECONDS))
+
+        activityScenario.recreate()
+        eventually {
+            var currentScreenReady = false
+            activityScenario.onActivity { activity ->
+                currentScreenReady = activitySnapshot(activity)?.connection?.isReady == true &&
+                    activityOutputDialog(activity) == null
+            }
+            currentScreenReady
+        }
+        recordingOwner.backend.release.countDown()
+        eventually { recordingOwner.backend.events.any { it.name == "exec.close" } }
+        instrumentation.waitForIdleSync()
+        activityScenario.onActivity { assertNull("late output must stay with the destroyed screen", activityOutputDialog(it)) }
+        assertTrue("rendering the previous screen result must not affect the service-owned transport",
+            recordingOwner.controller.current.connection.isReady)
+        SessionForegroundService.requestDisconnect(context)
+        eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+    }
+
+    @Test
+    fun lateExecOutputFromAReplacedAttemptIsNotShownOnTheNewHost() {
+        grantNotificationPermissionForDisclosureTest()
+        val recordingOwner = RecordingTransportOwner(manualSelections = true, blockExecConnect = true)
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity()
+        requestConnect(activityScenario)
+        assertTrue(recordingOwner.selectionStarted.await(3, TimeUnit.SECONDS))
+        val oldHost = SessionFixtures.host("old-script-output.synthetic.invalid", 71, "old_script_output", 2271)
+        recordingOwner.completeSelection(0, oldHost)
+        eventually { recordingOwner.controller.current.connection.isReady }
+
+        var accepted = false
+        activityScenario.onActivity { activity ->
+            accepted = activity.commandTransport.executeExecCommand("old-host blocked output",
+                activityPresentationToken(activity))
+        }
+        assertTrue(accepted)
+        assertTrue("the old-host script did not reach its blocked provider operation",
+            recordingOwner.backend.entered.await(5, TimeUnit.SECONDS))
+
+        requestConnect(activityScenario)
+        eventually { recordingOwner.selectionCalls.get() == 2 }
+        val newHost = SessionFixtures.host("new-script-output.synthetic.invalid", 72, "new_script_output", 2272)
+        recordingOwner.completeSelection(0, newHost)
+        eventually {
+            recordingOwner.controller.current.desiredHost?.sameRequest(newHost) == true &&
+                recordingOwner.controller.current.connection.phase == ConnectionState.Phase.CLOSING
+        }
+        recordingOwner.backend.release.countDown()
+        eventually {
+            recordingOwner.controller.current.connection.isReady &&
+                recordingOwner.controller.current.attemptHost?.sameRequest(newHost) == true
+        }
+        eventually { recordingOwner.backend.events.any { it.name == "exec.close" } }
+        instrumentation.waitForIdleSync()
+        activityScenario.onActivity { assertNull("old-attempt output must not appear for the new host", activityOutputDialog(it)) }
+        assertEquals(newHost.endpoint.identity, recordingOwner.backendRequests.last().endpoint.identity)
         SessionForegroundService.requestDisconnect(context)
         eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
     }

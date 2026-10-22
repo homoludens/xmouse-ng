@@ -18,12 +18,22 @@ class RecordingSshBackend : SshBackend {
     val events = CopyOnWriteArrayList<Event>()
     val channels = CopyOnWriteArrayList<RecordingChannel>()
     val writes = CopyOnWriteArrayList<String>()
+    /** Cross-channel order observed at the provider boundary for real controller/Activity routing tests. */
+    val commandOrder = CopyOnWriteArrayList<String>()
     var failAt: String? = null
-    var blockAt: String? = null
+    @Volatile var blockAt: String? = null
+        set(value) {
+            field = value
+            if (value != null) release = CountDownLatch(1)
+        }
     var ignoreInterrupts = false
-    var blockAllCloses = false
+    @Volatile var blockAllCloses = false
+        set(value) {
+            field = value
+            if (value) release = CountDownLatch(1)
+        }
     val entered = CountDownLatch(1)
-    val release = CountDownLatch(1)
+    @Volatile var release = CountDownLatch(0)
     var stdout = "out one\nout two\n".toByteArray()
     var stderr = "err one\r\nerr two\n".toByteArray()
     var scp = "C0644 3 test.jpg\nabc\u0000".toByteArray()
@@ -68,7 +78,11 @@ class RecordingSshBackend : SshBackend {
         private var out: OutputStream? = null
         private var err: OutputStream? = null
         val inputBytes = ByteArrayOutputStream()
-        override fun command(command: String) { record("$name.command"); this.command = command }
+        override fun command(command: String) {
+            record("$name.command")
+            this.command = command
+            if (name == "exec") commandOrder.add("exec:$command")
+        }
         override fun output(stdout: OutputStream?, stderr: OutputStream?) { record("$name.output"); out = stdout; err = stderr }
         override fun input(): OutputStream {
             record("$name.input")
@@ -77,7 +91,9 @@ class RecordingSshBackend : SshBackend {
                 override fun write(bytes: ByteArray, offset: Int, length: Int) {
                     record("$name.write")
                     inputBytes.write(bytes, offset, length)
-                    writes.add(String(bytes, offset, length, Charsets.UTF_8))
+                    val text = String(bytes, offset, length, Charsets.UTF_8)
+                    writes.add(text)
+                    if (name == "shell") commandOrder.add("shell:${text.removeSuffix("\r\n")}")
                 }
                 override fun flush() = record("$name.flush")
                 override fun close() = record("$name.input.close")

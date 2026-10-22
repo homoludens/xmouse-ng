@@ -20,7 +20,10 @@ interface SessionAttempt {
     fun cancelAndClose(completion: (ConnectionFailure?) -> Unit)
     /** Compatibility handoff; the service-owned attempt retains transport ordering/cancellation. */
     fun executeShellCommand(command: String): Boolean = false
-    fun executeExecCommand(command: String): Boolean = false
+    /** Optional opaque target captured by the input proxy at submission; never a UI reference. */
+    fun executeShellCommand(command: String, presentation: SessionInteractions.PresentationToken?): Boolean =
+        executeShellCommand(command)
+    fun executeExecCommand(command: String, presentation: SessionInteractions.PresentationToken): Boolean = false
 }
 
 fun interface SessionAttemptFactory {
@@ -52,6 +55,8 @@ class SessionController @JvmOverloads constructor(
     private var generation = 0L
     /** Invalidates service metadata callbacks immediately, before the serialized disconnect event runs. */
     private val disconnectEpoch = AtomicLong()
+    /** Bounds admitted input waiting on the serialized owner queue; the transport has its own cap. */
+    private val pendingCommandAdmissions = AtomicLong()
     /** Immutable admission token: callers can validate a ready session without reading queue-owned state. */
     private data class CommandOwner(val generation: Long, val host: SessionHost, val disconnectEpoch: Long)
     private val commandOwner = AtomicReference<CommandOwner?>()
@@ -146,10 +151,15 @@ class SessionController @JvmOverloads constructor(
     }
 
     /** Queue acceptance only; a command is never transferred to a replacement/recovered attempt. */
-    fun executeShellCommand(command: String): Boolean = postReadyCommand(command) { it.executeShellCommand(command) }
+    fun executeShellCommand(command: String): Boolean = executeShellCommand(command, null)
 
-    /** Result presentation is delivered through the weak Activity prompt bridge. */
-    fun executeExecCommand(command: String): Boolean = postReadyCommand(command) { it.executeExecCommand(command) }
+    /** Screen target is captured before owner-queue admission and is never rebound during dispatch. */
+    fun executeShellCommand(command: String, presentation: SessionInteractions.PresentationToken?): Boolean =
+        postReadyCommand(command) { it.executeShellCommand(command, presentation) }
+
+    /** Script results are bound to the screen that admitted the exec, not whichever screen is attached later. */
+    fun executeExecCommand(command: String, presentation: SessionInteractions.PresentationToken): Boolean =
+        postReadyCommand(command) { it.executeExecCommand(command, presentation) }
 
     private fun postReadyCommand(command: String, execute: (SessionAttempt) -> Boolean): Boolean {
         if (command.isEmpty()) return false
@@ -158,17 +168,28 @@ class SessionController @JvmOverloads constructor(
         if (disconnectEpoch.get() != owner.disconnectEpoch || admitted.closed || !admitted.connection.isReady ||
             admitted.generation != owner.generation || admitted.attemptHost !== owner.host ||
             admitted.desiredHost?.sameRequest(owner.host) != true) return false
-        return events.post {
-            val snapshot = current
-            val active = owned
-            if (commandOwner.get() !== owner || disconnectEpoch.get() != owner.disconnectEpoch || snapshot.closed ||
-                !snapshot.connection.isReady || snapshot.generation != owner.generation ||
-                snapshot.attemptHost !== owner.host || snapshot.desiredHost?.sameRequest(owner.host) != true ||
-                active == null || active.generation != owner.generation || active.host !== owner.host || active.closing) {
-                return@post
-            }
-            execute(active.attempt)
+        while (true) {
+            val pending = pendingCommandAdmissions.get()
+            if (pending >= MAX_PENDING_COMMAND_ADMISSIONS) return false
+            if (pendingCommandAdmissions.compareAndSet(pending, pending + 1)) break
         }
+        val posted = events.post {
+            try {
+                val snapshot = current
+                val active = owned
+                if (commandOwner.get() !== owner || disconnectEpoch.get() != owner.disconnectEpoch || snapshot.closed ||
+                    !snapshot.connection.isReady || snapshot.generation != owner.generation ||
+                    snapshot.attemptHost !== owner.host || snapshot.desiredHost?.sameRequest(owner.host) != true ||
+                    active == null || active.generation != owner.generation || active.host !== owner.host || active.closing) {
+                    return@post
+                }
+                execute(active.attempt)
+            } finally {
+                pendingCommandAdmissions.decrementAndGet()
+            }
+        }
+        if (!posted) pendingCommandAdmissions.decrementAndGet()
+        return posted
     }
     private fun stop(terminal: Boolean) {
         if (current.closed) return
@@ -294,4 +315,6 @@ class SessionController @JvmOverloads constructor(
         }
         override fun close() { active.set(false); listener.clear(); latest.set(null) }
     }
+
+    private companion object { const val MAX_PENDING_COMMAND_ADMISSIONS = 128 }
 }

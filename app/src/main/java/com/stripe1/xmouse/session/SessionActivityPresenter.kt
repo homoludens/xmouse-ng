@@ -26,6 +26,7 @@ class SessionActivityPresenter(
     private val trustUi = HostTrustUi(activity)
     private var replacementUi: HostTrustReplacementUi? = null
     private var interactions: SessionInteractions? = null
+    private var activePresentation: SessionInteractions.PresentationToken? = null
     private var currentPrompt: SessionInteractions.Prompt? = null
     private var outputDialog: AlertDialog? = null
     private var attached = false
@@ -41,7 +42,7 @@ class SessionActivityPresenter(
         detach(force = true)
         interactions = owner
         attached = true
-        owner.attach(this)
+        activePresentation = owner.attach(this)
         // attach() retires any Activity-local request from the previous owner, so restore prompt
         // presentation after the new service owner has been installed.
         credentialUi.start()
@@ -68,6 +69,7 @@ class SessionActivityPresenter(
         if (attached) interactions?.detach()
         attached = false
         interactions = null
+        activePresentation = null
         currentPrompt = null
         trustUi.stop()
         replacementUi?.stop()
@@ -130,6 +132,14 @@ class SessionActivityPresenter(
         mainOnly()
         if (isLive()) Toast.makeText(activity, "Command execution failed.", Toast.LENGTH_LONG).show()
     }
+
+    override fun commandResultsInvalidated() {
+        mainOnly()
+        dismissOutputDialog()
+    }
+
+    /** Passed across the command boundary as an opaque screen token, never as an Activity/listener. */
+    fun presentationToken(): SessionInteractions.PresentationToken? = activePresentation
 
     override fun replacementFinished(mismatch: HostKeyMismatch, success: Boolean) {
         mainOnly()

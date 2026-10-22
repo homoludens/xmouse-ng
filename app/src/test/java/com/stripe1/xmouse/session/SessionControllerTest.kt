@@ -9,23 +9,58 @@ class SessionControllerTest {
     private val a = SessionFixtures.host()
     private val b = SessionFixtures.host("other.invalid", 2)
     private val loss = ConnectionFailure.Transport(ConnectionFailure.TransportReason.CONNECTION_LOST)
-    private class Attempt : SessionAttempt {
+    private class Attempt(private val interactions: SessionInteractions) : SessionAttempt {
         lateinit var listener: SessionAttempt.Listener
         lateinit var closed: (ConnectionFailure?) -> Unit
         var closes = 0
+        var acceptShell = true
+        private val commandResults = interactions.beginCommandResults()
         val shellCommands = mutableListOf<String>()
         val execCommands = mutableListOf<String>()
+        val commandOrder = mutableListOf<String>()
         override fun start(listener: SessionAttempt.Listener) { this.listener = listener }
         override fun cancelAndClose(completion: (ConnectionFailure?) -> Unit) { closes++; closed = completion }
-        override fun executeShellCommand(command: String): Boolean { shellCommands.add(command); return true }
-        override fun executeExecCommand(command: String): Boolean { execCommands.add(command); return true }
+        override fun executeShellCommand(command: String): Boolean = executeShellCommand(command, null)
+        override fun executeShellCommand(
+            command: String,
+            presentation: SessionInteractions.PresentationToken?,
+        ): Boolean {
+            if (!acceptShell) return false
+            shellCommands.add(command); commandOrder.add("shell:$command")
+            presentation?.let { interactions.recentCommand(commandResults, it, command) }
+            return true
+        }
+        override fun executeExecCommand(command: String, presentation: SessionInteractions.PresentationToken): Boolean {
+            execCommands.add(command); commandOrder.add("exec:$command"); return true
+        }
     }
     private class Fixture : AutoCloseable {
         val queue = SessionFixtures.Queue()
         val attempts = mutableListOf<Attempt>()
-        val controller = SessionController({ Attempt().also(attempts::add) }, queue)
+        val interactions = SessionInteractions(Executor { it.run() })
+        class Screen : SessionInteractions.Listener {
+            val recent = mutableListOf<String>()
+            override fun show(prompt: SessionInteractions.Prompt) { }
+            override fun dismiss(prompt: SessionInteractions.Prompt) { }
+            override fun recentCommand(command: String) { recent.add(command) }
+        }
+        var screen = Screen()
+            private set
+        var presentation = interactions.attach(screen)
+            private set
+        fun reattach(): Screen {
+            interactions.detach()
+            screen = Screen()
+            presentation = interactions.attach(screen)
+            return screen
+        }
+        val controller = SessionController({ Attempt(interactions).also(attempts::add) }, queue)
         fun connect(host: SessionHost) { controller.connectIfNeeded(host); queue.drain() }
-        override fun close() { controller.close(); queue.drain(); attempts.lastOrNull()?.takeIf { it.closes > 0 }?.closed?.invoke(null); queue.drain() }
+        override fun close() {
+            controller.close(); queue.drain()
+            attempts.lastOrNull()?.takeIf { it.closes > 0 }?.closed?.invoke(null); queue.drain()
+            interactions.detach()
+        }
     }
     private val phases = listOf(ConnectionState.Phase.PREPARING_CREDENTIALS, ConnectionState.Phase.RESOLVING,
         ConnectionState.Phase.CONNECTING, ConnectionState.Phase.AWAITING_TRUST, ConnectionState.Phase.AUTHENTICATING,
@@ -148,7 +183,7 @@ class SessionControllerTest {
             // The replacement event is ahead of both admitted A commands, but none has run yet.
             f.controller.connectIfNeeded(b)
             assertTrue(f.controller.executeShellCommand("old shell"))
-            assertTrue(f.controller.executeExecCommand("old exec"))
+            assertTrue(f.controller.executeExecCommand("old exec", f.presentation))
             f.queue.drain()
             assertEquals(ConnectionState.Phase.CLOSING, f.controller.current.connection.phase)
             assertTrue(old.shellCommands.isEmpty())
@@ -171,7 +206,7 @@ class SessionControllerTest {
             active.listener.ready(); f.queue.drain()
 
             assertTrue(f.controller.executeShellCommand("queued before disconnect"))
-            assertTrue(f.controller.executeExecCommand("queued before disconnect"))
+            assertTrue(f.controller.executeExecCommand("queued before disconnect", f.presentation))
             f.controller.disconnect() // Epoch invalidation is synchronous; the queue has not run yet.
             f.queue.drain()
             assertTrue(active.shellCommands.isEmpty())
@@ -183,6 +218,105 @@ class SessionControllerTest {
             assertTrue(active.execCommands.isEmpty())
         }
     }
+
+    @Test fun mixedCommandsKeepAdmissionOrderAndLossDropsQueuedWorkBeforeFreshGeneration() {
+        Fixture().use { f ->
+            f.connect(a)
+            val old = f.attempts.single()
+            old.listener.ready(); f.queue.drain()
+
+            assertTrue(f.controller.executeShellCommand("A-shell-1"))
+            assertTrue(f.controller.executeExecCommand("A-script-2", f.presentation))
+            assertTrue(f.controller.executeShellCommand("A-shell-3"))
+            f.queue.drain()
+            assertEquals(listOf("shell:A-shell-1", "exec:A-script-2", "shell:A-shell-3"), old.commandOrder)
+
+            // The loss event is serialized ahead of these already-admitted commands.
+            old.listener.failed(loss)
+            assertTrue(f.controller.executeShellCommand("A-unsent-shell"))
+            assertTrue(f.controller.executeExecCommand("A-unsent-script", f.presentation))
+            f.queue.drain()
+            assertEquals(listOf("shell:A-shell-1", "exec:A-script-2", "shell:A-shell-3"), old.commandOrder)
+            assertEquals(ConnectionState.Phase.ERROR, f.controller.current.connection.phase)
+            old.closed(null); f.queue.drain()
+            assertEquals(ConnectionState.Phase.ERROR, f.controller.current.connection.phase)
+            assertFalse("commands are rejected while the session is lost", f.controller.executeShellCommand("not-ready"))
+
+            f.connect(a)
+            val fresh = f.attempts.last()
+            fresh.listener.ready(); f.queue.drain()
+            assertTrue(f.controller.executeShellCommand("NEWONLY")); f.queue.drain()
+            assertEquals(listOf("shell:NEWONLY"), fresh.commandOrder)
+            assertFalse(fresh.commandOrder.any { it.contains("A-unsent") })
+        }
+    }
+
+    @Test fun acceptedShellFeedbackUsesItsAdmissionScreenAndNeverRefreshesAfterStaleOrRejectedInput() {
+        Fixture().use { f ->
+            f.connect(a)
+            val oldAttempt = f.attempts.single()
+            oldAttempt.listener.ready(); f.queue.drain()
+            val oldPresentation = f.presentation
+
+            // The same session accepts an already-queued command after its screen detaches. Its
+            // callback must retain the old presentation rather than update the reattached screen.
+            assertTrue(f.controller.executeShellCommand("queued old-screen command", oldPresentation))
+            val newScreen = f.reattach()
+            f.queue.drain()
+            assertEquals(listOf("queued old-screen command"), oldAttempt.shellCommands)
+            assertTrue("late old-screen acceptance must not update the new screen", newScreen.recent.isEmpty())
+
+            // A host replacement queued ahead of input invalidates that command before dispatch.
+            f.controller.connectIfNeeded(b)
+            assertTrue(f.controller.executeShellCommand("queued old-host command", f.presentation))
+            f.queue.drain()
+            assertEquals("old-host input must not reach its retiring attempt",
+                listOf("queued old-screen command"), oldAttempt.shellCommands)
+            assertEquals("host replacement must invalidate the queued old command", 1, oldAttempt.closes)
+            assertTrue(newScreen.recent.isEmpty())
+
+            oldAttempt.closed(null); f.queue.drain()
+            val newAttempt = f.attempts.last()
+            newAttempt.listener.ready(); f.queue.drain()
+            val newPresentation = f.presentation
+
+            assertTrue(f.controller.executeShellCommand("accepted exact custom shell", newPresentation))
+            f.queue.drain()
+            assertEquals(listOf("accepted exact custom shell"), newScreen.recent)
+
+            newAttempt.acceptShell = false
+            assertTrue("controller acceptance is only local queue admission",
+                f.controller.executeShellCommand("transport-rejected shell", newPresentation))
+            f.queue.drain()
+            assertEquals("a transport rejection must not be presented as accepted input",
+                listOf("accepted exact custom shell"), newScreen.recent)
+
+            newAttempt.acceptShell = true
+            assertTrue(f.controller.executeShellCommand("queued immediately before disconnect", newPresentation))
+            f.controller.disconnect()
+            f.queue.drain()
+            assertEquals("disconnect invalidates queued shell feedback", listOf("accepted exact custom shell"),
+                newScreen.recent)
+            assertFalse(f.controller.executeShellCommand("rejected after disconnect", newPresentation))
+            assertEquals(listOf("accepted exact custom shell"), newScreen.recent)
+        }
+    }
+
+    @Test fun controllerBoundsAdmittedButNotYetDispatchedInput() {
+        Fixture().use { f ->
+            f.connect(a)
+            val attempt = f.attempts.single()
+            attempt.listener.ready(); f.queue.drain()
+
+            repeat(128) { index -> assertTrue(f.controller.executeShellCommand("queued-$index")) }
+            assertFalse("finite owner-queue backpressure must reject rather than retain more commands",
+                f.controller.executeExecCommand("overflow-script", f.presentation))
+            f.queue.drain()
+            assertEquals(128, attempt.shellCommands.size)
+            assertFalse(attempt.execCommands.contains("overflow-script"))
+        }
+    }
+
     @Test fun involuntaryLossRetainsIntentButNeverPretendsReadyOrAutomaticallyRecovers() {
         Fixture().use { f ->
             f.connect(a); val old = f.attempts.single(); old.listener.ready(); f.queue.drain()

@@ -11,6 +11,14 @@ import java.util.function.BooleanSupplier
 
 /** One bounded, attempt-owned prompt. UI attaches weakly; detaching never shuts down a transport. */
 class SessionInteractions(private val dispatcher: Executor) {
+    /** Opaque screen-lifetime capability. It contains no UI reference and is invalidated on detach. */
+    class PresentationToken internal constructor()
+
+    /** Attempt-scoped presentation owner; command text/output is delivered only while it is current. */
+    class CommandResultScope internal constructor(internal val presentationAtStart: PresentationToken?) {
+        internal val active = AtomicBoolean(true)
+    }
+
     sealed class Prompt {
         class Credential(val kind: CredentialKind, val request: CredentialReentryRequest) : Prompt()
         class Trust(val request: HostTrustRequests.Request) : Prompt()
@@ -52,20 +60,30 @@ class SessionInteractions(private val dispatcher: Executor) {
         fun recentCommand(command: String) { }
         fun execCompleted(command: String, output: String) { }
         fun execFailed(command: String) { }
+        fun commandResultsInvalidated() { }
         fun replacementFinished(mismatch: HostKeyMismatch, success: Boolean) { }
     }
     private var listener = WeakReference<Listener>(null)
     private var generation = 0L
+    private var presentation: PresentationToken? = null
+    private var resultScope: CommandResultScope? = null
     private var reviewEpoch = 0L
     private var owner: Any? = null
     private var pending: Prompt? = null
 
-    fun attach(observer: Listener) { detach(); synchronized(this) { listener = WeakReference(observer) } }
+    fun attach(observer: Listener): PresentationToken {
+        detach()
+        return synchronized(this) {
+            listener = WeakReference(observer)
+            PresentationToken().also { presentation = it }
+        }
+    }
     fun detach() {
         val old = synchronized(this) {
             generation++
             reviewEpoch++
             listener.clear()
+            presentation = null
             pending.also { pending = null; owner = null }
         }
         old?.cancel()
@@ -75,18 +93,61 @@ class SessionInteractions(private val dispatcher: Executor) {
     fun invalidate() {
         val old: Prompt?
         val token: Long
+        val oldResults: CommandResultScope?
         synchronized(this) {
             generation++
             reviewEpoch++
             old = pending
             pending = null
             owner = null
+            oldResults = resultScope
+            resultScope = null
             token = generation
         }
+        oldResults?.active?.set(false)
         old?.cancel()
-        if (old != null) dispatcher.execute {
+        if (old != null || oldResults != null) dispatcher.execute {
             val observer = synchronized(this) { if (generation == token) listener.get() else null }
-            observer?.dismiss(old)
+            if (observer != null) {
+                observer.commandResultsInvalidated()
+                old?.let(observer::dismiss)
+            }
+        }
+    }
+
+    /** Starts result delivery for exactly one SessionAttempt. A later attempt retires this scope. */
+    internal fun beginCommandResults(): CommandResultScope {
+        val scope: CommandResultScope
+        val old: CommandResultScope?
+        val token: Long
+        synchronized(this) {
+            old = resultScope
+            old?.active?.set(false)
+            scope = CommandResultScope(presentation)
+            resultScope = scope
+            token = generation
+        }
+        if (old != null) dispatcher.execute {
+            val observer = synchronized(this) {
+                if (generation == token && resultScope === scope) listener.get() else null
+            }
+            observer?.commandResultsInvalidated()
+        }
+        return scope
+    }
+
+    /** Invalidates pending and already-dispatched results immediately on loss/cancel/host change. */
+    internal fun invalidateCommandResults(scope: CommandResultScope) {
+        scope.active.set(false)
+        val token = synchronized(this) {
+            if (resultScope !== scope) null else {
+                resultScope = null
+                generation
+            }
+        }
+        if (token != null) dispatcher.execute {
+            val observer = synchronized(this) { if (generation == token) listener.get() else null }
+            observer?.commandResultsInvalidated()
         }
     }
 
@@ -158,14 +219,35 @@ class SessionInteractions(private val dispatcher: Executor) {
         }
     }
 
-    fun recentCommand(command: String) = notifyAttached { it.recentCommand(command) }
-    fun execCompleted(command: String, output: String) = notifyAttached { it.execCompleted(command, output) }
-    fun execFailed(command: String) = notifyAttached { it.execFailed(command) }
+    internal fun recentCommand(scope: CommandResultScope, command: String) {
+        val target = scope.presentationAtStart ?: return
+        recentCommand(scope, target, command)
+    }
 
-    private fun notifyAttached(action: (Listener) -> Unit) {
+    /** Shell input uses the screen that submitted it, not the screen present when this attempt began. */
+    internal fun recentCommand(
+        scope: CommandResultScope,
+        target: PresentationToken,
+        command: String,
+    ) {
+        notifyCommandResult(scope, target) { it.recentCommand(command) }
+    }
+
+    internal fun execCompleted(scope: CommandResultScope, target: PresentationToken, command: String, output: String) {
+        notifyCommandResult(scope, target) { it.execCompleted(command, output) }
+    }
+
+    internal fun execFailed(scope: CommandResultScope, target: PresentationToken, command: String) {
+        notifyCommandResult(scope, target) { it.execFailed(command) }
+    }
+
+    private fun notifyCommandResult(scope: CommandResultScope, target: PresentationToken, action: (Listener) -> Unit) {
         val token = synchronized(this) { generation }
         dispatcher.execute {
-            val observer = synchronized(this) { if (generation == token) listener.get() else null }
+            val observer = synchronized(this) {
+                if (generation == token && resultScope === scope && scope.active.get() && presentation === target)
+                    listener.get() else null
+            }
             observer?.let(action)
         }
     }

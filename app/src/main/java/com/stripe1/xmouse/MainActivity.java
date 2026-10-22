@@ -87,8 +87,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	FragmentManager fm = getSupportFragmentManager();
 
 	public static DatabaseHandler db;
-	/** Application-only proxy: custom buttons and legacy input adapters never capture an Activity. */
-	public static SessionCommandTransport commandTransport;
+	/** This screen's proxy carries only its opaque presentation token across the service boundary. */
+	public SessionCommandTransport commandTransport;
 	private ActivityResultLauncher<String> notificationPermissionLauncher;
 	private boolean suppressLegacyAutoConnectOnResume;
 	private String pendingForegroundStartTicket;
@@ -108,7 +108,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	private long activityGeneration;
 	private long hostSelectionGeneration;
 	private long lastShownErrorGeneration = -1L;
-	public static IDoTool doTool;
+	public IDoTool doTool;
 	LinearLayout mouseLayout;
 	LinearLayout keyboardLayout;
 
@@ -311,10 +311,10 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 		jsSwitch=findViewById(R.id.jsToggle);
 
-		mouseLayout.addView(new MyMouseView(getBaseContext()));
+		mouseLayout.addView(new MyMouseView(this));
 		//keyboardLayout.addView(new MyKeyboardView(getBaseContext(), MainActivity.this));
 
-		jsLayout.addView(new MyJSView(getBaseContext()));
+		jsLayout.addView(new MyJSView(this));
 
 		jsSwitch.setOnClickListener(new View.OnClickListener() {
 			@Override
@@ -619,7 +619,12 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 				if (token != bindingGeneration || isFinishing() || isDestroyed()) return;
 				sessionBinder = (SessionForegroundService.SessionBinder) service;
 				promptInteractions = sessionBinder.getInteractions();
-				if (sessionPresenter != null) sessionPresenter.attach(promptInteractions);
+				if (sessionPresenter != null) {
+					sessionPresenter.attach(promptInteractions);
+					if (commandTransport != null) {
+						commandTransport.setPresentationToken(sessionPresenter.presentationToken());
+					}
+				}
 				sessionSnapshot = sessionBinder.getSnapshot();
 				sessionObserver = snapshot -> applySessionSnapshot(token, snapshot);
 				sessionSubscription = sessionBinder.observe(command -> mainHandler.post(command), sessionObserver);
@@ -627,6 +632,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			}
 			@Override public void onServiceDisconnected(ComponentName name) {
 				if (token != bindingGeneration) return;
+				clearShellPresentationTarget();
 				closeSessionObservation();
 				sessionBinder = null;
 				promptInteractions = null;
@@ -654,6 +660,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 
 	private void unbindSessionService() {
+		clearShellPresentationTarget();
 		bindingGeneration++;
 		closeSessionObservation();
 		ServiceConnection connection = sessionServiceConnection;
@@ -663,6 +670,12 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		}
 		sessionBinder = null;
 		promptInteractions = null;
+	}
+
+	private void clearShellPresentationTarget() {
+		if (commandTransport != null && sessionPresenter != null) {
+			commandTransport.clearPresentationToken(sessionPresenter.presentationToken());
+		}
 	}
 
 	@Override
@@ -1280,7 +1293,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 					if (script.size() > 0) {
 						String cmd = script.get(0).get(1);
-						if (commandTransport == null || !commandTransport.executeExecCommand(cmd)) {
+						SessionInteractions.PresentationToken presentation = sessionPresenter == null
+								? null : sessionPresenter.presentationToken();
+						if (commandTransport == null || !commandTransport.executeExecCommand(cmd, presentation)) {
 							Toast.makeText(this, "Connect to a computer before running a script.", Toast.LENGTH_LONG).show();
 						}
 					} else {
@@ -1640,7 +1655,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 								mItems.add(new CustomKeyboardButton(0, span, name, content, colorStr));
 							}
 
-							mItemAdapter = new CustomKeyboardButtonAdapter(getBaseContext(), mItems);
+							mItemAdapter = new CustomKeyboardButtonAdapter(MainActivity.this, mItems);
 							mCoolDragAndDropGridView.setAdapter(mItemAdapter);
 							mItemAdapter.notifyDataSetChanged();
 

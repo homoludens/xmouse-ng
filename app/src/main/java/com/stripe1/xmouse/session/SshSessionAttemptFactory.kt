@@ -39,6 +39,7 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
 
     private inner class Attempt(private val host: SessionHost) : SessionAttempt, HostTrustRequests.Listener {
         private val live = AtomicBoolean(true)
+        private val commandResults = interactions.beginCommandResults()
         private val lock = Any()
         private var listener: SessionAttempt.Listener? = null
         private var started = false
@@ -109,7 +110,7 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
                     object : SshTransport.Callback<Void> {
                         override fun success(value: Void?) {
                             if (live.get()) {
-                                host.initialCommand?.let(interactions::recentCommand)
+                                host.initialCommand?.let { interactions.recentCommand(commandResults, it) }
                                 listener?.ready()
                             }
                         }
@@ -126,17 +127,40 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
             }
         }
 
-        override fun executeShellCommand(command: String): Boolean =
-            live.get() && transport.executeShellCommand(command)
+        override fun executeShellCommand(command: String): Boolean = executeShellCommand(command, null)
 
-        override fun executeExecCommand(command: String): Boolean = live.get() && transport.exec(command,
-            object : SshTransport.Callback<String> {
-                override fun success(value: String) { if (live.get()) interactions.execCompleted(command, value) }
-                override fun failure(failure: SshTransport.Failure) { if (live.get()) interactions.execFailed(command) }
+        override fun executeShellCommand(
+            command: String,
+            presentation: SessionInteractions.PresentationToken?,
+        ): Boolean {
+            if (!live.get() || !transport.executeShellCommand(command)) return false
+            // Preserve legacy recent-command feedback only after this live attempt accepted the write.
+            // The scope and submission-time presentation token suppress loss/reattach races.
+            if (presentation != null) interactions.recentCommand(commandResults, presentation, command)
+            return true
+        }
+
+        override fun executeExecCommand(
+            command: String,
+            presentation: SessionInteractions.PresentationToken,
+        ): Boolean {
+            if (!live.get()) return false
+            return transport.exec(command, object : SshTransport.Callback<String> {
+                override fun success(value: String) {
+                    if (live.get()) interactions.execCompleted(commandResults, presentation, command, value)
+                }
+                override fun failure(failure: SshTransport.Failure) {
+                    if (live.get()) interactions.execFailed(commandResults, presentation, command)
+                }
             })
+        }
 
         private fun phase(phase: ConnectionState.Phase) { if (live.get()) listener?.phase(phase) }
-        private fun fail(failure: ConnectionFailure) { if (live.get()) listener?.failed(failure) }
+        private fun fail(failure: ConnectionFailure) {
+            if (!live.compareAndSet(true, false)) return
+            interactions.invalidateCommandResults(commandResults)
+            listener?.failed(failure)
+        }
         override fun show(request: HostTrustRequests.Request) {
             phase(ConnectionState.Phase.AWAITING_TRUST)
             interactions.show(this, SessionInteractions.Prompt.Trust(request), BooleanSupplier { live.get() })
@@ -149,6 +173,7 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
                 closeCallbacks.add(completion)
                 if (closeStarted) return
                 closeStarted = true; live.set(false)
+                interactions.invalidateCommandResults(commandResults)
                 if (!started) credentialsDone = true
                 credentialTimer?.cancel(false)
                 interactions.clear(this)

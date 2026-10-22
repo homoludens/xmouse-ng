@@ -19,6 +19,7 @@ object SessionFixtures {
     class Queue : SessionEventQueue {
         private val work = ArrayDeque<Runnable>()
         var closed = false
+        val pendingCount: Int get() = synchronized(work) { work.size }
         override fun post(action: Runnable): Boolean = synchronized(work) {
             if (closed) false else { work.add(action); true }
         }

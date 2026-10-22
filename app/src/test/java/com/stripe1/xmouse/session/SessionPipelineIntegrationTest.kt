@@ -26,10 +26,13 @@ import java.util.concurrent.atomic.AtomicInteger
 class SessionPipelineIntegrationTest {
     private enum class ReviewInvalidator { CANCEL, DETACH, DISCONNECT, STALE, UNCERTAIN_CLOSE }
 
-    private class Server(port: Int = 0, private val hostKeyPair: KeyPair = newKeyPair()) : AutoCloseable {
+    private class Server(port: Int = 0, val hostKeyPair: KeyPair = newKeyPair()) : AutoCloseable {
         val authentications = AtomicInteger()
         val commands = AtomicInteger()
         val input = CountDownLatch(1)
+        val shellCommands = CopyOnWriteArrayList<String>()
+        val execCommands = CopyOnWriteArrayList<String>()
+        val commandOrder = CopyOnWriteArrayList<String>()
         private val stopped = AtomicBoolean()
         val ssh = SshServer.setUpDefaultServer().apply {
             host = "127.0.0.1"; this.port = port
@@ -38,24 +41,50 @@ class SessionPipelineIntegrationTest {
                 authentications.incrementAndGet(); user == "NOT_REAL_user" && password == "NOT_REAL_password"
             }
             setShellFactory { command() }
+            setCommandFactory { _, text -> command(text) }
             start()
         }
-        private fun command(): Command {
-            commands.incrementAndGet()
+        private fun command(text: String = "shell"): Command {
+            if (text == "shell") commands.incrementAndGet() else execCommands.add(text)
             return object : Command {
                 private var source: InputStream? = null
+                private var output: OutputStream? = null
+                private var error: OutputStream? = null
+                private var exit: ExitCallback? = null
                 override fun setInputStream(input: InputStream) { source = input }
-                override fun setOutputStream(output: OutputStream) { }
-                override fun setErrorStream(error: OutputStream) { }
-                override fun setExitCallback(callback: ExitCallback) { }
+                override fun setOutputStream(output: OutputStream) { this.output = output }
+                override fun setErrorStream(error: OutputStream) { this.error = error }
+                override fun setExitCallback(callback: ExitCallback) { exit = callback }
                 override fun start(channel: ChannelSession, env: Environment) {
-                    Thread({ try { if (source!!.read() >= 0) input.countDown() } catch (_: IOException) { } },
-                        "synthetic-session-input").apply { isDaemon = true; start() }
+                    if (text == "shell") {
+                        Thread({
+                            val line = ByteArrayOutputStream()
+                            try {
+                                while (true) {
+                                    val next = source!!.read()
+                                    if (next < 0) break
+                                    input.countDown()
+                                    if (next == '\n'.code) {
+                                        val value = line.toByteArray().toString(Charsets.UTF_8).removeSuffix("\r")
+                                        shellCommands.add(value)
+                                        commandOrder.add("shell:$value")
+                                        line.reset()
+                                    } else line.write(next)
+                                }
+                            } catch (_: IOException) { }
+                        }, "synthetic-session-input").apply { isDaemon = true; start() }
+                    } else {
+                        commandOrder.add("exec:$text")
+                        output!!.write("out one\nout two\n".toByteArray())
+                        error!!.write("err one\nerr two\n".toByteArray())
+                        exit!!.onExit(0)
+                    }
                 }
                 override fun destroy(channel: ChannelSession) { source?.close() }
             }
         }
         fun profile(id: Long = 1) = SessionFixtures.host("127.0.0.1", id, port = ssh.port).copy(initialCommand = "synthetic input, never executed")
+        fun disconnectClients() { ssh.activeSessions.toList().forEach { it.close(true) } }
         override fun close() { if (stopped.compareAndSet(false, true)) ssh.stop(true) }
         companion object {
             fun newKeyPair() = KeyPairGenerator.getInstance("EC").apply {
@@ -136,12 +165,15 @@ class SessionPipelineIntegrationTest {
     private class Fixture(
         private val closeGate: SessionCloseGate? = null,
         closeTimeoutMillis: Long = 5_000,
+        private val commandBackend: RecordingSshBackend? = null,
     ) : AutoCloseable, SessionInteractions.Listener {
         val directory = Files.createTempDirectory("xmouse-session-loopback-").toFile()
         val queue = SessionFixtures.Queue()
         val prompts = LinkedBlockingQueue<SessionInteractions.Prompt>()
         val replacementResults = LinkedBlockingQueue<Boolean>()
-        val interactions = SessionInteractions(Executor { it.run() }).also { it.attach(this) }
+        val execResults = CopyOnWriteArrayList<Pair<String, String>>()
+        val interactions = SessionInteractions(Executor { it.run() })
+        val presentation = interactions.attach(this)
         val reads = AtomicInteger()
         private val worker = Executors.newSingleThreadExecutor { Thread(it, "synthetic-session-credentials") }
         private val credentials = SessionCredentialProvider { selection, _, current, callback: AuthenticationCallback ->
@@ -158,12 +190,14 @@ class SessionPipelineIntegrationTest {
         val limits = SshLimits(1000, 3000, 1000, 5000, 1000, 1000, 1000, 1000, 700, 1000, 3, 100, 300, 4096)
         private val backendFactory: (HostTrustRequests, Runnable) -> SshBackend = closeGate?.let { gate ->
             { trust, trusted -> gate.backend(trust, trusted) }
-        } ?: { trust, trusted -> JschSshBackend(HostTrustPolicy(trust, trusted)) }
+        } ?: commandBackend?.let { backend -> { _, _ -> backend } }
+            ?: { trust, trusted -> JschSshBackend(HostTrustPolicy(trust, trusted)) }
         val factory = SshSessionAttemptFactory(credentials, HostKeyRepository(directory, TrustFileIo()), interactions, limits, runtime,
             closeTimeoutMillis = closeTimeoutMillis, backendFactory = backendFactory)
         val controller = SessionController(factory, queue)
         override fun show(prompt: SessionInteractions.Prompt) { prompts.add(prompt) }
         override fun dismiss(prompt: SessionInteractions.Prompt) { }
+        override fun execCompleted(command: String, output: String) { execResults.add(command to output) }
         override fun replacementFinished(mismatch: HostKeyMismatch, success: Boolean) { replacementResults.add(success) }
         fun await(assertion: () -> Boolean) {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
@@ -223,6 +257,104 @@ class SessionPipelineIntegrationTest {
             f.await { !serverSession.isOpen && server.ssh.activeSessions.size == 1 }
             assertNotSame(serverSession, server.ssh.activeSessions.single())
         } }
+    }
+
+    @Test fun productionControllerJschAndMinaPreserveMixedCommandOrderAndNeverReplayAfterLoss() {
+        val keyPair = Server.newKeyPair()
+        val initialServer = Server(hostKeyPair = keyPair)
+        val port = initialServer.ssh.port
+        Fixture().use { f ->
+            try {
+                val host = initialServer.profile().copy(initialCommand = null)
+                f.connect(host)
+                f.prompt().accept()
+                f.await { f.controller.current.connection.isReady }
+
+                assertTrue(f.controller.executeShellCommand("first-shell-command"))
+                assertTrue(f.controller.executeExecCommand("middle-exec-command", f.presentation))
+                assertTrue(f.controller.executeShellCommand("last-shell-command"))
+                f.await {
+                    initialServer.shellCommands.contains("first-shell-command") &&
+                        initialServer.execCommands.contains("middle-exec-command") &&
+                        initialServer.shellCommands.contains("last-shell-command")
+                }
+                assertEquals("controller admission order must be preserved by the production SSH coordinator",
+                    listOf("shell:first-shell-command", "exec:middle-exec-command", "shell:last-shell-command"),
+                    initialServer.commandOrder.filter { it.endsWith("first-shell-command") ||
+                        it.endsWith("middle-exec-command") || it.endsWith("last-shell-command") })
+
+                // Close the actual MINA-backed connection, then admit commands behind its queued loss
+                // event. The event queue is intentionally held so its order is deterministic.
+                initialServer.disconnectClients()
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+                while (f.queue.pendingCount == 0 && System.nanoTime() < deadline) Thread.sleep(5)
+                assertTrue("the actual MINA disconnect must publish a controller loss event", f.queue.pendingCount > 0)
+                assertTrue(f.controller.executeShellCommand("unsent-shell-after-mina-loss"))
+                assertTrue(f.controller.executeExecCommand("unsent-exec-after-mina-loss", f.presentation))
+                f.queue.drain()
+                f.await { f.controller.current.attemptHost == null &&
+                    f.controller.current.connection.phase == ConnectionState.Phase.ERROR }
+                assertTrue("the lost attempt must not publish its unsent exec result after loss",
+                    f.execResults.none { it.first == "unsent-exec-after-mina-loss" })
+                initialServer.close()
+
+                Server(port, keyPair).use { reconnected ->
+                    f.connect(host)
+                    f.await { f.controller.current.connection.isReady }
+                    assertEquals("a fresh session starts without replaying either command admitted behind loss",
+                        0, reconnected.shellCommands.count { it == "unsent-shell-after-mina-loss" })
+                    assertFalse(reconnected.execCommands.contains("unsent-exec-after-mina-loss"))
+                    assertTrue(f.controller.executeShellCommand("fresh-session-only"))
+                    f.await { reconnected.shellCommands.contains("fresh-session-only") }
+                    assertFalse(reconnected.shellCommands.any { it.startsWith("unsent-") })
+                    assertFalse(reconnected.execCommands.any { it.startsWith("unsent-") })
+                    f.controller.disconnect()
+                    f.await { f.controller.current.attemptHost == null &&
+                        f.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+                }
+            } finally {
+                initialServer.close()
+            }
+        }
+    }
+
+    @Test fun realTransportDropsCommandsBehindAProviderCallThatFailsAndAReplacementAttemptDoesNotReplayThem() {
+        val backend = RecordingSshBackend().apply { blockAt = "exec.connect"; ignoreInterrupts = true }
+        Fixture(commandBackend = backend).use { f ->
+            val host = SessionFixtures.host("synthetic.invalid")
+            f.connect(host)
+            f.await { f.controller.current.connection.isReady }
+
+            assertTrue(f.controller.executeExecCommand("blocked-exec-attempt", f.presentation))
+            f.queue.drain()
+            assertTrue("the production transport did not reach its blocked provider call",
+                backend.entered.await(5, TimeUnit.SECONDS))
+            assertTrue("the mixed shell write should be admitted behind the exec operation",
+                f.controller.executeShellCommand("unsent-shell-after-provider-loss"))
+            f.queue.drain()
+            backend.failAt = "exec.connect"
+            backend.release.countDown()
+            f.await { f.controller.current.attemptHost == null &&
+                f.controller.current.connection.phase == ConnectionState.Phase.ERROR }
+            assertTrue("a failed exec provider call cannot publish partial script output",
+                f.execResults.none { it.first == "blocked-exec-attempt" })
+
+            backend.failAt = null
+            backend.blockAt = null
+            f.connect(host)
+            f.await { f.controller.current.connection.isReady }
+            assertTrue(f.controller.executeShellCommand("fresh-session-only"))
+            f.queue.drain()
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (backend.writes.none { it.startsWith("fresh-session-only\r\n") } &&
+                System.nanoTime() < deadline) Thread.sleep(5)
+            assertTrue(backend.writes.any { it.startsWith("fresh-session-only\r\n") })
+            assertFalse("an old command must not replay on the replacement transport",
+                backend.writes.any { it.startsWith("unsent-shell-after-provider-loss") })
+            f.controller.disconnect()
+            f.await { f.controller.current.attemptHost == null &&
+                f.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+        }
     }
 
     @Test fun hostChangeWhileActualTrustWaitsCancelsExactOldRequestAndLateAcceptCannotAuthenticateIt() {
