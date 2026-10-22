@@ -63,7 +63,13 @@ internal class AndroidMdnsSocket private constructor(
     override fun close() = socket.close()
 
     companion object {
-        fun open(connectivity: ConnectivityManager, network: Network): AndroidMdnsSocket {
+        // Keep platform resource acquisition injectable for deterministic JVM cleanup/policy tests.
+        fun open(
+            connectivity: ConnectivityManager,
+            network: Network,
+            socketFactory: () -> MulticastSocket = { MulticastSocket(null) },
+            interfaceLookup: (String) -> NetworkInterface? = { NetworkInterface.getByName(it) },
+        ): AndroidMdnsSocket {
             val capabilities = connectivity.getNetworkCapabilities(network) ?: throw UnknownHostException()
             // Never choose an underlying Wi-Fi network to route around the user's active VPN.
             if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) ||
@@ -73,7 +79,7 @@ internal class AndroidMdnsSocket private constructor(
             ) throw UnknownHostException()
             val properties = connectivity.getLinkProperties(network) ?: throw UnknownHostException()
             val name = properties.interfaceName ?: throw UnknownHostException()
-            val iface = NetworkInterface.getByName(name) ?: throw UnknownHostException()
+            val iface = interfaceLookup(name) ?: throw UnknownHostException()
             if (iface.index <= 0 || !iface.isUp || iface.isLoopback) throw UnknownHostException()
             val prefixes = properties.linkAddresses.filter { MdnsAddressCodec.usable(it.address) }
                 .map { it.address.address to it.prefixLength }
@@ -85,7 +91,7 @@ internal class AndroidMdnsSocket private constructor(
                 }
             }
             if (destinations.isEmpty()) throw UnknownHostException()
-            val socket = MulticastSocket(null)
+            val socket = socketFactory()
             var handedOff = false
             try {
                 socket.bind(InetSocketAddress(0))

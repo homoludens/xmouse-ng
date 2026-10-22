@@ -161,3 +161,37 @@ Retained JVM XML: `/tmp/opencode/xmouse-task64-final-jvm/`; lint XML:
 **Not run:** Android instrumentation, API-26 hardware fallback, real IPv4/IPv6 LAN/multicast,
 VPN/network-policy integration, or SSH-without-advertisement device tests. No connected device
 or configured AVD is available; none was provisioned and no ADB commands were run.
+
+## Task 6.5 resource lifecycle
+
+The fallback remains one synchronous lookup: only an eligible `.local` native-resolution failure
+after the current attempt, local-network permission, and active-network checks reaches the socket
+factory. `AndroidMdnsSocket.open` rejects a VPN (including a network without `NOT_VPN`) and all
+transports other than Wi-Fi/Ethernet before allocating a socket. It binds one ephemeral socket to
+the captured Android `Network` and interface, never joins a multicast group, and closes the raw
+socket in `finally` if setup/binding fails before ownership is handed to the resolver. The resolver
+owns the handed-off socket with `use`, so normal result/timeout, cancellation, revocation, network
+change, send/receive failure, and parser/processing exceptions all leave through one close call.
+Receive waits remain capped at 50 ms so cancellation and policy changes are rechecked promptly.
+
+No Wi-Fi multicast lock is acquired: this implementation only accepts legacy-unicast replies to
+its ephemeral port and has no multicast receive membership/listener. The one-shot query itself is
+sent while the explicit lookup is active; there is no background or persistent multicast work.
+
+`AndroidNetworkAddressResolverTest` was extended (not duplicated) to assert a single open and
+exactly-once close on success/timeout/cancellation, close on first/second-query send errors and
+receive errors, suppression of a close exception without retrying close, setup-failure closure of
+the allocated socket, and zero socket allocations for VPN/non-local transports. Existing permission
+revocation and active-network-change cases also assert closure and prohibit a subsequent open.
+Together with `MdnsAddressCodecTest`, these remain deterministic JVM tests without a real LAN.
+
+On 2026-10-22, the resolver/codec/session suites were explicitly rerun with both configured SDK
+environment variables: **62 tests, zero failures/errors/skips** (`MdnsAddressCodecTest` 19,
+`AndroidNetworkAddressResolverTest` 8, `SshSessionAttemptFactoryTest` 8, and `SessionControllerTest`
+27). `:app:lintDebug` and `:app:assembleDebug` passed in the same Gradle invocation. Strict OpenSpec
+validation passed, and `git diff --check` returned no findings.
+
+**Device verification remains not run:** there is no connected device or configured AVD, so API 26
+socket/interface behavior and real VPN/network restrictions were not verified. No AVD was
+provisioned and no ADB command was run. Task 6.5 remains unchecked until the required API 26 device
+behavior is verified; JVM success is not a substitute.

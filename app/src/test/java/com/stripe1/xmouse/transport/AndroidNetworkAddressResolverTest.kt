@@ -1,7 +1,10 @@
 package com.stripe1.xmouse.transport
 
 import android.net.ConnectivityManager
+import android.net.LinkAddress
+import android.net.LinkProperties
 import android.net.Network
+import android.net.NetworkCapabilities
 import com.stripe1.xmouse.connection.Endpoint
 import com.stripe1.xmouse.permissions.LocalNetworkPermissionCoordinator
 import org.junit.Assert.*
@@ -9,9 +12,13 @@ import org.junit.Test
 import org.mockito.Mockito.*
 import org.xbill.DNS.Message
 import org.xbill.DNS.Type
+import java.io.IOException
 import java.net.Inet6Address
 import java.net.InetAddress
+import java.net.MulticastSocket
+import java.net.NetworkInterface
 import java.net.Socket
+import java.net.SocketAddress
 import java.net.UnknownHostException
 import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
@@ -37,13 +44,23 @@ class AndroidNetworkAddressResolverTest {
         var onReceive: () -> Unit = {}
         var flood = false
         var closed = false
+        var closeCount = 0
         var opened = 0
+        var failSendAt = 0
+        var sendCount = 0
+        var receiveFailure: IOException? = null
+        var closeFailure: IOException? = null
         val local = InetAddress.getByAddress(byteArrayOf(192.toByte(), 0, 2, 20))
-        override fun send(query: ByteArray) { queries.add(Message(query)) }
+        override fun send(query: ByteArray) {
+            sendCount++
+            if (sendCount == failSendAt) throw IOException("send failed")
+            queries.add(Message(query))
+        }
         override fun receive(timeoutMillis: Int): MdnsPacket? {
             assertTrue(timeoutMillis in 1..QueryOnlyMdnsResolver.POLL_MILLIS)
             now += TimeUnit.MILLISECONDS.toNanos(timeoutMillis.toLong())
             onReceive()
+            receiveFailure?.let { throw it }
             return packets.removeFirstOrNull() ?: if (flood) packet(byteArrayOf(0)) else null
         }
         fun packet(bytes: ByteArray, port: Int = 5353, source: InetAddress = local) = MdnsPacket(bytes, source, port)
@@ -51,7 +68,12 @@ class AndroidNetworkAddressResolverTest {
         override fun scope(address: InetAddress): InetAddress = if (address is Inet6Address && address.isLinkLocalAddress) {
             Inet6Address.getByAddress(null, address.address, 7)
         } else address
-        override fun close() { assertFalse(closed); closed = true }
+        override fun close() {
+            assertFalse(closed)
+            closeCount++
+            closed = true
+            closeFailure?.let { throw it }
+        }
         fun resolver() = QueryOnlyMdnsResolver({ opened++; this }, { now }, { MdnsPackets.ID })
     }
 
@@ -98,6 +120,8 @@ class AndroidNetworkAddressResolverTest {
         assertEquals(2, resolved.resolvedAddresses.size)
         assertEquals(7, (resolved.resolvedAddresses[1] as Inet6Address).scopeId)
         assertTrue(packets.closed)
+        assertEquals(1, packets.opened)
+        assertEquals(1, packets.closeCount)
         assertEquals(listOf(Type.A, Type.AAAA), packets.queries.map { it.question.type })
         assertTrue(packets.queries.all {
             it.question.name == MdnsPackets.name && it.question.dClass == 1 &&
@@ -126,6 +150,8 @@ class AndroidNetworkAddressResolverTest {
             assertEquals(TimeUnit.MILLISECONDS.toNanos(QueryOnlyMdnsResolver.TIMEOUT_MILLIS.toLong()), packets.now)
             assertEquals(2, packets.queries.size)
             assertTrue(packets.closed)
+            assertEquals(1, packets.opened)
+            assertEquals(1, packets.closeCount)
         }
         // The production SSH owner must not relabel this DNS expiry as a TCP/SSH timeout.
         val f = Fixture()
@@ -148,12 +174,109 @@ class AndroidNetworkAddressResolverTest {
         }
     }
 
+    @Test fun fallbackClosesExactlyOnceOnSendReceiveAndCloseFailures() {
+        for (sendFailure in listOf(1, 2)) {
+            val packets = Packets().also { it.failSendAt = sendFailure }
+            assertThrows(IOException::class.java) { packets.resolver().resolve("desktop.local") {} }
+            assertTrue(packets.closed)
+            assertEquals(1, packets.closeCount)
+        }
+
+        val receiveFailure = Packets().also { it.receiveFailure = IOException("receive failed") }
+        assertThrows(IOException::class.java) { receiveFailure.resolver().resolve("desktop.local") {} }
+        assertTrue(receiveFailure.closed)
+        assertEquals(1, receiveFailure.closeCount)
+
+        val closeFailure = Packets().also {
+            it.failSendAt = 1
+            it.closeFailure = IOException("close failed")
+        }
+        val sendError = assertThrows(IOException::class.java) {
+            closeFailure.resolver().resolve("desktop.local") {}
+        }
+        assertEquals("send failed", sendError.message)
+        assertEquals(1, sendError.suppressed.size)
+        assertEquals("close failed", sendError.suppressed.single().message)
+        assertTrue(closeFailure.closed)
+        assertEquals(1, closeFailure.closeCount)
+    }
+
+    @Test fun deniedNetworkPoliciesDoNotAllocateFallbackSockets() {
+        val policies = listOf(
+            Triple(false, false, true), // VPN without NOT_VPN capability
+            Triple(true, true, true), // VPN transport with an underlying Wi-Fi-like route
+            Triple(true, false, false), // Cellular/non-local transport
+        )
+        for ((notVpn, vpnTransport, wifiTransport) in policies) {
+            val connectivity = mock(ConnectivityManager::class.java)
+            val network = mock(Network::class.java)
+            val capabilities = mock(NetworkCapabilities::class.java)
+            `when`(connectivity.getNetworkCapabilities(network)).thenReturn(capabilities)
+            `when`(capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)).thenReturn(notVpn)
+            `when`(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)).thenReturn(vpnTransport)
+            `when`(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)).thenReturn(wifiTransport)
+            `when`(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)).thenReturn(false)
+            var socketAllocations = 0
+
+            assertThrows(UnknownHostException::class.java) {
+                AndroidMdnsSocket.open(connectivity, network, socketFactory = {
+                    socketAllocations++
+                    MulticastSocket(null)
+                })
+            }
+            assertEquals(0, socketAllocations)
+        }
+    }
+
+    @Test fun socketSetupFailureClosesTheAllocatedSocketOnce() {
+        val connectivity = mock(ConnectivityManager::class.java)
+        val network = mock(Network::class.java)
+        val capabilities = mock(NetworkCapabilities::class.java)
+        val linkProperties = mock(LinkProperties::class.java)
+        val linkAddress = mock(LinkAddress::class.java)
+        val networkInterface = mock(NetworkInterface::class.java)
+        `when`(connectivity.getNetworkCapabilities(network)).thenReturn(capabilities)
+        `when`(capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)).thenReturn(true)
+        `when`(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)).thenReturn(false)
+        `when`(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)).thenReturn(true)
+        `when`(connectivity.getLinkProperties(network)).thenReturn(linkProperties)
+        `when`(linkProperties.interfaceName).thenReturn("test0")
+        `when`(linkProperties.linkAddresses).thenReturn(listOf(linkAddress))
+        `when`(linkAddress.address).thenReturn(InetAddress.getByAddress(byteArrayOf(192.toByte(), 0, 2, 1)))
+        `when`(linkAddress.prefixLength).thenReturn(24)
+        `when`(networkInterface.index).thenReturn(7)
+        `when`(networkInterface.isUp).thenReturn(true)
+        `when`(networkInterface.isLoopback).thenReturn(false)
+        val socket = object : MulticastSocket(null) {
+            var closeCount = 0
+            override fun bind(bindpoint: SocketAddress?) { throw IOException("bind failed") }
+            override fun close() {
+                closeCount++
+                super.close()
+            }
+        }
+
+        assertThrows(IOException::class.java) {
+            AndroidMdnsSocket.open(
+                connectivity,
+                network,
+                socketFactory = { socket },
+                interfaceLookup = { name ->
+                    assertEquals("test0", name)
+                    networkInterface
+                },
+            )
+        }
+        assertTrue(socket.isClosed)
+        assertEquals(1, socket.closeCount)
+    }
+
     @Test fun cancellationRevocationAndNetworkChangesCannotPublishLateFallbackAnswers() {
         for (reason in listOf("cancel", "permission", "network")) {
             val f = Fixture()
             val packets = Packets()
             `when`(f.network.getAllByName("desktop.local")).thenThrow(UnknownHostException())
-            packets.packets.add(packets.packet(MdnsPackets.response()))
+            if (reason != "cancel") packets.packets.add(packets.packet(MdnsPackets.response()))
             packets.onReceive = {
                 when (reason) {
                     "cancel" -> f.current = false
@@ -169,6 +292,7 @@ class AndroidNetworkAddressResolverTest {
             }
             assertThrows(expected) { resolver.resolve("desktop.local", f.active) }
             assertTrue(packets.closed)
+            assertEquals(1, packets.closeCount)
             // The same gate prevents a subsequent forbidden lookup from opening any socket.
             var opened = false
             val guarded = f.resolver { _, _, _ -> opened = true; emptyArray() }
