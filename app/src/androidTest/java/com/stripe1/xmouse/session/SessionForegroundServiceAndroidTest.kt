@@ -124,13 +124,22 @@ class SessionForegroundServiceAndroidTest {
         val closes = AtomicInteger()
         val failClose = AtomicBoolean()
         val createdHosts = CopyOnWriteArrayList<SessionHost>()
+        private val nextFailures = ArrayDeque<ConnectionFailure>()
+
+        fun failNextWith(vararg failures: ConnectionFailure) {
+            synchronized(nextFailures) { nextFailures.addAll(failures.toList()) }
+        }
+
         override fun create(host: SessionHost): SessionAttempt {
             created.incrementAndGet()
             createdHosts.add(host)
             return object : SessionAttempt {
                 override fun start(listener: SessionAttempt.Listener) {
                     listener.phase(ConnectionState.Phase.RESOLVING)
-                    listener.ready()
+                    val failure = synchronized(nextFailures) {
+                        if (nextFailures.isEmpty()) null else nextFailures.removeFirst()
+                    }
+                    if (failure == null) listener.ready() else listener.failed(failure)
                 }
 
                 override fun cancelAndClose(completion: (ConnectionFailure?) -> Unit) {
@@ -174,6 +183,7 @@ class SessionForegroundServiceAndroidTest {
         blockSelection: Boolean = false,
         private val manualSelections: Boolean = false,
         private val controllerQueue: SessionEventQueue? = null,
+        private val selectedHost: SessionHost? = null,
     ) : SessionServiceOwner, AutoCloseable {
         val attempts = RecordingAttemptFactory()
         override val controller = if (controllerQueue == null) SessionController(attempts)
@@ -198,7 +208,7 @@ class SessionForegroundServiceAndroidTest {
             selectionWorker.execute {
                 selectionStarted.countDown()
                 releaseSelection.await(5, TimeUnit.SECONDS)
-                completion(SessionFixtures.host())
+                completion(selectedHost ?: SessionFixtures.host())
                 selectionsCompleted.incrementAndGet()
             }
         }
@@ -578,6 +588,13 @@ class SessionForegroundServiceAndroidTest {
             context.getSystemService(NotificationManager::class.java).areNotificationsEnabled())
     }
 
+    private fun grantLocalNetworkPermissionForConnectionTest() {
+        if (Build.VERSION.SDK_INT < 37) return
+        shell("pm grant ${context.packageName} ${LocalNetworkPermissionCoordinator.PERMISSION}")
+        assertEquals(PackageManager.PERMISSION_GRANTED,
+            context.checkSelfPermission(LocalNetworkPermissionCoordinator.PERMISSION))
+    }
+
     private fun shell(command: String): String = ParcelFileDescriptor.AutoCloseInputStream(
         instrumentation.uiAutomation.executeShellCommand(command),
     ).use { it.readBytes().toString(Charsets.UTF_8) }
@@ -667,6 +684,29 @@ class SessionForegroundServiceAndroidTest {
             "currentPackage=${device.currentPackageName}; clickableNodes=$nodes")
     }
 
+    private fun clickDialogButton(text: String) {
+        val expected = normalizedUiText(text)
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (System.nanoTime() < deadline) {
+            val target = device.findObjects(By.clickable(true)).firstOrNull { node ->
+                runCatching {
+                    node.className.toString().endsWith("Button") && normalizedUiText(node.text) == expected
+                }.getOrDefault(false)
+            }
+            if (target != null) {
+                try {
+                    target.click()
+                    instrumentation.waitForIdleSync()
+                    return
+                } catch (_: androidx.test.uiautomator.StaleObjectException) {
+                    // A prompt can be replaced between the accessibility query and the click.
+                }
+            }
+            Thread.sleep(50)
+        }
+        fail("Dialog button did not appear (case-insensitive): $text")
+    }
+
     private fun assertImmutable(pendingIntent: PendingIntent) {
         // PendingIntent.isImmutable() was added in API 31. Creation uses FLAG_IMMUTABLE on the API 26
         // floor too; API 31+ additionally verifies the framework-reported bit at runtime.
@@ -700,6 +740,61 @@ class SessionForegroundServiceAndroidTest {
         val channel = notificationManager.getNotificationChannel(NOTIFICATION_CHANNEL_ID)
         assertNotNull(channel)
         assertEquals(NotificationManager.IMPORTANCE_LOW, channel!!.importance)
+    }
+
+    @Test
+    fun resolutionFailureGuidesManualEntryAndRetryRetainsHostWithoutPasswordMislabel() {
+        grantNotificationPermissionForDisclosureTest()
+        grantLocalNetworkPermissionForConnectionTest()
+        val configuredHost = SessionFixtures.host("desktop.local", 71, "synthetic_resolution_profile", 2271)
+        val recordingOwner = RecordingOwner(selectedHost = configuredHost)
+        recordingOwner.attempts.failNextWith(
+            ConnectionFailure.Resolution(ConnectionFailure.ResolutionReason.NOT_FOUND),
+            ConnectionFailure.Authentication(ConnectionFailure.AuthenticationReason.REJECTED),
+        )
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity()
+
+        requestConnect(activityScenario)
+        eventually {
+            val snapshot = recordingOwner.controller.current
+            snapshot.attemptHost == null &&
+                snapshot.connection.failure == ConnectionFailure.Resolution(ConnectionFailure.ResolutionReason.NOT_FOUND)
+        }
+        assertEquals(configuredHost, recordingOwner.controller.current.desiredHost)
+        assertEquals(configuredHost.endpoint.identity, recordingOwner.controller.current.connection.endpoint)
+
+        showSessionControlsFromMenu(activityScenario)
+        waitForTextContains("Manage Hosts")
+        waitForTextContains("IP address")
+        waitForText("Retry")
+        val resolutionDialogText = device.findObjects(By.clazz("android.widget.TextView"))
+            .mapNotNull { runCatching { it.text }.getOrNull() }.joinToString(" ")
+        assertFalse("a DNS failure must not be described as a password failure",
+            resolutionDialogText.contains("password", ignoreCase = true))
+
+        clickDialogButton("Retry")
+        val resolutionMessageDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (device.findObjects(By.textContains("Manage Hosts")).isNotEmpty() &&
+            System.nanoTime() < resolutionMessageDeadline) Thread.sleep(50)
+        assertTrue("resolution guidance should dismiss before checking the authentication message",
+            device.findObjects(By.textContains("Manage Hosts")).isEmpty())
+        eventually {
+            val snapshot = recordingOwner.controller.current
+            recordingOwner.selectionCalls.get() == 2 && snapshot.attemptHost == null &&
+                snapshot.connection.failure == ConnectionFailure.Authentication(ConnectionFailure.AuthenticationReason.REJECTED)
+        }
+        assertEquals("Retry must keep the selected profile and endpoint", configuredHost,
+            recordingOwner.controller.current.desiredHost)
+        assertEquals(listOf(configuredHost, configuredHost), recordingOwner.attempts.createdHosts.toList())
+
+        showSessionControlsFromMenu(activityScenario)
+        waitForTextContains("Authentication was not accepted")
+        val authenticationDialogText = device.findObjects(By.clazz("android.widget.TextView"))
+            .mapNotNull { runCatching { it.text }.getOrNull() }.joinToString(" ")
+        assertFalse("authentication errors must not reuse DNS/manual-IP wording",
+            authenticationDialogText.contains("Manage Hosts", ignoreCase = true) ||
+                authenticationDialogText.contains("could not be found", ignoreCase = true))
     }
 
     @After

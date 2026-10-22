@@ -1433,9 +1433,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		}
 		if (failure instanceof ConnectionFailure.Resolution) {
 			ConnectionFailure.ResolutionReason reason = ((ConnectionFailure.Resolution) failure).getReason();
-			if (reason == ConnectionFailure.ResolutionReason.TIMED_OUT) return "Computer lookup timed out. Check the network and retry.";
-			if (reason == ConnectionFailure.ResolutionReason.NOT_FOUND) return "Computer could not be found. Check its hostname or try its IP address.";
-			return "Computer lookup is unavailable. Check the network and retry.";
+			if (reason == ConnectionFailure.ResolutionReason.TIMED_OUT) return "Computer lookup timed out. Check the network or open Manage Hosts to enter its IP address, then retry.";
+			if (reason == ConnectionFailure.ResolutionReason.NOT_FOUND) return "Computer could not be found. Check the hostname and same network, or open Manage Hosts to enter its IP address. The saved profile is unchanged until saved.";
+			return "Computer lookup is unavailable. Check the network or open Manage Hosts to enter its IP address, then retry.";
 		}
 		if (failure instanceof ConnectionFailure.Trust) {
 			ConnectionFailure.TrustReason reason = ((ConnectionFailure.Trust) failure).getReason();
