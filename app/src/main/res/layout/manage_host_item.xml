@@ -17,16 +17,18 @@
         />
 
     <TextView
+        android:id="@+id/new_host_endpoint_label"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="IP address"
+        android:labelFor="@id/new_host_ip"
+        android:text="Hostname or IP address"
         />
 
     <EditText
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:id="@+id/new_host_ip"
-        android:hint="192.168.1.1"
+        android:hint="desktop.local, 192.0.2.1, or 2001:db8::1"
         />
     <TextView
         android:layout_width="match_parent"

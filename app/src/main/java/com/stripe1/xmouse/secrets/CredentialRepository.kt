@@ -8,6 +8,7 @@ import android.os.Looper
 import android.preference.PreferenceManager
 import androidx.core.database.sqlite.transaction
 import com.stripe1.xmouse.DatabaseHandler
+import com.stripe1.xmouse.connection.Endpoint
 import java.io.Closeable
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -142,6 +143,8 @@ class CredentialRepository internal constructor(
 
     /** Fresh records per edit/add avoid clobbering old credentials, even after SQLite ID reuse. */
     fun saveHost(expected: CredentialHost?, alias: String, host: String, user: String, port: String, password: ByteArray): Long {
+        // Validate before reading or writing secrets so a malformed edit cannot replace a good profile.
+        Endpoint.manual(host, port)
         requireWritable()
         expected?.takeUnless { it.credentialReentryRequired }?.let { readPassword(it).fill(0) }
         val reference = verifiedReplacement(password)

@@ -342,7 +342,9 @@ class CredentialRepositoryAndroidTest {
         f.assertNoPlaintext()
     }
 
-    @Test fun actualHostScreenLoadsEditsAddsCancelsAndReopensOnlyProtectedPasswords() = uiFixture { f ->
+    @Test fun actualHostScreenPreservesManualEndpointNamesAndRejectsInvalidEdits() = uiFixture { f ->
+        val endpoints = listOf("192.0.2.42", "2001:db8::42", "workstation.example", "desktop.local")
+        val initialCount = f.passwords.size
         ActivityScenario.launch<ListEditActivity>(Intent(target, ListEditActivity::class.java)).use { scenario ->
             barrier()
             scenario.onActivity { it.xMouseManage(0) }
@@ -358,21 +360,77 @@ class CredentialRepositoryAndroidTest {
                 dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
             }
             barrier(); barrier()
-            scenario.onActivity { it.xMouseManage(null) }
+
+            endpoints.forEachIndexed { index, endpoint ->
+                scenario.onActivity { it.xMouseManage(null) }
+                barrier()
+                scenario.onActivity { activity ->
+                    val dialog = editor(activity)
+                    if (index == 0) {
+                        assertEquals("Cancel", dialog.getButton(AlertDialog.BUTTON_NEGATIVE).text.toString())
+                        assertFalse(dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.visibility == android.view.View.VISIBLE)
+                    }
+                    enter(dialog.findViewById(R.id.new_host_alias), "UI added $index")
+                    enter(dialog.findViewById(R.id.new_host_ip), endpoint)
+                    enter(dialog.findViewById(R.id.new_host_username), "u")
+                    enter(dialog.findViewById(R.id.new_host_port), "2222")
+                    enter(dialog.findViewById(R.id.new_host_password), "NOT_REAL_ui_add_$index")
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                }
+                barrier(); barrier()
+                assertEquals(endpoint, f.repository.hosts()[initialCount + index].host)
+            }
+
+            scenario.recreate(); barrier()
+            endpoints.forEachIndexed { index, endpoint ->
+                val profileIndex = initialCount + index
+                scenario.onActivity { it.xMouseManage(profileIndex) }
+                barrier()
+                scenario.onActivity { activity ->
+                    val dialog = editor(activity)
+                    assertEquals(endpoint, dialog.findViewById<EditText>(R.id.new_host_ip).text.toString())
+                    assertEquals("2222", dialog.findViewById<EditText>(R.id.new_host_port).text.toString())
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                }
+                barrier(); barrier()
+                assertEquals(endpoint, f.repository.hosts()[profileIndex].host)
+            }
+
+            val invalidIndex = initialCount + endpoints.lastIndex
+            val invalidTarget = f.repository.hosts()[invalidIndex]
+            scenario.onActivity { it.xMouseManage(invalidIndex) }
             barrier()
             scenario.onActivity { activity ->
                 val dialog = editor(activity)
-                assertEquals("Cancel", dialog.getButton(AlertDialog.BUTTON_NEGATIVE).text.toString())
-                assertFalse(dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.visibility == android.view.View.VISIBLE)
-                enter(dialog.findViewById(R.id.new_host_alias), "UI added")
-                enter(dialog.findViewById(R.id.new_host_ip), "ui.local")
-                enter(dialog.findViewById(R.id.new_host_username), "u")
-                enter(dialog.findViewById(R.id.new_host_port), "22")
-                enter(dialog.findViewById(R.id.new_host_password), "NOT_REAL_ui_add")
+                val endpoint = dialog.findViewById<EditText>(R.id.new_host_ip)
+                assertEquals("Hostname or IP address", dialog.findViewById<android.widget.TextView>(R.id.new_host_endpoint_label).text.toString())
+                assertEquals(endpoints.last(), endpoint.text.toString())
+                enter(endpoint, "")
                 dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                assertTrue(dialog.isShowing)
+                assertNotNull(endpoint.error)
             }
-            barrier(); barrier()
-            scenario.recreate(); barrier()
+            barrier()
+            assertEquals(invalidTarget, f.repository.hosts()[invalidIndex])
+            scenario.onActivity { activity ->
+                val dialog = editor(activity)
+                val endpoint = dialog.findViewById<EditText>(R.id.new_host_ip)
+                val port = dialog.findViewById<EditText>(R.id.new_host_port)
+                enter(endpoint, endpoints.last())
+                enter(port, "65536")
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                assertTrue(dialog.isShowing)
+                assertNotNull(port.error)
+            }
+            barrier()
+            assertEquals(invalidTarget, f.repository.hosts()[invalidIndex])
+            expect<IllegalArgumentException> {
+                f.repository.saveHost(invalidTarget, "invalid", "", "u", "2222", byteArrayOf())
+            }
+            assertEquals(invalidTarget, f.repository.hosts()[invalidIndex])
+            scenario.onActivity { editor(it).getButton(AlertDialog.BUTTON_NEUTRAL).performClick() }
+            barrier()
+
             scenario.onActivity { it.xMouseManage(0) }; barrier()
             scenario.onActivity { activity ->
                 val dialog = editor(activity)
@@ -382,8 +440,12 @@ class CredentialRepositoryAndroidTest {
             }
             barrier()
             assertArrayEquals("NOT_REAL_ui_edit".toByteArray(), f.repository.readPassword(f.repository.hosts().first()))
-            assertArrayEquals("NOT_REAL_ui_add".toByteArray(), f.repository.readPassword(f.repository.hosts().last()))
-            assertEquals(3, f.repository.hosts().size)
+            endpoints.forEachIndexed { index, _ ->
+                val password = f.repository.readPassword(f.repository.hosts()[initialCount + index])
+                try { assertArrayEquals("NOT_REAL_ui_add_$index".toByteArray(), password) }
+                finally { password.fill(0) }
+            }
+            assertEquals(initialCount + endpoints.size, f.repository.hosts().size)
             f.assertNoPlaintext()
         }
     }

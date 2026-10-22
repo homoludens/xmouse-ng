@@ -10,6 +10,8 @@ import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
+import com.stripe1.xmouse.connection.Endpoint;
+import com.stripe1.xmouse.connection.EndpointHost;
 import com.stripe1.xmouse.secrets.AndroidCredentials;
 import com.stripe1.xmouse.secrets.CredentialHost;
 import com.stripe1.xmouse.secrets.CredentialRepository;
@@ -152,6 +154,7 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
                 dialog.dismiss(); loadCurrentHostList();
             } else {
                 String user = userBox.getText().toString(); String port = portBox.getText().toString();
+                if (!validHostInput(hostBox, portBox)) return;
                 if (existing != null && existing.getCredentialHost().getCredentialReentryRequired()
                         && passwordBox.getText().length() == 0) {
                     AlertDialog confirmation = new AlertDialog.Builder(this)
@@ -183,6 +186,23 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
                 catch (Exception ignored) { runOnUiThread(() -> { if (current(token)) failure(); }); }
             });
         });
+    }
+
+    private boolean validHostInput(EditText hostBox, EditText portBox) {
+        hostBox.setError(null);
+        portBox.setError(null);
+        boolean valid = true;
+        try { new EndpointHost(hostBox.getText().toString()); }
+        catch (IllegalArgumentException ignored) {
+            hostBox.setError("Enter a valid hostname or IP address");
+            valid = false;
+        }
+        try { Endpoint.parsePort(portBox.getText().toString()); }
+        catch (IllegalArgumentException ignored) {
+            portBox.setError("Port must be between 1 and 65535");
+            valid = false;
+        }
+        return valid;
     }
 
     private void saveHost(AlertDialog dialog, int token, HostItem existing, String alias,
