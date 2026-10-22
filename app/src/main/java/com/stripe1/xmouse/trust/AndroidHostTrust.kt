@@ -15,12 +15,12 @@ object AndroidHostTrust {
 }
 
 /** Activity-local, main-only presentation. The pure owner never retains this object strongly. */
-class HostTrustUi(private val activity: Activity, private val requests: HostTrustRequests) : HostTrustRequests.Listener {
+class HostTrustUi(private val activity: Activity, private val requests: HostTrustRequests? = null) : HostTrustRequests.Listener {
     private var request: HostTrustRequests.Request? = null
     private var dialog: AlertDialog? = null
-    fun start() { mainOnly(); requests.attach(this) }
+    fun start() { mainOnly(); requests?.attach(this) }
     fun stop() {
-        mainOnly(); requests.detach()
+        mainOnly(); requests?.detach()
         request?.cancel(); request = null
         dialog?.dismiss(); dialog = null
     }

@@ -33,6 +33,8 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
 ) : SessionAttemptFactory {
     init { require(credentialTimeoutMillis in 1..60_000); require(closeTimeoutMillis in 1..5_000) }
 
+    override fun invalidateReviews() = interactions.invalidate()
+
     override fun create(host: SessionHost): SessionAttempt = Attempt(host)
 
     private inner class Attempt(private val host: SessionHost) : SessionAttempt, HostTrustRequests.Listener {
@@ -49,6 +51,8 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
         private val closeCallbacks = mutableListOf<(ConnectionFailure?) -> Unit>()
         private var credentialTimer: ScheduledFuture<*>? = null
         private var closeTimer: ScheduledFuture<*>? = null
+        private var mismatchObservation: HostTrustRequests.MismatchObservation? = null
+        private var mismatchReviewEpoch = -1L
         private val trust = HostTrustRequests(trustRepository, Executor { it.run() }).also { it.attach(this) }
         private val transport = SshTransport(backendFactory(trust, Runnable {
             phase(ConnectionState.Phase.AUTHENTICATING)
@@ -103,11 +107,34 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
                 handedMaterial = material
                 transport.connect(SshConnectionRequest(host.endpoint, address, host.shell, host.initialCommand), material,
                     object : SshTransport.Callback<Void> {
-                        override fun success(value: Void?) { if (live.get()) listener?.ready() }
+                        override fun success(value: Void?) {
+                            if (live.get()) {
+                                host.initialCommand?.let(interactions::recentCommand)
+                                listener?.ready()
+                            }
+                        }
                         override fun failure(failure: SshTransport.Failure) { fail(failure.toConnectionFailure()) }
+                        override fun mismatch(mismatch: HostKeyMismatch) {
+                            synchronized(lock) {
+                                if (live.get()) {
+                                    mismatchObservation = trust.captureMismatch(mismatch, BooleanSupplier { live.get() })
+                                    if (mismatchObservation != null) mismatchReviewEpoch = interactions.reviewEpoch()
+                                }
+                            }
+                        }
                     })
             }
         }
+
+        override fun executeShellCommand(command: String): Boolean =
+            live.get() && transport.executeShellCommand(command)
+
+        override fun executeExecCommand(command: String): Boolean = live.get() && transport.exec(command,
+            object : SshTransport.Callback<String> {
+                override fun success(value: String) { if (live.get()) interactions.execCompleted(command, value) }
+                override fun failure(failure: SshTransport.Failure) { if (live.get()) interactions.execFailed(command) }
+            })
+
         private fun phase(phase: ConnectionState.Phase) { if (live.get()) listener?.phase(phase) }
         private fun fail(failure: ConnectionFailure) { if (live.get()) listener?.failed(failure) }
         override fun show(request: HostTrustRequests.Request) {
@@ -140,8 +167,61 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
             }
         }
         private fun finishCloseIfPossible() {
-            if (closeStarted && credentialsDone && transportDone && !closeFinished) finishClose(closeFailure)
+            if (closeStarted && credentialsDone && transportDone && !closeFinished) {
+                if (closeFailure == null) publishMismatchReviewAfterClose()
+                finishClose(closeFailure)
+            }
         }
+
+        /** Trust replacement is a new bounded review owner, created only after the old close barrier. */
+        private fun publishMismatchReviewAfterClose() {
+            val observation = mismatchObservation ?: return
+            val expectedEpoch = mismatchReviewEpoch
+            val reviewLive = AtomicBoolean(true)
+            val reviewCurrent = BooleanSupplier {
+                reviewLive.get() && interactions.reviewEpochIsCurrent(expectedEpoch)
+            }
+            val mismatch = trust.reviewMismatch(observation, reviewCurrent) ?: return
+            val replacementTransport = SshTransport(
+                backendFactory(trust, Runnable { }), SshTransport.newWorker(), limits, runtime,
+            )
+            lateinit var prompt: SessionInteractions.Prompt.Mismatch
+            prompt = SessionInteractions.Prompt.Mismatch(
+                mismatch,
+                { candidate, complete ->
+                    if (candidate !== mismatch || !reviewCurrent.asBoolean) {
+                        complete(false)
+                    } else {
+                        val completed = AtomicBoolean(false)
+                        replacementTransport.replaceHostKey(candidate, object : SshTransport.Callback<Void> {
+                            override fun success(value: Void?) = finishReplacementTransport(replacementTransport, completed, true, complete)
+                            override fun failure(failure: SshTransport.Failure) = finishReplacementTransport(replacementTransport, completed, false, complete)
+                        })
+                    }
+                },
+                {
+                    reviewLive.set(false)
+                    mismatch.cancel()
+                    replacementTransport.closeConfirmed(null)
+                },
+                { finishedPrompt, success -> interactions.finishMismatch(finishedPrompt, success) },
+            )
+            interactions.showReview(this, prompt, expectedEpoch, reviewCurrent)
+        }
+
+        private fun finishReplacementTransport(
+            replacementTransport: SshTransport,
+            completed: AtomicBoolean,
+            success: Boolean,
+            result: (Boolean) -> Unit,
+        ) {
+            if (!completed.compareAndSet(false, true)) return
+            replacementTransport.closeConfirmed(object : SshTransport.Callback<Void> {
+                override fun success(value: Void?) { result(success) }
+                override fun failure(failure: SshTransport.Failure) { result(false) }
+            })
+        }
+
         private fun finishClose(failure: ConnectionFailure?) {
             closeFinished = true; closeFailure = failure
             closeTimer?.cancel(false)

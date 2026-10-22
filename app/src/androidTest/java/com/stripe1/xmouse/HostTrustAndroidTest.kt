@@ -1,6 +1,7 @@
 package com.stripe1.xmouse
 
 import android.app.AlertDialog
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.Handler
@@ -9,6 +10,7 @@ import android.preference.PreferenceManager
 import android.widget.TextView
 import androidx.core.content.edit
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -29,6 +31,7 @@ import java.util.UUID
 import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.BooleanSupplier
+import java.util.function.Consumer
 
 /** Real dialog/presenter/lifecycle and durable Android files; no real hosts or credentials. */
 @RunWith(AndroidJUnit4::class)
@@ -59,8 +62,15 @@ class HostTrustAndroidTest {
         val key = ApprovedHostKey.parse(OpenSSHPublicKeyUtil.encodePublicKey(Ed25519PrivateKeyParameters(ByteArray(32) { (it + 1).toByte() }, 0).generatePublicKey()))
         val candidateKey = ApprovedHostKey.parse(OpenSSHPublicKeyUtil.encodePublicKey(Ed25519PrivateKeyParameters(ByteArray(32) { (it + 41).toByte() }, 0).generatePublicKey()))
         val endpoint = Endpoint.manual("Desktop.LOCAL.", 2222)
-        lateinit var presenter: MyConnectionHandler
-        fun destroyPresenter() { if (::presenter.isInitialized) presenter.destroy() }
+        lateinit var presenter: ActivityTrustPresenter
+        var activity: MainActivity? = null
+        fun destroyPresenter() {
+            if (::presenter.isInitialized) {
+                activity?.lifecycle?.removeObserver(presenter)
+                presenter.destroy()
+            }
+            activity = null
+        }
         var thread: Thread? = null
         fun verify(host: Endpoint = endpoint): Future<*> = worker.submit {
             thread = Thread.currentThread(); requests.verify(host, key, BooleanSupplier { true })
@@ -78,11 +88,10 @@ class HostTrustAndroidTest {
             preferences.edit(commit = true) { putBoolean("autologin_checkbox", false) }
             ActivityScenario.launch<MainActivity>(Intent(target, MainActivity::class.java)).use { scenario ->
                 scenario.onActivity { activity ->
-                    val slot = MainActivity::class.java.getDeclaredField("screenConnection").apply { isAccessible = true }
-                    (slot.get(activity) as MyConnectionHandler).destroy()
-                    f.presenter = MyConnectionHandler(activity, activity, f.requests)
-                    slot.set(activity, f.presenter); MainActivity.conn = f.presenter
-                    f.presenter.startCredentialUi()
+                    f.activity = activity
+                    f.presenter = ActivityTrustPresenter(activity, f.requests, f.worker)
+                    activity.lifecycle.addObserver(f.presenter)
+                    f.presenter.start()
                 }
                 action(f, scenario)
             }
@@ -135,6 +144,69 @@ class HostTrustAndroidTest {
         throw AssertionError("No mismatch review dialog: $fieldName")
     }
     private fun failed(future: Future<*>): HostTrustException = assertThrows(ExecutionException::class.java) { future.get(10, TimeUnit.SECONDS) }.cause as HostTrustException
+
+    /** Isolated UI test adapter; production Activity session prompts are covered by the service tests. */
+    private class ActivityTrustPresenter(
+        private var activity: Activity?,
+        private val requests: HostTrustRequests,
+        private val worker: ExecutorService,
+    ) : HostTrustRequests.Listener, LifecycleEventObserver {
+        var trustUi: HostTrustUi? = null
+            private set
+        var replacementUi: HostTrustReplacementUi? = null
+            private set
+        val isConnected: Boolean get() = false
+        private val main = Handler(Looper.getMainLooper())
+
+        fun start() {
+            val currentActivity = activity ?: return
+            if (trustUi == null) trustUi = HostTrustUi(currentActivity, requests)
+            trustUi?.start()
+        }
+
+        fun stop() {
+            trustUi?.stop()
+            replacementUi?.stop()
+        }
+
+        fun destroy() {
+            stop()
+            trustUi = null
+            replacementUi = null
+            activity = null
+        }
+
+        override fun onStateChanged(source: androidx.lifecycle.LifecycleOwner, event: androidx.lifecycle.Lifecycle.Event) {
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_START -> start()
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> stop()
+                androidx.lifecycle.Lifecycle.Event.ON_DESTROY -> destroy()
+                else -> Unit
+            }
+        }
+
+        override fun show(request: HostTrustRequests.Request) {
+            trustUi?.show(request) ?: request.cancel()
+        }
+
+        override fun dismiss(request: HostTrustRequests.Request) { trustUi?.dismiss(request) }
+
+        fun hostKeyMismatch(mismatch: HostKeyMismatch) {
+            val currentActivity = activity
+            if (currentActivity == null) {
+                mismatch.cancel()
+                return
+            }
+            replacementUi?.stop()
+            replacementUi = HostTrustReplacementUi(currentActivity, Consumer { candidate ->
+                worker.execute {
+                    try { requests.replace(candidate, BooleanSupplier { candidate.isCurrent() }) }
+                    catch (_: Exception) { }
+                    main.post { replacementUi?.finish(candidate) }
+                }
+            }).also { it.show(mismatch) }
+        }
+    }
 
     @Test fun actualDialogAcceptShowsLogicalIdentityAlgorithmFingerprintAndPersistsBeforeCompletion() = fixture { f, _ ->
         val future = f.verify(); val (dialog, request) = prompt(f)

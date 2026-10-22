@@ -30,8 +30,8 @@ import com.stripe1.xmouse.transport.SshTransport;
 import com.stripe1.xmouse.transport.TransportPresentation;
 
 /**
- * Activity-local compatibility presenter, NOT an SSH resource owner. Only presentation runs here.
- * Service/controller ownership and the legacy toggle/recreation behavior remain tasks 5.x.
+ * Legacy Activity-bound compatibility presenter retained for transport regression tests.
+ * MainActivity no longer constructs or owns this handler; production sessions use SessionController.
  */
 public class MyConnectionHandler implements CommandTransport, TransportPresentation.Listener {
     private static final String TAG = "MyConnectionHandler";

@@ -80,6 +80,24 @@ class SessionOwnerRegistry internal constructor(private val ownerFactory: () -> 
         pendingStarts.isNotEmpty() || activeStarts.isNotEmpty()
     }
 
+    /** Test-only cleanup for the idle owner created when an earlier MainActivity bound the service. */
+    internal fun clearIdleOwnerForTests() = synchronized(lock) {
+        check(!hasPendingStart()) { "Cannot clear a session owner while a start is pending" }
+        retainedOwner?.let { previous ->
+            val snapshot = previous.controller.current
+            check(snapshot.desiredHost == null && snapshot.attemptHost == null &&
+                snapshot.connection.phase == com.stripe1.xmouse.connection.ConnectionState.Phase.DISCONNECTED &&
+                !snapshot.cleanupUnconfirmed) {
+                "Cannot clear an active process session owner (phase=${snapshot.connection.phase}, " +
+                    "desired=${snapshot.desiredHost != null}, attempt=${snapshot.attemptHost != null}, " +
+                    "cleanupUnconfirmed=${snapshot.cleanupUnconfirmed})"
+            }
+            previous.interactions.invalidate()
+            previous.controller.close()
+            retainedOwner = null
+        }
+    }
+
     /** Test-only owner injection; runtime code never replaces or clears a retained owner. */
     internal fun installOwnerForTests(owner: SessionServiceOwner): AutoCloseable = synchronized(lock) {
         check(retainedOwner == null) { "A process session owner already exists" }

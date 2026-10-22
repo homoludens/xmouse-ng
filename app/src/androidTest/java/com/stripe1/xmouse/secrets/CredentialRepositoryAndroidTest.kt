@@ -26,6 +26,13 @@ import com.stripe1.xmouse.ListEditActivity
 import com.stripe1.xmouse.MainActivity
 import com.stripe1.xmouse.R
 import com.stripe1.xmouse.SettingsActivity
+import com.stripe1.xmouse.XMouseApplication
+import com.stripe1.xmouse.session.SessionAttemptFactory
+import com.stripe1.xmouse.session.SessionController
+import com.stripe1.xmouse.session.SessionForegroundService
+import com.stripe1.xmouse.session.SessionInteractions
+import com.stripe1.xmouse.session.SessionServiceOwner
+import com.stripe1.xmouse.connection.ConnectionState
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -36,7 +43,9 @@ import java.io.File
 import java.security.KeyStore
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 /** Real SQLite, SharedPreferences, Keystore, production repository, and existing Activities. */
@@ -44,6 +53,26 @@ import java.util.concurrent.atomic.AtomicReference
 class CredentialRepositoryAndroidTest {
     private val target get() = ApplicationProvider.getApplicationContext<Context>()
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
+
+    /** The navigation test exercises host selection without ever opening a production SSH transport. */
+    private class NavigationOnlySessionOwner : SessionServiceOwner, AutoCloseable {
+        val selectionCalls = AtomicInteger()
+        val attemptCreations = AtomicInteger()
+        val selectionCompleted = CountDownLatch(1)
+        override val interactions = SessionInteractions(Executor { it.run() })
+        override val controller = SessionController(SessionAttemptFactory {
+            attemptCreations.incrementAndGet()
+            error("navigation-only credential test must not create an SSH attempt")
+        })
+
+        override fun selectedHost(shell: String, initialCommand: String?, completion: (com.stripe1.xmouse.session.SessionHost?) -> Unit) {
+            selectionCalls.incrementAndGet()
+            completion(null)
+            selectionCompleted.countDown()
+        }
+
+        override fun close() { controller.close() }
+    }
 
     @Test fun capturedAuthenticationSelectionCannotReadAnotherProfileOrNewCredentialAfterSelectionChanges() = fixture { f ->
         assertTrue(f.repository.prepare())
@@ -547,22 +576,41 @@ class CredentialRepositoryAndroidTest {
         assertTrue(f.repository.prepare())
         val blank = f.repository.saveHost(null, "storage-only", "", "", "22", "NOT_REAL_navigation".toByteArray())
         val fallback = f.preferences.getString(LegacyCredentialReferences.DEFAULT_PASSWORD, null)
-        ActivityScenario.launch<MainActivity>(Intent(target, MainActivity::class.java)).use { scenario ->
-            barrier()
-            scenario.onActivity { activity ->
-                MainActivity.db = f.helper
-                activity.getPreferences()
-                assertEquals("42", f.preferences.getString("hostPreferenceList", null))
-                val menu = android.widget.PopupMenu(activity, activity.findViewById(R.id.fab)).menu
-                val item = menu.add(1, blank.toInt(), 0, "storage-only")
-                activity.onNavigationItemSelected(item)
+        val owners = (target.applicationContext as XMouseApplication).sessionOwners
+        owners.clearIdleOwnerForTests()
+        val owner = NavigationOnlySessionOwner()
+        val ownerLease = owners.installOwnerForTests(owner)
+        try {
+            ActivityScenario.launch<MainActivity>(Intent(target, MainActivity::class.java)).use { scenario ->
+                barrier()
+                scenario.onActivity { activity ->
+                    MainActivity.db = f.helper
+                    activity.getPreferences()
+                    assertEquals("42", f.preferences.getString("hostPreferenceList", null))
+                    val menu = android.widget.PopupMenu(activity, activity.findViewById(R.id.fab)).menu
+                    val item = menu.add(1, blank.toInt(), 0, "storage-only")
+                    activity.onNavigationItemSelected(item)
+                }
+                barrier()
+                scenario.onActivity { activity -> activity.getPreferences(); assertEquals("", MainActivity.setting_host) }
+                assertEquals(blank.toString(), f.preferences.getString("hostPreferenceList", null))
+                assertEquals(fallback, f.preferences.getString(LegacyCredentialReferences.DEFAULT_PASSWORD, null))
+                assertArrayEquals("NOT_REAL_default".toByteArray(), f.store.read(SecretId(fallback!!)))
+                assertTrue(f.preferences.getBoolean("pref_usekeyauth", false)); f.assertNoPlaintext()
             }
-            barrier()
-            scenario.onActivity { activity -> activity.getPreferences(); assertEquals("", MainActivity.setting_host) }
-            assertEquals(blank.toString(), f.preferences.getString("hostPreferenceList", null))
-            assertEquals(fallback, f.preferences.getString(LegacyCredentialReferences.DEFAULT_PASSWORD, null))
-            assertArrayEquals("NOT_REAL_default".toByteArray(), f.store.read(SecretId(fallback!!)))
-            assertTrue(f.preferences.getBoolean("pref_usekeyauth", false)); f.assertNoPlaintext()
+            assertTrue("host navigation must dispatch selection through the session service",
+                owner.selectionCompleted.await(5, TimeUnit.SECONDS))
+            instrumentation.waitForIdleSync()
+            assertEquals(1, owner.selectionCalls.get())
+            assertEquals("blank storage fixture must not create any SSH attempt", 0, owner.attemptCreations.get())
+            assertNull(owner.controller.current.desiredHost)
+            assertEquals(ConnectionState.Phase.DISCONNECTED, owner.controller.current.connection.phase)
+            assertFalse(SessionForegroundService.hasPendingStart(target))
+        } finally {
+            target.stopService(Intent(target, SessionForegroundService::class.java))
+            instrumentation.waitForIdleSync()
+            owner.close()
+            ownerLease.close()
         }
     }
 
@@ -641,7 +689,7 @@ class CredentialRepositoryAndroidTest {
             ActivityScenario.launch<MainActivity>(Intent(target, MainActivity::class.java)).use { scenario ->
                 barrier()
                 lateinit var ui: CredentialUi
-                scenario.onActivity { activity -> MainActivity.db = f.helper; activity.getPreferences(); ui = field(MainActivity.conn, "credentialUi") as CredentialUi }
+                scenario.onActivity { activity -> MainActivity.db = f.helper; activity.getPreferences(); ui = field(activity, "credentialUi") as CredentialUi }
                 val material = AtomicReference<AuthenticationMaterial?>(); val done = CountDownLatch(1)
                 f.repository.execute { f.repository.authenticate(ui) { value, _ -> material.set(value); done.countDown() } }
                 barrier(); barrier()
@@ -686,7 +734,7 @@ class CredentialRepositoryAndroidTest {
             ActivityScenario.launch<MainActivity>(Intent(target, MainActivity::class.java)).use { scenario ->
                 barrier()
                 lateinit var ui: CredentialUi
-                scenario.onActivity { ui = field(MainActivity.conn, "credentialUi") as CredentialUi }
+                scenario.onActivity { ui = field(it, "credentialUi") as CredentialUi }
                 val firstResult = AtomicReference<CredentialReadResult?>()
                 val first = CredentialReentryRequest(SecretId("synthetic_first_key")) { firstResult.set(it) }
                 scenario.onActivity { ui.request(CredentialKind.PRIVATE_KEY, first) }; barrier()
@@ -760,7 +808,7 @@ class CredentialRepositoryAndroidTest {
             ActivityScenario.launch<MainActivity>(Intent(target, MainActivity::class.java)).use { scenario ->
                 barrier()
                 lateinit var ui: CredentialUi
-                scenario.onActivity { ui = field(MainActivity.conn, "credentialUi") as CredentialUi }
+                scenario.onActivity { ui = field(it, "credentialUi") as CredentialUi }
                 val done = CountDownLatch(1)
                 val result = AtomicReference<CredentialReadResult?>()
                 val request = CredentialReentryRequest(SecretId("synthetic_unreadable_key")) { result.set(it); done.countDown() }

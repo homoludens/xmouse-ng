@@ -45,6 +45,8 @@ class SessionForegroundService : Service() {
     @Volatile private var destroyed = false
     @Volatile private var startFailure: SessionServiceStartFailure? = null
     @Volatile private var latestValidStartId = 0
+    /** Observation-only bind-created instances must not become a Disconnect/auto-connect intent. */
+    @Volatile private var acceptedStartedWork = false
     private var pendingSelections = 0
     private val activeStartTickets = LinkedHashSet<String>()
     /** Only a failed/rejected latest selection may stop after older lookups retire. */
@@ -71,7 +73,10 @@ class SessionForegroundService : Service() {
             latestRequestNeedsIdleStop = false
             registry.cancelAllStarts()
             activeStartTickets.clear()
-            registry.retainedOwnerOrNull()?.controller?.disconnect()
+            registry.retainedOwnerOrNull()?.let { owner ->
+                owner.interactions.invalidate()
+                owner.controller.disconnect()
+            }
             stopForegroundAndSelf(startId)
             return START_NOT_STICKY
         }
@@ -83,6 +88,9 @@ class SessionForegroundService : Service() {
             if (!foregroundPromoted && pendingSelections == 0) stopSelfResult(startId)
             return START_NOT_STICKY
         }
+        // Destruction safety applies only after this Service accepted an actual one-use start.
+        // Merely binding to observe an idle retained owner must not mutate controller intent.
+        acceptedStartedWork = true
         activeStartTickets.add(requireNotNull(ticket))
 
         latestValidStartId = startId
@@ -271,9 +279,10 @@ class SessionForegroundService : Service() {
     override fun onDestroy() {
         destroyed = true
         activeStartTickets.toList().forEach(::finishStart)
-        // Stop this service's session work, but retain the application owner/controller and its
-        // CLEANUP_UNCONFIRMED barrier for any subsequent service instance.
-        registry.retainedOwnerOrNull()?.controller?.disconnect()
+        // A service that accepted a real Connect/auto-connect request owns destruction cleanup.
+        // A BIND_AUTO_CREATE-only observer does not: disconnecting here would suppress future
+        // auto-connect and invalidate outstanding permission/start reservations just by observing.
+        if (acceptedStartedWork) registry.retainedOwnerOrNull()?.controller?.disconnect()
         if (foregroundPromoted) {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
             foregroundPromoted = false
@@ -281,6 +290,7 @@ class SessionForegroundService : Service() {
         localBinder.closeSubscriptions()
         // Deliberately retain the application owner: service recreation must not bypass its close barrier.
         super.onDestroy()
+        destroyedServiceInstances.incrementAndGet()
     }
 
     class SessionBinder internal constructor(private val service: SessionForegroundService) : Binder() {
@@ -319,8 +329,10 @@ class SessionForegroundService : Service() {
         private const val REQUEST_OPEN_CONTROLS = 5203
         private const val REQUEST_DISCONNECT = 5204
         private val createdServiceInstances = AtomicInteger()
+        private val destroyedServiceInstances = AtomicInteger()
 
         internal val serviceInstancesCreatedForTests: Int get() = createdServiceInstances.get()
+        internal val serviceInstancesDestroyedForTests: Int get() = destroyedServiceInstances.get()
 
         /** True while a service-start ticket/metadata request or retained active session bars legacy SSH. */
         @JvmStatic
@@ -343,6 +355,20 @@ class SessionForegroundService : Service() {
         @JvmStatic
         fun hasPendingStart(context: Context): Boolean =
             (context.applicationContext as? XMouseApplication)?.sessionOwners?.hasPendingStart() == true
+
+        /** Reserves foreground auto-connect only when there is no current intent or explicit opt-out. */
+        @JvmStatic
+        fun reserveAutomaticConnectIfNeeded(activity: Activity): String? {
+            if (!isVisible(activity)) return null
+            val registry = (activity.application as? XMouseApplication)?.sessionOwners ?: return null
+            if (registry.hasPendingStart()) return null
+            val snapshot = registry.retainedOwnerOrNull()?.controller?.current
+            if (snapshot != null && (snapshot.automaticConnectSuppressed || snapshot.desiredHost != null ||
+                    snapshot.cleanupUnconfirmed || snapshot.connection.phase == com.stripe1.xmouse.connection.ConnectionState.Phase.CLOSING)) {
+                return null
+            }
+            return registry.issueStart(SessionStartMode.FOREGROUND_AUTO_CONNECT)
+        }
 
         /** Per-ticket permission callback guard; broad pending state must not authorize stale results. */
         @JvmStatic

@@ -1,6 +1,7 @@
 package com.stripe1.xmouse.session
 
 import android.Manifest
+import android.app.AlertDialog
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
@@ -25,19 +26,30 @@ import androidx.test.uiautomator.Until
 import androidx.core.content.edit
 import androidx.appcompat.widget.Toolbar
 import com.stripe1.xmouse.MainActivity
-import com.stripe1.xmouse.MyConnectionHandler
 import com.stripe1.xmouse.R
 import com.stripe1.xmouse.XMouseApplication
 import com.stripe1.xmouse.connection.ConnectionFailure
 import com.stripe1.xmouse.connection.ConnectionState
+import com.stripe1.xmouse.connection.Endpoint
+import com.stripe1.xmouse.secrets.AuthenticationMaterial
+import com.stripe1.xmouse.secrets.CredentialKind
+import com.stripe1.xmouse.secrets.CredentialReadResult
+import com.stripe1.xmouse.secrets.CredentialReentryRequest
+import com.stripe1.xmouse.secrets.SecretId
 import com.stripe1.xmouse.secrets.AndroidSecretFileIo
 import com.stripe1.xmouse.transport.RecordingSshBackend
+import com.stripe1.xmouse.transport.SshBackend
+import com.stripe1.xmouse.transport.SshConnectionRequest
 import com.stripe1.xmouse.transport.SshLimits
 import com.stripe1.xmouse.transport.SshRuntime
 import com.stripe1.xmouse.trust.HostKeyRepository
+import com.stripe1.xmouse.trust.ApprovedHostKey
+import com.stripe1.xmouse.trust.HostTrustException
+import com.stripe1.xmouse.trust.HostTrustRequests
 import com.stripe1.xmouse.session.SessionForegroundService.Companion.NOTIFICATION_CHANNEL_ID
 import com.stripe1.xmouse.session.SessionForegroundService.Companion.NOTIFICATION_ID
 import org.junit.After
+import org.junit.Before
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -52,6 +64,9 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import java.util.function.BooleanSupplier
+import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
+import org.bouncycastle.crypto.util.OpenSSHPublicKeyUtil
 
 /** Real target service/notification and system FGS checks; session work uses synthetic recording attempts. */
 @RunWith(AndroidJUnit4::class)
@@ -63,13 +78,22 @@ class SessionForegroundServiceAndroidTest {
     private val defaultPreferences get() = context.getSharedPreferences(
         "${context.packageName}_preferences", Context.MODE_PRIVATE,
     )
+
+    @Before
+    fun clearIdleOwnerRetainedByEarlierActivityTests() {
+        context.stopService(Intent(context, SessionForegroundService::class.java))
+        eventually {
+            SessionForegroundService.serviceInstancesCreatedForTests ==
+                SessionForegroundService.serviceInstancesDestroyedForTests
+        }
+        (context.applicationContext as XMouseApplication).sessionOwners.clearIdleOwnerForTests()
+    }
     private var scenario: ActivityScenario<MainActivity>? = null
     private var ownerLease: AutoCloseable? = null
     private var owner: RecordingOwner? = null
     private var transportOwner: RecordingTransportOwner? = null
     private var oldAutoConnect: Boolean? = null
     private var oldPermissionRequestedPreference: Boolean? = null
-    private var legacyConnectProbeLease: AutoCloseable? = null
     private val device get() = UiDevice.getInstance(instrumentation)
 
     private class RecordingAttemptFactory : SessionAttemptFactory {
@@ -177,6 +201,9 @@ class SessionForegroundServiceAndroidTest {
     private class RecordingTransportOwner(
         private val manualSelections: Boolean = false,
         blockCloses: Boolean = false,
+        private val credentialPromptReads: Int = 0,
+        private val requireFirstTrust: Boolean = false,
+        private val automaticallySelectedHost: SessionHost = SessionFixtures.host(),
     ) : SessionServiceOwner, AutoCloseable {
         val directory = File(ApplicationProvider.getApplicationContext<Context>().cacheDir,
             "notification-session-${java.util.UUID.randomUUID()}")
@@ -185,8 +212,13 @@ class SessionForegroundServiceAndroidTest {
         }
         val selectionCalls = AtomicInteger()
         val selectionsCompleted = AtomicInteger()
+        val credentialReads = AtomicInteger()
+        val cancelledCredentialRequests = AtomicInteger()
+        val credentialRequests = CopyOnWriteArrayList<CredentialReentryRequest>()
+        val backendRequests = CopyOnWriteArrayList<SshConnectionRequest>()
         val attemptsCreated get() = backend.events.count { it.name == "create" }
         val selectionStarted = CountDownLatch(1)
+        init { check(directory.mkdirs() || directory.isDirectory) }
         private val pendingSelections = mutableListOf<(SessionHost?) -> Unit>()
         private val selectionWorker = Executors.newSingleThreadExecutor { task ->
             Thread(task, "synthetic-notification-selection").apply { isDaemon = true }
@@ -195,24 +227,68 @@ class SessionForegroundServiceAndroidTest {
             Thread(task, "synthetic-notification-credentials").apply { isDaemon = true }
         }
         override val interactions = SessionInteractions(Executor { android.os.Handler(Looper.getMainLooper()).post(it) })
-        private val credentialProvider = SessionCredentialProvider { selection, _, current, callback ->
+        private val credentialProvider = SessionCredentialProvider { selection, prompts, current, callback ->
             credentialWorker.execute {
                 if (current.asBoolean) {
+                    val readNumber = credentialReads.incrementAndGet()
                     val host = SessionFixtures.host(selection.host.host ?: "synthetic.invalid", selection.host.id,
                         selection.host.passwordReference ?: "synthetic_password", selection.host.port?.toInt() ?: 2222)
-                    callback.complete(SessionFixtures.material(host), null)
+                    if (readNumber <= credentialPromptReads) {
+                        val request = CredentialReentryRequest(
+                            SecretId("synthetic_reentry_${selection.host.id}_$readNumber"),
+                        ) { result ->
+                            when (result) {
+                                is CredentialReadResult.Available -> {
+                                    result.plaintext.fill(0)
+                                    callback.complete(SessionFixtures.material(host), null)
+                                }
+                                else -> {
+                                    if (result === CredentialReadResult.Cancelled) cancelledCredentialRequests.incrementAndGet()
+                                    callback.complete(null, null)
+                                }
+                            }
+                        }
+                        credentialRequests.add(request)
+                        prompts.request(CredentialKind.PASSWORD, request)
+                    } else callback.complete(SessionFixtures.material(host), null)
                 } else callback.complete(null, null)
             }
         }
+        private val syntheticHostKey = ApprovedHostKey.parse(OpenSSHPublicKeyUtil.encodePublicKey(
+            Ed25519PrivateKeyParameters(ByteArray(32) { (it + 1).toByte() }, 0).generatePublicKey(),
+        ))
         private val attemptFactory = SshSessionAttemptFactory(
             credentialProvider,
             HostKeyRepository(directory, AndroidSecretFileIo),
             interactions,
-            SshLimits(200, 350, 200, 600, 250, 250, 450, 450, 150, 150, 2, 50, 150, 4096),
+            SshLimits(200, if (requireFirstTrust) 60_000 else 350, 200, 600, 250, 250, 450, 450,
+                150, 150, 2, 50, 150, 4096),
             SshRuntime.SHARED,
             credentialTimeoutMillis = 2_000,
             closeTimeoutMillis = 1_000,
-            backendFactory = { _, _ -> backend },
+            backendFactory = { trust, trusted ->
+                object : SshBackend {
+                    override fun create(request: SshConnectionRequest, authentication: AuthenticationMaterial): SshBackend.Session =
+                        create(request, authentication, BooleanSupplier { true })
+
+                    override fun create(
+                        request: SshConnectionRequest,
+                        authentication: AuthenticationMaterial,
+                        current: BooleanSupplier,
+                    ): SshBackend.Session {
+                        if (requireFirstTrust) {
+                            trust.verify(request.endpoint, syntheticHostKey, current)
+                            trusted.run()
+                        }
+                        backendRequests.add(request)
+                        return backend.create(request, authentication, current)
+                    }
+
+                    override fun cancelPendingTrust() = backend.cancelPendingTrust()
+                    override fun replaceHostKey(mismatch: com.stripe1.xmouse.trust.HostKeyMismatch,
+                        current: BooleanSupplier) = backend.replaceHostKey(mismatch, current)
+                }
+            },
         )
         override val controller = SessionController(attemptFactory)
 
@@ -223,7 +299,7 @@ class SessionForegroundServiceAndroidTest {
                 selectionStarted.countDown()
             } else {
                 selectionWorker.execute {
-                    completion(SessionFixtures.host())
+                    completion(automaticallySelectedHost)
                     selectionsCompleted.incrementAndGet()
                 }
             }
@@ -269,7 +345,7 @@ class SessionForegroundServiceAndroidTest {
         return ActivityScenario.launch(MainActivity::class.java).also { scenario = it }
     }
 
-    private fun invokeLegacyToolbarConnect(scenario: ActivityScenario<MainActivity>) {
+    private fun invokeToolbarConnectAction(scenario: ActivityScenario<MainActivity>) {
         scenario.onActivity { activity ->
             val toolbar = activity.findViewById<Toolbar>(R.id.toolbar)
             if (toolbar.menu.findItem(R.id.action_conn_disc) == null) {
@@ -316,6 +392,41 @@ class SessionForegroundServiceAndroidTest {
 
     private fun setActivityStringField(activity: MainActivity, name: String, value: String?) {
         MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.set(activity, value)
+    }
+
+    private fun activitySnapshot(activity: MainActivity): SessionSnapshot? =
+        MainActivity::class.java.getDeclaredField("sessionSnapshot").apply { isAccessible = true }
+            .get(activity) as SessionSnapshot?
+
+    private fun activityPrompt(activity: MainActivity): SessionInteractions.Prompt? {
+        val presenter = MainActivity::class.java.getDeclaredField("sessionPresenter").apply { isAccessible = true }
+            .get(activity)
+        return presenter.javaClass.getDeclaredField("currentPrompt").apply { isAccessible = true }
+            .get(presenter) as SessionInteractions.Prompt?
+    }
+
+    private fun activityPrompt(scenario: ActivityScenario<MainActivity>): SessionInteractions.Prompt? {
+        var prompt: SessionInteractions.Prompt? = null
+        scenario.onActivity { prompt = activityPrompt(it) }
+        return prompt
+    }
+
+    private fun activityOutputDialog(activity: MainActivity): AlertDialog? {
+        val presenter = MainActivity::class.java.getDeclaredField("sessionPresenter").apply { isAccessible = true }
+            .get(activity)
+        return presenter.javaClass.getDeclaredField("outputDialog").apply { isAccessible = true }
+            .get(presenter) as AlertDialog?
+    }
+
+    private fun waitForActivitySessionBinding(scenario: ActivityScenario<MainActivity>) {
+        eventually {
+            var attached = false
+            scenario.onActivity { activity ->
+                attached = MainActivity::class.java.getDeclaredField("promptInteractions")
+                    .apply { isAccessible = true }.get(activity) != null
+            }
+            attached
+        }
     }
 
     /** Exercises the same private callback boundary registered with ActivityResultContracts.RequestPermission. */
@@ -406,13 +517,14 @@ class SessionForegroundServiceAndroidTest {
         do {
             visibleText.clear()
             visibleText += device.findObjects(By.clazz("android.widget.TextView"))
-                .mapNotNull { it.text?.toString() }
+                .mapNotNull { node -> runCatching { node.text }.getOrNull() }
             listOf(
                 "android.widget.Button",
                 "androidx.appcompat.widget.AppCompatButton",
                 "com.google.android.material.button.MaterialButton",
             ).forEach { className ->
-                visibleText += device.findObjects(By.clazz(className)).mapNotNull { it.text?.toString() }
+                visibleText += device.findObjects(By.clazz(className))
+                    .mapNotNull { node -> runCatching { node.text }.getOrNull() }
             }
             if (visibleText.any { normalizedUiText(it) == expected }) return
             Thread.sleep(50)
@@ -422,32 +534,40 @@ class SessionForegroundServiceAndroidTest {
 
     private fun waitForTextContains(text: String, timeoutMillis: Long = 5_000) {
         val expected = normalizedUiText(text)
-        val appeared = device.wait(Until.findObject(By.textContains(text)), timeoutMillis) != null ||
-            device.findObjects(By.clazz("android.widget.TextView"))
-                .any { normalizedUiText(it.text).contains(expected) }
+        val awaited = runCatching { device.wait(Until.findObject(By.textContains(text)), timeoutMillis) }
+            .getOrNull()?.let { node -> runCatching { node.text }.getOrNull() }
+        val appeared = awaited?.let { normalizedUiText(it).contains(expected) } == true ||
+            device.findObjects(By.clazz("android.widget.TextView")).any { node ->
+                runCatching { normalizedUiText(node.text).contains(expected) }.getOrDefault(false)
+            }
         assertTrue("UI text containing '$text' did not appear", appeared)
     }
 
     private fun clickText(text: String) {
         val expected = normalizedUiText(text)
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-        var target = device.findObjects(By.clickable(true))
-            .firstOrNull { normalizedUiText(it.text) == expected }
-        while (target == null && System.nanoTime() < deadline) {
-            Thread.sleep(50)
-            target = device.findObjects(By.clickable(true))
-                .firstOrNull { normalizedUiText(it.text) == expected }
-        }
-        if (target == null) {
-            val nodes = device.findObjects(By.clickable(true)).mapNotNull { node ->
-                runCatching {
-                    "${node.applicationPackage}/${node.className} text=${node.text} desc=${node.contentDescription} id=${node.resourceName}"
-                }.getOrNull()
+        while (System.nanoTime() < deadline) {
+            val target = device.findObjects(By.clickable(true)).firstOrNull { node ->
+                runCatching { normalizedUiText(node.text) == expected }.getOrDefault(false)
             }
-            fail("Clickable UI text did not appear (case-insensitive): $text; " +
-                "currentPackage=${device.currentPackageName}; clickableNodes=$nodes")
+            if (target != null) {
+                try {
+                    target.click()
+                    instrumentation.waitForIdleSync()
+                    return
+                } catch (_: androidx.test.uiautomator.StaleObjectException) {
+                    // A prompt can be replaced between the accessibility query and the click.
+                }
+            }
+            Thread.sleep(50)
         }
-        target!!.click()
+        val nodes = device.findObjects(By.clickable(true)).mapNotNull { node ->
+            runCatching {
+                "${node.applicationPackage}/${node.className} text=${node.text} desc=${node.contentDescription} id=${node.resourceName}"
+            }.getOrNull()
+        }
+        fail("Clickable UI text did not appear (case-insensitive): $text; " +
+            "currentPackage=${device.currentPackageName}; clickableNodes=$nodes")
     }
 
     private fun assertImmutable(pendingIntent: PendingIntent) {
@@ -491,8 +611,6 @@ class SessionForegroundServiceAndroidTest {
         context.stopService(Intent(context, SessionForegroundService::class.java))
         scenario?.close()
         scenario = null
-        legacyConnectProbeLease?.close()
-        legacyConnectProbeLease = null
         owner?.close()
         owner = null
         transportOwner?.close()
@@ -602,6 +720,7 @@ class SessionForegroundServiceAndroidTest {
 
         // Simulate a service instance teardown while the process owner remains alive. A new instance must
         // reattach to that same controller instead of creating an owner to bypass its current session.
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
         context.stopService(Intent(context, SessionForegroundService::class.java))
         eventually {
             firstBinding.binder.destroyedForTests && !firstBinding.binder.isForeground &&
@@ -611,6 +730,7 @@ class SessionForegroundServiceAndroidTest {
         }
         assertNull("destroyed service must not leave an active session without its disclosure",
             recordingOwner.controller.current.desiredHost)
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
         requestConnect(activityScenario)
         val recreatedBinding = bind(activityScenario)
         assertNotSame("service must be recreated after teardown", firstService, recreatedBinding.binder.serviceForTests)
@@ -625,8 +745,10 @@ class SessionForegroundServiceAndroidTest {
         eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
         assertTrue(recordingOwner.controller.current.automaticConnectSuppressed)
         unbind(activityScenario, recreatedBinding)
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
         context.stopService(Intent(context, SessionForegroundService::class.java))
 
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
         requestConnect(activityScenario, automatic = true)
         val autoBinding = bind(activityScenario)
         eventually { recordingOwner.selectionCalls.get() == 8 }
@@ -636,6 +758,374 @@ class SessionForegroundServiceAndroidTest {
         assertEquals("saved auto-connect must not undo Disconnect", 2, recordingOwner.attempts.created.get())
         assertFalse(autoBinding.binder.isForeground)
         unbind(activityScenario, autoBinding)
+    }
+
+    @Test
+    fun activityRecreationAndReturnWithAutoConnectEnabledReattachToTheExistingSession() {
+        grantNotificationPermissionForDisclosureTest()
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity(autoConnect = true)
+        eventually { recordingOwner.controller.current.connection.isReady }
+        eventually {
+            var ready = false
+            activityScenario.onActivity { activity -> ready = activitySnapshot(activity)?.connection?.isReady == true }
+            ready
+        }
+        val firstActivity = AtomicReference<MainActivity>()
+        activityScenario.onActivity { firstActivity.set(it) }
+        val serviceInstances = SessionForegroundService.serviceInstancesCreatedForTests
+        assertEquals(1, recordingOwner.selectionCalls.get())
+        assertEquals(1, recordingOwner.attemptsCreated)
+        assertEquals(0, recordingOwner.backend.events.count { it.name == "session.close" })
+
+        activityScenario.recreate()
+        eventually {
+            var current = false
+            activityScenario.onActivity { activity ->
+                current = activity !== firstActivity.get() && activitySnapshot(activity)?.connection?.isReady == true &&
+                    activity.findViewById<Toolbar>(R.id.toolbar).subtitle == "Connected"
+            }
+            current
+        }
+        assertEquals("recreation must not select another host or create another SSH attempt", 1,
+            recordingOwner.selectionCalls.get())
+        assertEquals(1, recordingOwner.attemptsCreated)
+        assertEquals(0, recordingOwner.backend.events.count { it.name == "session.close" })
+        assertEquals(serviceInstances, SessionForegroundService.serviceInstancesCreatedForTests)
+
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        assertTrue("stopping the control Activity must leave its service session ready",
+            recordingOwner.controller.current.connection.isReady)
+        assertEquals(0, recordingOwner.backend.events.count { it.name == "session.close" })
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        eventually {
+            var ready = false
+            activityScenario.onActivity { activity -> ready = activitySnapshot(activity)?.connection?.isReady == true }
+            ready
+        }
+        assertEquals("auto-connect on return must be idempotent", 1, recordingOwner.selectionCalls.get())
+        assertEquals(1, recordingOwner.attemptsCreated)
+        assertEquals(0, recordingOwner.backend.events.count { it.name == "session.close" })
+        assertEquals(serviceInstances, SessionForegroundService.serviceInstancesCreatedForTests)
+
+        SessionForegroundService.requestDisconnect(context)
+        eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+        assertEquals(1, recordingOwner.backend.events.count { it.name == "session.close" })
+    }
+
+    @Test
+    fun autoConnectOffIdleBindTeardownThenEnableAndReturnConnectsExactlyOnce() {
+        grantNotificationPermissionForDisclosureTest()
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        assertFalse("fresh test owner should start unsuppressed: ${recordingOwner.controller.current}",
+            recordingOwner.controller.current.automaticConnectSuppressed)
+        val activityScenario = launchVisibleActivity(autoConnect = false)
+        waitForActivitySessionBinding(activityScenario)
+
+        val firstService = AtomicReference<SessionForegroundService.SessionBinder>()
+        activityScenario.onActivity { activity ->
+            firstService.set(MainActivity::class.java.getDeclaredField("sessionBinder")
+                .apply { isAccessible = true }.get(activity) as SessionForegroundService.SessionBinder)
+        }
+        assertNotNull(firstService.get())
+        assertEquals(0, recordingOwner.selectionCalls.get())
+        assertFalse("idle Activity binding changed the fresh owner: ${recordingOwner.controller.current}",
+            recordingOwner.controller.current.automaticConnectSuppressed)
+        val intentVersion = recordingOwner.controller.current.intentVersion
+
+        // A permission reservation belongs to the application registry, not the observer-only Service.
+        var reservation: String? = null
+        activityScenario.onActivity { reservation = SessionForegroundService.reserveAutomaticConnectIfNeeded(it) }
+        assertNotNull(reservation)
+        assertTrue(SessionForegroundService.hasReservedStart(context, reservation))
+
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        eventually { firstService.get().destroyedForTests }
+        val idle = recordingOwner.controller.current
+        assertEquals(ConnectionState.Phase.DISCONNECTED, idle.connection.phase)
+        assertFalse("observer-only teardown must not persist an auto-connect opt-out", idle.automaticConnectSuppressed)
+        assertEquals("observer-only teardown must not advance controller intent", intentVersion, idle.intentVersion)
+        assertTrue("observer-only teardown must preserve an outstanding permission reservation",
+            SessionForegroundService.hasReservedStart(context, reservation))
+        assertEquals(0, recordingOwner.attemptsCreated)
+        SessionForegroundService.cancelReservedConnect(context, requireNotNull(reservation))
+
+        defaultPreferences.edit { putBoolean("autologin_checkbox", true) }
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        eventually { recordingOwner.controller.current.connection.isReady }
+        eventually { recordingOwner.selectionCalls.get() == 1 && recordingOwner.attemptsCreated == 1 }
+        eventually {
+            var connected = false
+            activityScenario.onActivity { connected = activitySnapshot(it)?.connection?.isReady == true }
+            connected
+        }
+        Thread.sleep(250)
+        assertEquals("return with auto-connect enabled must issue one selection", 1, recordingOwner.selectionCalls.get())
+        assertEquals("return with auto-connect enabled must create one attempt", 1, recordingOwner.attemptsCreated)
+        assertEquals(0, recordingOwner.backend.events.count { it.name == "session.close" })
+
+        assertTrue(SessionForegroundService.requestDisconnect(context))
+        eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+        assertTrue(recordingOwner.controller.current.automaticConnectSuppressed)
+    }
+
+    @Test
+    fun activityControlsHandCommandsToTheServiceOwnedProductionTransport() {
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity()
+        requestConnect(activityScenario)
+        eventually { recordingOwner.controller.current.connection.isReady }
+
+        var shellAccepted = false
+        var execAccepted = false
+        activityScenario.onActivity { activity ->
+            shellAccepted = MainActivity.commandTransport.executeShellCommand("synthetic activity command")
+            execAccepted = MainActivity.commandTransport.executeExecCommand("synthetic activity script")
+        }
+        assertTrue("application command proxy rejected an available service session", shellAccepted)
+        assertTrue("script command proxy rejected an available service session", execAccepted)
+        eventually { recordingOwner.backend.writes.any { it.contains("synthetic activity command") } }
+        eventually { recordingOwner.backend.channels.any { it.name == "exec" && it.command == "synthetic activity script" } }
+        waitForTextContains("out one")
+        clickText("Ok")
+        SessionForegroundService.requestDisconnect(context)
+        eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+    }
+
+    @Test
+    fun repeatedSameHostForegroundRequestsPreserveCredentialAndFirstTrustPrompts() {
+        grantNotificationPermissionForDisclosureTest()
+        val selectedHost = SessionFixtures.host("repeat-consent.synthetic.invalid", 61,
+            "synthetic_repeat_consent", 2261)
+        val recordingOwner = RecordingTransportOwner(
+            credentialPromptReads = 1,
+            requireFirstTrust = true,
+            automaticallySelectedHost = selectedHost,
+        )
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity()
+
+        requestConnect(activityScenario)
+        waitForText("Re-enter password")
+        eventually { recordingOwner.credentialRequests.size == 1 }
+        val credential = recordingOwner.credentialRequests.single()
+        val firstPrompt = activityPrompt(activityScenario) as SessionInteractions.Prompt.Credential
+        assertSame(credential, firstPrompt.request)
+        assertTrue(credential.isPending)
+
+        requestConnect(activityScenario)
+        eventually {
+            recordingOwner.selectionCalls.get() == 2 && recordingOwner.selectionsCompleted.get() == 2 &&
+                !SessionForegroundService.hasPendingStart(context)
+        }
+        assertTrue("repeated same-host Connect must not cancel credential consent", credential.isPending)
+        assertSame("credential prompt stays attached to the same request", firstPrompt.request,
+            (activityPrompt(activityScenario) as SessionInteractions.Prompt.Credential).request)
+        assertEquals("same-host request must not reread credentials", 1, recordingOwner.credentialReads.get())
+
+        val syntheticSecret = byteArrayOf(71, 72, 73, 74)
+        try { assertTrue("the still-current credential prompt must be approvable", credential.useForThisAttempt(syntheticSecret)) }
+        finally { syntheticSecret.fill(0) }
+        eventually(timeoutSeconds = 10) {
+            activityPrompt(activityScenario) is SessionInteractions.Prompt.Trust ||
+                recordingOwner.controller.current.connection is ConnectionState.Error
+        }
+        assertTrue("expected the production first-trust request; snapshot=${recordingOwner.controller.current}, " +
+            "credentialReads=${recordingOwner.credentialReads.get()}, backendEvents=${recordingOwner.backend.events.map { it.name }}",
+            activityPrompt(activityScenario) is SessionInteractions.Prompt.Trust)
+        val trustPrompt = activityPrompt(activityScenario) as SessionInteractions.Prompt.Trust
+        val trust = trustPrompt.request
+        assertTrue("first-trust consent must be genuinely pending; snapshot=${recordingOwner.controller.current}, " +
+            "backendEvents=${recordingOwner.backend.events.map { it.name }}", trust.isPending)
+        waitForText("Trust this SSH host?")
+        assertEquals(0, recordingOwner.attemptsCreated)
+
+        requestConnect(activityScenario)
+        eventually {
+            recordingOwner.selectionCalls.get() == 3 && recordingOwner.selectionsCompleted.get() == 3 &&
+                !SessionForegroundService.hasPendingStart(context)
+        }
+        assertTrue("repeated same-host Connect must not cancel first-trust consent", trust.isPending)
+        assertSame("the original first-trust request remains current", trust,
+            (activityPrompt(activityScenario) as SessionInteractions.Prompt.Trust).request)
+        assertEquals("same-host retry must not restart credential reads", 1, recordingOwner.credentialReads.get())
+        assertEquals("no authentication/backend attempt may precede host-key approval", 0,
+            recordingOwner.backendRequests.size)
+
+        clickText("Accept and save")
+        eventually { recordingOwner.controller.current.connection.isReady }
+        assertEquals(1, recordingOwner.credentialReads.get())
+        assertEquals("one accepted consent path creates exactly one backend attempt", 1,
+            recordingOwner.attemptsCreated)
+        assertEquals(1, recordingOwner.backendRequests.size)
+        assertEquals(selectedHost.endpoint.identity, recordingOwner.backendRequests.single().endpoint.identity)
+        SessionForegroundService.requestDisconnect(context)
+        eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+    }
+
+    @Test
+    fun newerForegroundHostSelectionCancelsOldCredentialAndRejectsLateApproval() {
+        grantNotificationPermissionForDisclosureTest()
+        val recordingOwner = RecordingTransportOwner(manualSelections = true, credentialPromptReads = 1)
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity()
+        val oldHost = SessionFixtures.host("old-consent.synthetic.invalid", 62, "synthetic_old_consent", 2262)
+        val newestHost = SessionFixtures.host("new-consent.synthetic.invalid", 63, "synthetic_new_consent", 2263)
+
+        requestConnect(activityScenario)
+        eventually { recordingOwner.selectionCalls.get() == 1 }
+        recordingOwner.completeSelection(0, oldHost)
+        waitForText("Re-enter password")
+        eventually { recordingOwner.credentialRequests.size == 1 }
+        val staleCredential = recordingOwner.credentialRequests.single()
+        assertTrue(staleCredential.isPending)
+
+        requestConnect(activityScenario)
+        eventually { recordingOwner.selectionCalls.get() == 2 }
+        recordingOwner.completeSelection(0, newestHost)
+        eventually {
+            !staleCredential.isPending && recordingOwner.controller.current.connection.isReady &&
+                recordingOwner.controller.current.desiredHost?.sameRequest(newestHost) == true
+        }
+        val staleBytes = byteArrayOf(81, 82, 83)
+        try {
+            assertFalse("late credential entry cannot revive the superseded host",
+                staleCredential.useForThisAttempt(staleBytes))
+        } finally { staleBytes.fill(0) }
+        assertEquals(1, recordingOwner.cancelledCredentialRequests.get())
+        assertEquals(2, recordingOwner.credentialReads.get())
+        assertEquals(1, recordingOwner.backendRequests.size)
+        assertEquals("only the newest host may authenticate", newestHost.endpoint.identity,
+            recordingOwner.backendRequests.single().endpoint.identity)
+        assertEquals(1, recordingOwner.attemptsCreated)
+        SessionForegroundService.requestDisconnect(context)
+        eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+    }
+
+    @Test
+    fun activityOutputDialogIsDismissedOnStopAndNotReplayedAfterRecreation() {
+        grantNotificationPermissionForDisclosureTest()
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity()
+        requestConnect(activityScenario)
+        eventually { recordingOwner.controller.current.connection.isReady }
+        assertTrue(recordingOwner.controller.executeExecCommand("synthetic output lifecycle"))
+        waitForTextContains("out one")
+
+        val oldDialog = AtomicReference<AlertDialog>()
+        activityScenario.onActivity { activity ->
+            oldDialog.set(requireNotNull(activityOutputDialog(activity)))
+            assertTrue(oldDialog.get().isShowing)
+        }
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        assertFalse("stopping the Activity must dismiss its output window", oldDialog.get().isShowing)
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        activityScenario.recreate()
+        eventually {
+            var rebound = false
+            activityScenario.onActivity { activity ->
+                rebound = activitySnapshot(activity)?.connection?.isReady == true && activityOutputDialog(activity) == null
+            }
+            rebound
+        }
+        assertFalse("old command output must not be replayed on the recreated screen", oldDialog.get().isShowing)
+        assertTrue(recordingOwner.controller.current.connection.isReady)
+        SessionForegroundService.requestDisconnect(context)
+        eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+    }
+
+    @Test
+    fun activityPromptPresenterCancelsStaleCredentialRequestAcrossHostChangeAndRecreation() {
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity()
+        waitForActivitySessionBinding(activityScenario)
+
+        val staleResult = AtomicReference<CredentialReadResult?>()
+        val staleRequest = CredentialReentryRequest(SecretId("synthetic_old_host_password")) { staleResult.set(it) }
+        val stalePrompt = SessionInteractions.Prompt.Credential(CredentialKind.PASSWORD, staleRequest)
+        recordingOwner.interactions.show(Any(), stalePrompt, BooleanSupplier { true })
+        waitForText("Re-enter password")
+
+        // A new explicit host request invalidates the earlier activity-local prompt before auth can resume.
+        recordingOwner.interactions.invalidate()
+        assertSame(CredentialReadResult.Cancelled, staleResult.get())
+        val afterHostChange = CredentialReentryRequest(SecretId("synthetic_new_host_password")) { }
+        recordingOwner.interactions.show(Any(),
+            SessionInteractions.Prompt.Credential(CredentialKind.PASSWORD, afterHostChange), BooleanSupplier { true })
+        waitForText("Re-enter password")
+
+        activityScenario.recreate()
+        assertFalse("a credential prompt must be cancelled when its Activity is destroyed", afterHostChange.isPending)
+        assertSame(CredentialReadResult.Cancelled, staleResult.get())
+        assertFalse("the invalidated request must not accept stale entered bytes",
+            staleRequest.useForThisAttempt("NOT_REAL_stale_password".toByteArray()))
+
+        waitForActivitySessionBinding(activityScenario)
+        val latestResult = AtomicReference<CredentialReadResult?>()
+        val latest = CredentialReentryRequest(SecretId("synthetic_returned_host_password")) { latestResult.set(it) }
+        recordingOwner.interactions.show(Any(),
+            SessionInteractions.Prompt.Credential(CredentialKind.PASSWORD, latest), BooleanSupplier { true })
+        waitForText("Re-enter password")
+        clickText("Cancel")
+        eventually { latestResult.get() === CredentialReadResult.Cancelled }
+        assertSame(CredentialReadResult.Cancelled, latestResult.get())
+        recordingOwner.interactions.invalidate()
+        assertEquals(0, recordingOwner.attemptsCreated)
+        assertTrue(recordingOwner.backend.events.isEmpty())
+    }
+
+    @Test
+    fun activityPromptPresenterShowsBoundedChangedHostKeyReviewAndCancelKeepsOldTrust() {
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity()
+        waitForActivitySessionBinding(activityScenario)
+        val trustDirectory = File(context.cacheDir, "activity-trust-${java.util.UUID.randomUUID()}")
+        val repository = HostKeyRepository(trustDirectory, AndroidSecretFileIo)
+        val requests = HostTrustRequests(repository, Executor { it.run() })
+        val endpoint = Endpoint.manual("review.synthetic.invalid", 2222)
+        val trustedKey = ApprovedHostKey.parse(OpenSSHPublicKeyUtil.encodePublicKey(
+            Ed25519PrivateKeyParameters(ByteArray(32) { (it + 1).toByte() }, 0).generatePublicKey()))
+        val changedKey = ApprovedHostKey.parse(OpenSSHPublicKeyUtil.encodePublicKey(
+            Ed25519PrivateKeyParameters(ByteArray(32) { (it + 41).toByte() }, 0).generatePublicKey()))
+        repository.approve(endpoint.identity, trustedKey, BooleanSupplier { true })
+        val observedMismatch = try {
+            requests.verify(endpoint, changedKey, BooleanSupplier { true })
+            fail("a changed host key must produce a mismatch")
+            error("unreachable")
+        } catch (mismatch: HostTrustException) {
+            assertEquals(HostTrustException.Reason.MISMATCH, mismatch.reason)
+            requireNotNull(mismatch.mismatch)
+        }
+        val observation = requireNotNull(requests.captureMismatch(observedMismatch, BooleanSupplier { true }))
+        val epoch = recordingOwner.interactions.reviewEpoch()
+        val candidate = requireNotNull(requests.reviewMismatch(observation, BooleanSupplier { true }))
+        val prompt = SessionInteractions.Prompt.Mismatch(
+            candidate,
+            { mismatch, complete ->
+                try { requests.replace(mismatch, BooleanSupplier { mismatch.isCurrent() }); complete(true) }
+                catch (_: Exception) { complete(false) }
+            },
+            { candidate.cancel() },
+            { finished, success -> recordingOwner.interactions.finishMismatch(finished, success) },
+        )
+        assertTrue(recordingOwner.interactions.showReview(Any(), prompt, epoch, BooleanSupplier { true }))
+        waitForText("SSH host key changed")
+        waitForTextContains(trustedKey.fingerprint)
+        waitForTextContains(changedKey.fingerprint)
+        clickText("Review replacement")
+        waitForText("Replace the saved host key?")
+        clickText("Cancel")
+        eventually { !candidate.isCurrent }
+        assertFalse("cancelled mismatch review cannot replace trust", candidate.confirm())
+        assertTrue(requireNotNull(repository.find(endpoint.identity)).matches(trustedKey))
+        recordingOwner.interactions.invalidate()
+        trustDirectory.deleteRecursively()
     }
 
     @Test
@@ -652,6 +1142,7 @@ class SessionForegroundServiceAndroidTest {
 
         recordingOwner.attempts.failClose.set(true)
         unbind(activityScenario, firstBinding)
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
         context.stopService(Intent(context, SessionForegroundService::class.java))
         eventually { firstBinding.binder.destroyedForTests }
         eventually {
@@ -660,6 +1151,7 @@ class SessionForegroundServiceAndroidTest {
                 recordingOwner.controller.current.desiredHost == null
         }
 
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
         requestConnect(activityScenario, automatic = true)
         val autoRecreated = bind(activityScenario)
         eventually { recordingOwner.selectionCalls.get() == 2 }
@@ -671,8 +1163,10 @@ class SessionForegroundServiceAndroidTest {
         assertNull(recordingOwner.controller.current.desiredHost)
         assertEquals(1, recordingOwner.attempts.created.get())
         unbind(activityScenario, autoRecreated)
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
         eventually { autoRecreated.binder.destroyedForTests }
 
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
         requestConnect(activityScenario)
         val recreated = bind(activityScenario)
         eventually { recordingOwner.selectionCalls.get() == 3 }
@@ -695,8 +1189,9 @@ class SessionForegroundServiceAndroidTest {
         assertTrue(recordingOwner.selectionStarted.await(3, TimeUnit.SECONDS))
         assertTrue(binding.binder.isForeground)
 
-        context.stopService(Intent(context, SessionForegroundService::class.java))
         unbind(activityScenario, binding)
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        context.stopService(Intent(context, SessionForegroundService::class.java))
         eventually { binding.binder.destroyedForTests }
         eventually { !binding.binder.isForeground }
         recordingOwner.release()
@@ -743,6 +1238,7 @@ class SessionForegroundServiceAndroidTest {
         assertTrue(recordingOwner.controller.current.connection.isReady)
 
         unbind(activityScenario, binding)
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
         disconnect.send()
         eventually {
             recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED &&
@@ -771,20 +1267,11 @@ class SessionForegroundServiceAndroidTest {
         grantNotificationPermissionForDisclosureTest()
         val recordingOwner = RecordingTransportOwner()
         install(recordingOwner)
-        val legacyAttempts = AtomicInteger()
-        legacyConnectProbeLease = MyConnectionHandler.installLegacyConnectAttemptProbeForTests {
-            legacyAttempts.incrementAndGet()
-            true // Observe and intercept immediately before the legacy toggle/credential pipeline.
-        }
         val activityScenario = launchVisibleActivity(autoConnect = true)
-        eventually { legacyAttempts.get() == 1 }
-        legacyAttempts.set(0)
+        eventually { recordingOwner.controller.current.connection.isReady }
         val originalActivity = AtomicReference<MainActivity>()
         activityScenario.onActivity { originalActivity.set(it) }
 
-        showSessionControlsFromMenu(activityScenario)
-        clickText("Start session")
-        eventually { recordingOwner.controller.current.connection.isReady }
         val binding = bind(activityScenario)
         eventually { binding.binder.snapshot.connection.isReady }
         assertEquals(1, recordingOwner.selectionCalls.get())
@@ -794,6 +1281,7 @@ class SessionForegroundServiceAndroidTest {
         val createdBeforeDisconnect = SessionForegroundService.serviceInstancesCreatedForTests
 
         unbind(activityScenario, binding)
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
         disconnect.send()
         eventually {
             binding.binder.destroyedForTests &&
@@ -810,13 +1298,20 @@ class SessionForegroundServiceAndroidTest {
         activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
         activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
         instrumentation.waitForIdleSync()
-        Thread.sleep(250)
+        waitForActivitySessionBinding(activityScenario)
+        eventually { SessionForegroundService.serviceInstancesCreatedForTests == createdAfterDisconnect + 1 }
         assertSameActivity(activityScenario, originalActivity.get())
-        assertEquals("ordinary resume must not enter the legacy credential/transport path", 0,
-            legacyAttempts.get())
+        // Binding the resumed control screen may recreate an idle service solely to observe state.
+        // It must not recreate the foreground session or select another host after explicit Disconnect.
+        val returnedBinding = bind(activityScenario)
+        assertFalse(returnedBinding.binder.isForeground)
+        assertEquals(ConnectionState.Phase.DISCONNECTED, returnedBinding.binder.snapshot.connection.phase)
+        unbind(activityScenario, returnedBinding)
         assertEquals(1, recordingOwner.selectionCalls.get())
         assertEquals(1, recordingOwner.attemptsCreated)
-        assertEquals("ordinary resume must not create another service instance", createdAfterDisconnect,
+        val createdAfterReturn = SessionForegroundService.serviceInstancesCreatedForTests
+        assertEquals("ordinary resume may bind an idle service but must not start a session",
+            createdAfterDisconnect + 1,
             SessionForegroundService.serviceInstancesCreatedForTests)
         assertTrue(recordingOwner.controller.current.automaticConnectSuppressed)
 
@@ -829,10 +1324,9 @@ class SessionForegroundServiceAndroidTest {
         instrumentation.waitForIdleSync()
         Thread.sleep(250)
         assertSameActivity(activityScenario, originalActivity.get())
-        assertEquals(0, legacyAttempts.get())
         assertEquals(1, recordingOwner.selectionCalls.get())
         assertEquals(1, recordingOwner.attemptsCreated)
-        assertEquals(createdAfterDisconnect, SessionForegroundService.serviceInstancesCreatedForTests)
+        assertEquals(createdAfterReturn, SessionForegroundService.serviceInstancesCreatedForTests)
         assertTrue(recordingOwner.controller.current.automaticConnectSuppressed)
 
         // Suppression is for automatic reconnect only: the explicit Session controls Start remains usable.
@@ -848,61 +1342,38 @@ class SessionForegroundServiceAndroidTest {
             recordingOwner.controller.current.connection.isReady)
         assertEquals(2, recordingOwner.attemptsCreated)
         assertFalse(recordingOwner.controller.current.automaticConnectSuppressed)
-        assertEquals(createdAfterDisconnect + 1, SessionForegroundService.serviceInstancesCreatedForTests)
-        assertEquals("explicit service Start never fell through to the legacy handler", 0, legacyAttempts.get())
+        assertEquals(createdAfterReturn, SessionForegroundService.serviceInstancesCreatedForTests)
         SessionForegroundService.requestDisconnect(context)
         eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
     }
 
     @Test
-    fun legacyToolbarAndDirectConnectAreBlockedWhileServiceSelectionAndSessionAreActive() {
+    fun toolbarConnectAndDisconnectOperateOnTheServiceOwnedSession() {
         grantNotificationPermissionForDisclosureTest()
         val recordingOwner = RecordingTransportOwner(manualSelections = true)
         install(recordingOwner)
-        val legacyAttempts = AtomicInteger()
-        legacyConnectProbeLease = MyConnectionHandler.installLegacyConnectAttemptProbeForTests {
-            legacyAttempts.incrementAndGet()
-            true
-        }
         val activityScenario = launchVisibleActivity()
-        requestConnect(activityScenario)
-        val binding = bind(activityScenario)
+        invokeToolbarConnectAction(activityScenario)
         assertTrue(recordingOwner.selectionStarted.await(3, TimeUnit.SECONDS))
         eventually { SessionForegroundService.hasPendingStart(context) }
         assertNull("the pending selection deliberately has no desired host yet",
             recordingOwner.controller.current.desiredHost)
         assertEquals(0, recordingOwner.attemptsCreated)
-        val serviceCountDuringSelection = SessionForegroundService.serviceInstancesCreatedForTests
-
-        // Exercise both old toolbar routing and a direct call to the legacy connect root.
-        invokeLegacyToolbarConnect(activityScenario)
-        waitForTextContains("foreground session request is waiting for notification permission or host selection")
-        clickText("Close")
-        activityScenario.onActivity { MainActivity.conn.xMouseTryConnect() }
-        waitForTextContains("foreground session request is waiting for notification permission or host selection")
-        clickText("Close")
-        assertEquals("pending metadata must block legacy credential/transport attempts", 0, legacyAttempts.get())
         assertEquals(1, recordingOwner.selectionCalls.get())
         assertEquals(0, recordingOwner.attemptsCreated)
-        assertEquals(serviceCountDuringSelection, SessionForegroundService.serviceInstancesCreatedForTests)
 
         recordingOwner.completeSelection(0, SessionFixtures.host("pending-service.invalid"))
         eventually { recordingOwner.controller.current.connection.isReady }
         eventually { !SessionForegroundService.hasPendingStart(context) }
-        invokeLegacyToolbarConnect(activityScenario)
-        waitForTextContains("A foreground session is active")
-        clickText("Open controls")
-        activityScenario.onActivity { MainActivity.conn.xMouseTryConnect() }
-        waitForTextContains("A foreground session is active")
-        clickText("Open controls")
-        assertEquals("active service state must block every legacy connect entry point", 0, legacyAttempts.get())
+
+        invokeToolbarConnectAction(activityScenario)
+        eventually {
+            recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED &&
+                recordingOwner.controller.current.automaticConnectSuppressed
+        }
         assertEquals(1, recordingOwner.selectionCalls.get())
         assertEquals(1, recordingOwner.attemptsCreated)
-        assertEquals(serviceCountDuringSelection, SessionForegroundService.serviceInstancesCreatedForTests)
-
-        unbind(activityScenario, binding)
-        SessionForegroundService.requestDisconnect(context)
-        eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+        assertEquals(1, recordingOwner.backend.events.count { it.name == "session.close" })
     }
 
     @Test
@@ -973,16 +1444,11 @@ class SessionForegroundServiceAndroidTest {
     fun staleDisconnectAfterOwnerAbsenceDoesNotCreateAnOwnerOrForegroundService() {
         val registry = (context.applicationContext as XMouseApplication).sessionOwners
         assertNull(registry.retainedOwnerOrNull())
-        val activityScenario = launchVisibleActivity()
-        activityScenario.onActivity { activity ->
-            activity.startService(Intent(activity, SessionForegroundService::class.java)
-                .setAction(SessionForegroundService.ACTION_NOTIFICATION_DISCONNECT))
-        }
+        context.startService(Intent(context, SessionForegroundService::class.java)
+            .setAction(SessionForegroundService.ACTION_NOTIFICATION_DISCONNECT))
         eventually { registry.retainedOwnerOrNull() == null }
         assertFalse(context.getSystemService(NotificationManager::class.java).activeNotifications
             .any { it.id == NOTIFICATION_ID })
-        activityScenario.close()
-        scenario = null
     }
 
     @SdkSuppress(minSdkVersion = 33)
@@ -993,11 +1459,6 @@ class SessionForegroundServiceAndroidTest {
         resetNotificationPermissionPrompt()
         val recordingOwner = RecordingTransportOwner()
         install(recordingOwner)
-        val legacyAttempts = AtomicInteger()
-        legacyConnectProbeLease = MyConnectionHandler.installLegacyConnectAttemptProbeForTests {
-            legacyAttempts.incrementAndGet()
-            true
-        }
 
         val activityScenario = launchVisibleActivity()
         showSessionControlsFromMenu(activityScenario)
@@ -1026,8 +1487,9 @@ class SessionForegroundServiceAndroidTest {
         assertFalse(SessionForegroundService.hasPendingStart(context))
         assertEquals(0, recordingOwner.selectionCalls.get())
         assertEquals(0, recordingOwner.attemptsCreated)
-        assertEquals(0, legacyAttempts.get())
-        assertEquals(serviceInstancesBeforeRecreation, SessionForegroundService.serviceInstancesCreatedForTests)
+        assertEquals("recreating the bound Activity may replace its idle observer service, but stale results " +
+            "must not start foreground work", serviceInstancesBeforeRecreation + 1,
+            SessionForegroundService.serviceInstancesCreatedForTests)
         assertFalse(context.getSystemService(NotificationManager::class.java).activeNotifications
             .any { it.id == NOTIFICATION_ID })
 
@@ -1056,16 +1518,16 @@ class SessionForegroundServiceAndroidTest {
         assertTrue(SessionForegroundService.hasReservedStart(context, newerTicket))
         assertEquals(0, recordingOwner.selectionCalls.get())
         assertEquals(0, recordingOwner.attemptsCreated)
-        assertEquals(0, legacyAttempts.get())
 
         // The actual Disconnect service action invalidates the newer reservation before its result.
         val serviceInstancesBeforeDisconnect = SessionForegroundService.serviceInstancesCreatedForTests
         assertTrue(SessionForegroundService.requestDisconnect(context))
         eventually {
             !SessionForegroundService.hasPendingStart(context) &&
-                !SessionForegroundService.hasReservedStart(context, newerTicket) &&
-                SessionForegroundService.serviceInstancesCreatedForTests > serviceInstancesBeforeDisconnect
+                !SessionForegroundService.hasReservedStart(context, newerTicket)
         }
+        assertEquals("the Activity already binds an idle observer service, so Disconnect reuses it",
+            serviceInstancesBeforeDisconnect, SessionForegroundService.serviceInstancesCreatedForTests)
         val serviceInstancesAfterDisconnect = SessionForegroundService.serviceInstancesCreatedForTests
         deliverPermissionResult(activityScenario, granted = true)
         deliverPermissionResult(activityScenario, granted = false)
@@ -1080,7 +1542,6 @@ class SessionForegroundServiceAndroidTest {
         assertEquals(Pair(null, null), clearedTickets.get())
         assertEquals(0, recordingOwner.selectionCalls.get())
         assertEquals(0, recordingOwner.attemptsCreated)
-        assertEquals(0, legacyAttempts.get())
         assertEquals(serviceInstancesAfterDisconnect, SessionForegroundService.serviceInstancesCreatedForTests)
         assertFalse(context.getSystemService(NotificationManager::class.java).activeNotifications
             .any { it.id == NOTIFICATION_ID })
@@ -1094,7 +1555,6 @@ class SessionForegroundServiceAndroidTest {
         eventually { recordingOwner.controller.current.connection.isReady }
         assertEquals(1, recordingOwner.selectionCalls.get())
         assertEquals(1, recordingOwner.attemptsCreated)
-        assertEquals(0, legacyAttempts.get())
     }
 
     @SdkSuppress(minSdkVersion = 33)
@@ -1133,19 +1593,12 @@ class SessionForegroundServiceAndroidTest {
         resetNotificationPermissionPrompt()
         val recordingOwner = RecordingTransportOwner()
         install(recordingOwner)
-        val legacyAttempts = AtomicInteger()
-        legacyConnectProbeLease = MyConnectionHandler.installLegacyConnectAttemptProbeForTests {
-            legacyAttempts.incrementAndGet()
-            true
-        }
         val activityScenario = launchVisibleActivity()
         showSessionControlsFromMenu(activityScenario)
         clickText("Start session")
         waitForText("Show session notification actions?")
         assertTrue("permission rationale must reserve the service request before prompting",
             SessionForegroundService.hasPendingStart(context))
-        activityScenario.onActivity { MainActivity.conn.xMouseTryConnect() }
-        assertEquals("legacy connect must remain blocked while permission is pending", 0, legacyAttempts.get())
         assertTrue(SessionForegroundService.hasPendingStart(context))
         clickText("Request permission")
         clickText("Don't allow")
@@ -1435,8 +1888,10 @@ class SessionForegroundServiceAndroidTest {
         assertNull(recordingOwner.controller.current.desiredHost)
         assertTrue(recordingOwner.controller.current.automaticConnectSuppressed)
         unbind(activityScenario, firstBinding)
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
         eventually { firstBinding.binder.destroyedForTests }
 
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
         requestConnect(activityScenario)
         val newBinding = bind(activityScenario)
         eventually { recordingOwner.selectionCalls.get() == 2 }

@@ -3,9 +3,11 @@ package com.stripe1.xmouse;
 import android.annotation.SuppressLint;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.ComponentName;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.ServiceConnection;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -13,6 +15,9 @@ import android.hardware.SensorManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
 import android.preference.PreferenceManager;
 import android.provider.Settings;
 import android.text.Editable;
@@ -46,8 +51,16 @@ import androidx.fragment.app.FragmentManager;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.google.android.material.navigation.NavigationView;
 import com.stripe1.xmouse.secrets.AndroidCredentials;
+import com.stripe1.xmouse.secrets.CredentialUi;
+import com.stripe1.xmouse.connection.ConnectionFailure;
+import com.stripe1.xmouse.connection.ConnectionState;
+import com.stripe1.xmouse.session.SessionActivityPresenter;
+import com.stripe1.xmouse.session.SessionCommandTransport;
+import com.stripe1.xmouse.session.SessionController;
 import com.stripe1.xmouse.session.ForegroundConnectRequestResult;
 import com.stripe1.xmouse.session.SessionForegroundService;
+import com.stripe1.xmouse.session.SessionInteractions;
+import com.stripe1.xmouse.session.SessionSnapshot;
 
 import java.io.BufferedReader;
 import java.io.FileInputStream;
@@ -74,12 +87,27 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	FragmentManager fm = getSupportFragmentManager();
 
 	public static DatabaseHandler db;
-	public static MyConnectionHandler conn;
-	private MyConnectionHandler screenConnection;
+	/** Application-only proxy: custom buttons and legacy input adapters never capture an Activity. */
+	public static SessionCommandTransport commandTransport;
 	private ActivityResultLauncher<String> notificationPermissionLauncher;
 	private boolean suppressLegacyAutoConnectOnResume;
 	private String pendingForegroundStartTicket;
 	private String pendingNotificationPermissionTicket;
+	private boolean pendingHostSelectionRequest;
+	private SessionForegroundService.SessionBinder sessionBinder;
+	private ServiceConnection sessionServiceConnection;
+	private AutoCloseable sessionSubscription;
+	private SessionController.Observer sessionObserver;
+	private SessionInteractions promptInteractions;
+	private SessionSnapshot sessionSnapshot;
+	private SessionActivityPresenter sessionPresenter;
+	private CredentialUi credentialUi;
+	private Toolbar toolbar;
+	private final Handler mainHandler = new Handler(Looper.getMainLooper());
+	private long bindingGeneration;
+	private long activityGeneration;
+	private long hostSelectionGeneration;
+	private long lastShownErrorGeneration = -1L;
 	public static IDoTool doTool;
 	LinearLayout mouseLayout;
 	LinearLayout keyboardLayout;
@@ -183,6 +211,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		conDiscButton = menu.findItem(R.id.action_conn_disc);//getItem(0);
 		KeyLockButton = menu.findItem(R.id.action_lock_keys);
 		InvScrollButton = menu.findItem(R.id.action_invert_scroll);
+		showConnectionStat();
 
 
 
@@ -199,8 +228,11 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 					onNotificationPermissionResult(granted);
 				});
 		setContentView(R.layout.activity_main);
-		Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
+		toolbar = (Toolbar) findViewById(R.id.toolbar);
 		setSupportActionBar(toolbar);
+		commandTransport = new SessionCommandTransport(getApplicationContext());
+		credentialUi = new CredentialUi(this);
+		sessionPresenter = new SessionActivityPresenter(this, credentialUi, this);
 
 		SensorManager sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
 		gyroscope= sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
@@ -350,9 +382,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 		initDb();
 		initMenu();
-
-		conn = new MyConnectionHandler(MainActivity.this, MainActivity.this);
-		screenConnection = conn;
 	}
 	public void initDb(){
 
@@ -513,10 +542,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	@Override
 	protected void onStart() {
 		super.onStart();
-		// The activity is about to become visible.
 		Log.d(TAG, "activity_started");
-		if (screenConnection != null) screenConnection.startCredentialUi();
-
+		if (sessionPresenter != null) sessionPresenter.start();
+		bindSessionService();
 	}
 	@Override
 	protected void onResume() {
@@ -530,32 +558,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 
 		//Toast.makeText(getBaseContext(), "setting_autoconnect "+String.valueOf(setting_autoconnect), Toast.LENGTH_SHORT).show();
-		final MyConnectionHandler credentialOwner = conn;
-		final int credentialToken = credentialOwner.credentialGeneration();
-		final com.stripe1.xmouse.secrets.CredentialRepository credentialRepository = AndroidCredentials.get(getApplicationContext());
-		credentialRepository.execute(() -> {
-			if (!credentialOwner.credentialWorkCurrent(credentialToken)) return;
-			final boolean ready;
-			try {
-				ready = credentialRepository.prepare();
-			} catch (IllegalStateException unavailableRepository) {
-				// Activity/test teardown can retire an injected database while this serialized retry is
-				// already running. Keep a stale repository callback from crashing the process or
-				// falling through to a credential/transport attempt.
-				Log.w(TAG, "credential preparation unavailable", unavailableRepository);
-				return;
-			}
-			runOnUiThread(() -> {
-				if (!credentialOwner.credentialsCurrent(credentialToken)) return;
-				if (!ready) Toast.makeText(this, com.stripe1.xmouse.secrets.CredentialRepository.RECOVERY_MESSAGE, Toast.LENGTH_LONG).show();
-				// Notification Open controls is navigation only. Also avoid starting the legacy transport
-				// beside a retained foreground-service session while 5.4 is still staged separately.
-				if (setting_autoconnect && !openedFromNotification &&
-						!SessionForegroundService.suppressesLegacyAutoConnect(getApplicationContext())) {
-					credentialOwner.xMouseTryConnect();
-				}
-			});
-		});
+		if (setting_autoconnect && !openedFromNotification) {
+			scheduleAutomaticForegroundSessionAfterVisibleFrame(activityGeneration, getWindow().getDecorView());
+		}
 
 		if(mCoolDragAndDropGridView!=null){
 			mItemAdapter = new CustomKeyboardButtonAdapter(MainActivity.this, mItems);
@@ -566,6 +571,100 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		showConnectionStat();
 		initDoTool();
 	}
+
+	private void requestAutomaticForegroundSession() {
+		if (pendingForegroundStartTicket != null) {
+			continueForegroundSessionRequest();
+			return;
+		}
+		String ticket = SessionForegroundService.reserveAutomaticConnectIfNeeded(this);
+		if (ticket == null) return; // Existing intent, explicit Disconnect, or a newer request wins.
+		pendingForegroundStartTicket = ticket;
+		continueForegroundSessionRequest();
+	}
+
+	/** Wait for a laid-out visible frame before requesting an FGS start from this Activity. */
+	private void scheduleAutomaticForegroundSessionAfterVisibleFrame(long resumedGeneration, View decor) {
+		decor.postOnAnimation(new Runnable() {
+			private boolean observedVisibleFrame;
+
+			@Override public void run() {
+				if (resumedGeneration != activityGeneration || isFinishing() || isDestroyed() ||
+						!getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED) ||
+						!setting_autoconnect) return;
+
+				boolean visibleFrame = decor.isAttachedToWindow() && decor.isShown() &&
+						decor.getWindowVisibility() == View.VISIBLE && decor.getWidth() > 0 && decor.getHeight() > 0;
+				if (!visibleFrame) {
+					observedVisibleFrame = false;
+					decor.postOnAnimation(this);
+					return;
+				}
+				if (!observedVisibleFrame) {
+					// This callback precedes drawing; wait one more frame so the window is genuinely visible.
+					observedVisibleFrame = true;
+					decor.postOnAnimation(this);
+					return;
+				}
+				requestAutomaticForegroundSession();
+			}
+		});
+	}
+
+	private void bindSessionService() {
+		if (sessionServiceConnection != null || isFinishing() || isDestroyed()) return;
+		final long token = ++bindingGeneration;
+		ServiceConnection connection = new ServiceConnection() {
+			@Override public void onServiceConnected(ComponentName name, IBinder service) {
+				if (token != bindingGeneration || isFinishing() || isDestroyed()) return;
+				sessionBinder = (SessionForegroundService.SessionBinder) service;
+				promptInteractions = sessionBinder.getInteractions();
+				if (sessionPresenter != null) sessionPresenter.attach(promptInteractions);
+				sessionSnapshot = sessionBinder.getSnapshot();
+				sessionObserver = snapshot -> applySessionSnapshot(token, snapshot);
+				sessionSubscription = sessionBinder.observe(command -> mainHandler.post(command), sessionObserver);
+				applySessionSnapshot(token, sessionSnapshot);
+			}
+			@Override public void onServiceDisconnected(ComponentName name) {
+				if (token != bindingGeneration) return;
+				closeSessionObservation();
+				sessionBinder = null;
+				promptInteractions = null;
+			}
+		};
+		sessionServiceConnection = connection;
+		if (!bindService(new Intent(this, SessionForegroundService.class), connection, Context.BIND_AUTO_CREATE)) {
+			sessionServiceConnection = null;
+		}
+	}
+
+	private void applySessionSnapshot(long token, SessionSnapshot snapshot) {
+		if (token != bindingGeneration || isFinishing() || isDestroyed() ||
+				!getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return;
+		sessionSnapshot = snapshot;
+		showConnectionStat();
+	}
+
+	private void closeSessionObservation() {
+		if (sessionSubscription != null) {
+			try { sessionSubscription.close(); } catch (Exception ignored) { }
+			sessionSubscription = null;
+		}
+		sessionObserver = null;
+	}
+
+	private void unbindSessionService() {
+		bindingGeneration++;
+		closeSessionObservation();
+		ServiceConnection connection = sessionServiceConnection;
+		sessionServiceConnection = null;
+		if (connection != null) {
+			try { unbindService(connection); } catch (IllegalArgumentException ignored) { }
+		}
+		sessionBinder = null;
+		promptInteractions = null;
+	}
+
 	@Override
 	protected void onNewIntent(Intent intent) {
 		super.onNewIntent(intent);
@@ -579,7 +678,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	/** In-app entry point retained when notification-tray visibility is denied or later revoked. */
 	public void showSessionControls() {
 		if (isFinishing() || isDestroyed()) return;
-		boolean active = SessionForegroundService.hasRetainedSession(this);
+		boolean active = hasActiveOrPendingSession() && !SessionForegroundService.hasPendingStart(this);
 		boolean pending = SessionForegroundService.hasPendingStart(this);
 		if (pending && !active) {
 			AlertDialog.Builder pendingDialog = new AlertDialog.Builder(this)
@@ -633,20 +732,12 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			continueForegroundSessionRequest();
 			return;
 		}
-		if (SessionForegroundService.hasRetainedSession(this)) {
+		if (hasActiveOrPendingSession() && !SessionForegroundService.hasPendingStart(this)) {
 			showSessionControls();
 			return;
 		}
 		if (SessionForegroundService.hasPendingStart(this)) {
 			showSessionControls();
-			return;
-		}
-		if (screenConnection != null && screenConnection.hasPendingConnection()) {
-			new AlertDialog.Builder(this)
-					.setTitle(R.string.session_controls_title)
-					.setMessage(R.string.session_controls_legacy_active)
-					.setPositiveButton(android.R.string.ok, null)
-					.show();
 			return;
 		}
 		pendingForegroundStartTicket = SessionForegroundService.reserveConnectRequest(this, false);
@@ -659,6 +750,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 	private void continueForegroundSessionRequest() {
 		if (pendingForegroundStartTicket == null) {
+			pendingHostSelectionRequest = false;
 			pendingForegroundStartTicket = SessionForegroundService.reserveConnectRequest(this, false);
 			if (pendingForegroundStartTicket == null) {
 				android.widget.Toast.makeText(this, R.string.session_start_rejected, android.widget.Toast.LENGTH_LONG).show();
@@ -798,23 +890,16 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 
 	private void startForegroundSession() {
-		if (pendingForegroundStartTicket == null && SessionForegroundService.hasRetainedSession(this)) {
+		if (!pendingHostSelectionRequest && pendingForegroundStartTicket == null && SessionForegroundService.hasRetainedSession(this)) {
 			showSessionControls();
 			return;
 		}
-		if (pendingForegroundStartTicket == null && SessionForegroundService.hasPendingStart(this)) {
+		if (!pendingHostSelectionRequest && pendingForegroundStartTicket == null && SessionForegroundService.hasPendingStart(this)) {
 			showSessionControls();
-			return;
-		}
-		if (pendingForegroundStartTicket == null && screenConnection != null && screenConnection.hasPendingConnection()) {
-			new AlertDialog.Builder(this)
-					.setTitle(R.string.session_controls_title)
-					.setMessage(R.string.session_controls_legacy_active)
-					.setPositiveButton(android.R.string.ok, null)
-					.show();
 			return;
 		}
 		if (pendingForegroundStartTicket == null) {
+			pendingHostSelectionRequest = false;
 			pendingForegroundStartTicket = SessionForegroundService.reserveConnectRequest(this, false);
 		}
 		if (pendingForegroundStartTicket == null) {
@@ -824,6 +909,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		String ticket = pendingForegroundStartTicket;
 		ForegroundConnectRequestResult result = SessionForegroundService.startReservedConnect(this, ticket);
 		pendingForegroundStartTicket = null;
+		pendingHostSelectionRequest = false;
 		if (result != ForegroundConnectRequestResult.ACCEPTED) {
 			SessionForegroundService.cancelReservedConnect(this, ticket);
 			android.widget.Toast.makeText(this, R.string.session_start_rejected, android.widget.Toast.LENGTH_LONG).show();
@@ -841,10 +927,12 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		String ticket = pendingForegroundStartTicket;
 		pendingForegroundStartTicket = null;
 		pendingNotificationPermissionTicket = null;
+		pendingHostSelectionRequest = false;
 		if (ticket != null) SessionForegroundService.cancelReservedConnect(this, ticket);
 	}
 
 	private void disconnectForegroundSessionFromUi() {
+		cancelPendingForegroundSessionRequest();
 		if (!SessionForegroundService.requestDisconnect(this)) {
 			android.widget.Toast.makeText(this, R.string.session_start_rejected, android.widget.Toast.LENGTH_LONG).show();
 		}
@@ -858,38 +946,99 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 	@Override
 	protected void onStop() {
-		screenConnection.stopCredentialUi();
-		super.onStop();  // Always call the superclass method first
+		activityGeneration++;
+		unbindSessionService();
+		if (sessionPresenter != null) sessionPresenter.stop(credentialUi != null && credentialUi.hasPicker());
+		super.onStop();
 	}
 	@Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-		if (screenConnection == null || !screenConnection.onCredentialResult(requestCode, resultCode, data)) super.onActivityResult(requestCode, resultCode, data);
+		if (credentialUi == null || !credentialUi.onActivityResult(requestCode, resultCode, data)) super.onActivityResult(requestCode, resultCode, data);
 	}
 	@Override
 	protected void onDestroy() {
 		cancelPendingForegroundSessionRequest();
+		unbindSessionService();
+		if (sessionPresenter != null) sessionPresenter.destroy();
 		super.onDestroy();
-		// The activity is about to be destroyed.
-		screenConnection.destroy();
-		if (conn == screenConnection) conn = null;
 	}
 
 	public void showConnectionStat(){
-		if(conDiscButton != null){
-			if(!screenConnection.isConnected()){
-				conDiscButton.setIcon(R.drawable.state_disc);
-			}else{
-				conDiscButton.setIcon(R.drawable.state_conn);
-			}
+		ConnectionState state = sessionSnapshot == null ? new ConnectionState.Disconnected() : sessionSnapshot.getConnection();
+		ConnectionState.Phase phase = state.getPhase();
+		boolean active = state.isReady() || phase == ConnectionState.Phase.PREPARING_CREDENTIALS ||
+				phase == ConnectionState.Phase.RESOLVING || phase == ConnectionState.Phase.CONNECTING ||
+				phase == ConnectionState.Phase.AWAITING_TRUST || phase == ConnectionState.Phase.AUTHENTICATING ||
+				phase == ConnectionState.Phase.CLOSING || SessionForegroundService.hasPendingStart(this) ||
+				(sessionSnapshot == null && SessionForegroundService.hasRetainedSession(this));
+		String status;
+		switch (phase) {
+			case PREPARING_CREDENTIALS: status = "Preparing credentials"; break;
+			case RESOLVING: status = "Resolving host"; break;
+			case CONNECTING: status = "Connecting"; break;
+			case AWAITING_TRUST: status = "Waiting for host approval"; break;
+			case AUTHENTICATING: status = "Authenticating"; break;
+			case CONNECTED: status = "Connected"; break;
+			case CLOSING: status = "Disconnecting"; break;
+			case ERROR: status = "Connection failed"; break;
+			default: status = "Disconnected"; break;
 		}
+		if (toolbar != null) toolbar.setSubtitle(status);
+		if (conDiscButton != null) {
+			conDiscButton.setIcon(active ? R.drawable.state_conn : R.drawable.state_disc);
+			conDiscButton.setTitle(active ? "Disconnect" : "Connect");
+			conDiscButton.setContentDescription(status + (active ? ". Disconnect session" : ". Connect"));
+		}
+		if (state.getPhase() == ConnectionState.Phase.ERROR && sessionSnapshot != null &&
+				sessionSnapshot.getGeneration() != lastShownErrorGeneration) {
+			lastShownErrorGeneration = sessionSnapshot.getGeneration();
+			Toast.makeText(this, connectionFailureMessage(state.getFailure()), Toast.LENGTH_LONG).show();
+		}
+	}
+
+	private String connectionFailureMessage(ConnectionFailure failure) {
+		if (failure instanceof ConnectionFailure.Permission) {
+			return "Local network access is unavailable. Allow it in system settings and retry.";
+		}
+		if (failure instanceof ConnectionFailure.Resolution) {
+			ConnectionFailure.ResolutionReason reason = ((ConnectionFailure.Resolution) failure).getReason();
+			if (reason == ConnectionFailure.ResolutionReason.TIMED_OUT) return "Computer lookup timed out. Check the network and retry.";
+			if (reason == ConnectionFailure.ResolutionReason.NOT_FOUND) return "Computer could not be found. Check its hostname or try its IP address.";
+			return "Computer lookup is unavailable. Check the network and retry.";
+		}
+		if (failure instanceof ConnectionFailure.Trust) {
+			ConnectionFailure.TrustReason reason = ((ConnectionFailure.Trust) failure).getReason();
+			if (reason == ConnectionFailure.TrustReason.KEY_MISMATCH) {
+				return "The host key changed. Authentication was blocked; review the host identity before reconnecting.";
+			}
+			if (reason == ConnectionFailure.TrustReason.STORAGE_UNAVAILABLE) return "Saved host trust could not be checked. No credentials were sent.";
+			return "Host identity was not approved. Review the fingerprint and retry.";
+		}
+		if (failure instanceof ConnectionFailure.Authentication) {
+			ConnectionFailure.AuthenticationReason reason = ((ConnectionFailure.Authentication) failure).getReason();
+			if (reason == ConnectionFailure.AuthenticationReason.KEY_UNAVAILABLE) return "Saved credentials are unavailable. Re-enter credentials and retry.";
+			if (reason == ConnectionFailure.AuthenticationReason.INVALID_PASSPHRASE) return "The key passphrase was not accepted. Check it and retry.";
+			if (reason == ConnectionFailure.AuthenticationReason.TIMED_OUT) return "Credential entry timed out. Retry when ready.";
+			if (reason == ConnectionFailure.AuthenticationReason.UNSUPPORTED_KEY) return "This private-key format is not supported.";
+			return "Authentication was not accepted. Check the selected credentials and retry.";
+		}
+		if (failure instanceof ConnectionFailure.Transport) {
+			ConnectionFailure.TransportReason reason = ((ConnectionFailure.Transport) failure).getReason();
+			if (reason == ConnectionFailure.TransportReason.CONNECTION_REFUSED) return "The computer refused the SSH connection. Check that SSH is running and retry.";
+			if (reason == ConnectionFailure.TransportReason.UNREACHABLE) return "The computer is unreachable. Check the network and retry.";
+			if (reason == ConnectionFailure.TransportReason.TIMED_OUT) return "The SSH connection timed out. Check the network and retry.";
+			if (reason == ConnectionFailure.TransportReason.CLEANUP_UNCONFIRMED) return "The previous SSH session could not be safely closed. Reconnect is blocked.";
+			return "The SSH session failed. Check the network and retry.";
+		}
+		return "Connection failed. Check the host settings and retry.";
 	}
 
 	public void initDoTool() {
 		switch (setting_dotool_initial) {
-			case "ydotool": doTool = new YDoTool(conn); break;
-			case "xdotool": doTool = new XDoTool(conn); break;
+			case "ydotool": doTool = new YDoTool(commandTransport); break;
+			case "xdotool": doTool = new XDoTool(commandTransport); break;
 			default:
 				Log.w(TAG, "unknown_command_backend");
-				doTool = new XDoTool(conn);
+				doTool = new XDoTool(commandTransport);
 				break;
 		}
 	}
@@ -1003,12 +1152,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			showSessionControls();
 			return true;
 		} else if (id == R.id.action_conn_disc) {
-
-			if(conn.isConnected()){
-				conn.xMouseDisconnect();
-			}else {
-				conn.xMouseTryConnect();
-			}
+			if (hasActiveOrPendingSession()) disconnectForegroundSessionFromUi();
+			else requestForegroundSessionFromUi();
+			return true;
 		} else if (id == R.id.action_restore_default_keys) {
 			KEYLOAYOUTFILENAME = "keyLayoutFile.csv";
 			confirmLayoutReload("Restore default Keyboard?","Any unsaved buttons will be lost",true);
@@ -1038,13 +1184,33 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		} else if (id == R.id.action_edit_layout) {
 			showNoticeDialog(getBaseContext());
 		} else if (id == R.id.action_exit) {
-
-			//close all connections and finish.
-			conn.xMouseDisconnect();
-
+			// Finishing the control screen detaches this Activity; it does not own the session.
 			this.finish();
+			return true;
 		}
 		return super.onOptionsItemSelected(item);
+	}
+
+	private boolean hasActiveOrPendingSession() {
+		if (pendingForegroundStartTicket != null || SessionForegroundService.hasPendingStart(this)) return true;
+		if (sessionSnapshot == null) return SessionForegroundService.hasRetainedSession(this);
+		ConnectionState.Phase phase = sessionSnapshot.getConnection().getPhase();
+		return phase == ConnectionState.Phase.PREPARING_CREDENTIALS || phase == ConnectionState.Phase.RESOLVING ||
+				phase == ConnectionState.Phase.CONNECTING || phase == ConnectionState.Phase.AWAITING_TRUST ||
+				phase == ConnectionState.Phase.AUTHENTICATING || phase == ConnectionState.Phase.CONNECTED ||
+				phase == ConnectionState.Phase.CLOSING;
+	}
+
+	private void requestForegroundSessionForSelectedHost() {
+		cancelPendingForegroundSessionRequest();
+		pendingHostSelectionRequest = true;
+		pendingForegroundStartTicket = SessionForegroundService.reserveConnectRequest(this, false);
+		if (pendingForegroundStartTicket == null) {
+			pendingHostSelectionRequest = false;
+			android.widget.Toast.makeText(this, R.string.session_start_rejected, android.widget.Toast.LENGTH_LONG).show();
+			return;
+		}
+		continueForegroundSessionRequest();
 	}
 	public void showNoticeDialog(Context mCont) {
 		// Create an instance of the dialog fragment and show it
@@ -1071,28 +1237,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 					startActivity(intent);
 
 				}else {
-
-					conn.xMouseDisconnect();
-					final MyConnectionHandler owner = conn;
-					final int token = owner.credentialGeneration();
-					final com.stripe1.xmouse.secrets.CredentialRepository repository = AndroidCredentials.get(getApplicationContext());
-					repository.execute(() -> {
-						try {
-							if (!owner.credentialWorkCurrent(token)) return;
-							repository.selectHost(id);
-							runOnUiThread(() -> {
-								if (!owner.credentialsCurrent(token)) return;
-								getPreferences();
-								if (SessionForegroundService.suppressesLegacyAutoConnect(getApplicationContext())) {
-									showSessionControls();
-								} else {
-									owner.xMouseTryConnect();
-								}
-							});
-						} catch (Exception ignored) {
-							runOnUiThread(() -> Toast.makeText(this, "Host selection could not be saved. Existing credentials were kept.", Toast.LENGTH_LONG).show());
-						}
-					});
+					selectHostAndConnect(id);
 				}
 
 				break;
@@ -1135,7 +1280,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 					if (script.size() > 0) {
 						String cmd = script.get(0).get(1);
-						conn.executeExecCommand(cmd);
+						if (commandTransport == null || !commandTransport.executeExecCommand(cmd)) {
+							Toast.makeText(this, "Connect to a computer before running a script.", Toast.LENGTH_LONG).show();
+						}
 					} else {
 
 						Toast.makeText(getBaseContext(), "Error finding Script command with id=" + id, Toast.LENGTH_LONG).show();
@@ -1149,6 +1296,31 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		DrawerLayout drawer = (DrawerLayout) findViewById(R.id.drawer_layout);
 		drawer.closeDrawer(GravityCompat.START);
 		return true;
+	}
+
+	private void selectHostAndConnect(int id) {
+		final long activityToken = activityGeneration;
+		final long selectionToken = ++hostSelectionGeneration;
+		if (promptInteractions != null) promptInteractions.invalidate();
+		final com.stripe1.xmouse.secrets.CredentialRepository repository = AndroidCredentials.get(getApplicationContext());
+		repository.execute(() -> {
+			try {
+				repository.selectHost(id);
+				mainHandler.post(() -> {
+					if (activityToken != activityGeneration || selectionToken != hostSelectionGeneration ||
+							isFinishing() || isDestroyed() || !getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return;
+					getPreferences();
+					requestForegroundSessionForSelectedHost();
+				});
+			} catch (Exception ignored) {
+				mainHandler.post(() -> {
+					if (activityToken == activityGeneration && selectionToken == hostSelectionGeneration &&
+							!isFinishing() && !isDestroyed()) {
+						Toast.makeText(this, "Host selection could not be saved. Existing credentials were kept.", Toast.LENGTH_LONG).show();
+					}
+				});
+			}
+		});
 	}
 
 
@@ -1516,12 +1688,19 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 
 	@Override public void showRecentCommand(String command) {
-		recentCmdTextView.setText(command);
+		if (Looper.myLooper() != Looper.getMainLooper()) {
+			mainHandler.post(() -> showRecentCommand(command));
+			return;
+		}
+		if (recentCmdTextView != null && !isDestroyed()) recentCmdTextView.setText(command);
 	}
 
 	@Override public void performCallback() {
-		Log.d(TAG, "connection_state_changed");
-		showConnectionStat();
+		if (Looper.myLooper() != Looper.getMainLooper()) {
+			mainHandler.post(this::performCallback);
+			return;
+		}
+		if (!isDestroyed()) showConnectionStat();
 	}
 
 	@Override

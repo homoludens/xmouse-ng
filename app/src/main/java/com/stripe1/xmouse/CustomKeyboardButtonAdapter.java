@@ -109,7 +109,7 @@ public class CustomKeyboardButtonAdapter extends ArrayAdapter<CustomKeyboardButt
 
 			@Override
 			public void onClick(View v) {
-				execCommand(item.getmCommand(), MainActivity.doTool, MainActivity.conn);
+				execCommand(item.getmCommand(), MainActivity.doTool, MainActivity.commandTransport);
 			}
 
 

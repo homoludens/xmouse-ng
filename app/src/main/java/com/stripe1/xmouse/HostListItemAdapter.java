@@ -76,7 +76,6 @@ public class HostListItemAdapter extends ArrayAdapter<HostItem> {
 
             @Override
             public void onClick(View v) {
-                //MainActivity.conn.executeShellCommand(item.getmCommand());
 
                 //myInterface.performCallback2(item.getDbId());
                 myInterface.performCallback2(position);

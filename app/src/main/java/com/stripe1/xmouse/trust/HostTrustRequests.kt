@@ -22,6 +22,27 @@ class HostTrustRequests @JvmOverloads constructor(
     @Synchronized fun detach() { generation++; listener.clear(); cancelPending() }
     @Synchronized fun cancelPending() { pending?.cancel() }
 
+    /** Safe public-key observation captured while the failed transport token is still valid. */
+    class MismatchObservation internal constructor(
+        internal val owner: HostTrustRequests,
+        internal val endpoint: Endpoint,
+        internal val trustedKey: ApprovedHostKey,
+        internal val presentedKey: ApprovedHostKey,
+        internal val capturedNanos: Long,
+    )
+
+    fun captureMismatch(mismatch: HostKeyMismatch, current: BooleanSupplier): MismatchObservation? {
+        if (!mismatch.belongsTo(this) || !current.asBoolean || !mismatch.isCurrent()) return null
+        return MismatchObservation(this, mismatch.endpoint, mismatch.trustedKey, mismatch.presentedKey, System.nanoTime())
+    }
+
+    /** Creates a distinct review token only after the caller has confirmed failed-attempt cleanup. */
+    fun reviewMismatch(observation: MismatchObservation, current: BooleanSupplier): HostKeyMismatch? {
+        if (observation.owner !== this || System.nanoTime() - observation.capturedNanos >= TimeUnit.SECONDS.toNanos(60) ||
+            !current.asBoolean) return null
+        return HostKeyMismatch(this, observation.endpoint, observation.trustedKey, observation.presentedKey, current)
+    }
+
     fun verify(endpoint: Endpoint, key: ApprovedHostKey, current: BooleanSupplier) {
         if (!current.asBoolean) trustFailure(HostTrustException.Reason.CANCELLED)
         repository.find(endpoint.identity)?.let {

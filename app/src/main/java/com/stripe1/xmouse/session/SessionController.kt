@@ -18,9 +18,15 @@ interface SessionAttempt {
     fun start(listener: Listener)
     /** Non-blocking invalidation. Completion is exactly once per call, bounded, and conservative. */
     fun cancelAndClose(completion: (ConnectionFailure?) -> Unit)
+    /** Compatibility handoff; the service-owned attempt retains transport ordering/cancellation. */
+    fun executeShellCommand(command: String): Boolean = false
+    fun executeExecCommand(command: String): Boolean = false
 }
 
-fun interface SessionAttemptFactory { fun create(host: SessionHost): SessionAttempt }
+fun interface SessionAttemptFactory {
+    fun create(host: SessionHost): SessionAttempt
+    fun invalidateReviews() { }
+}
 
 /** Immutable, atomically observable intent + observation. No commands, secrets, or UI objects. */
 data class SessionSnapshot(
@@ -46,6 +52,9 @@ class SessionController @JvmOverloads constructor(
     private var generation = 0L
     /** Invalidates service metadata callbacks immediately, before the serialized disconnect event runs. */
     private val disconnectEpoch = AtomicLong()
+    /** Immutable admission token: callers can validate a ready session without reading queue-owned state. */
+    private data class CommandOwner(val generation: Long, val host: SessionHost, val disconnectEpoch: Long)
+    private val commandOwner = AtomicReference<CommandOwner?>()
     private var owned: Owned? = null
     private var resumeAfterClose = false
     private val observers = mutableListOf<Observation>()
@@ -80,6 +89,8 @@ class SessionController @JvmOverloads constructor(
         if (current.closed || current.automaticConnectSuppressed || permit.version != current.intentVersion ||
             (current.desiredHost != null && (old == null || (old.closing && !resumeAfterClose) ||
                 !current.desiredHost!!.sameRequest(host)))) return false
+        if (current.desiredHost?.sameRequest(host) == true && old != null && (!old.closing || resumeAfterClose)) return true
+        factory.invalidateReviews()
         request(host)
         return true
     }
@@ -106,6 +117,7 @@ class SessionController @JvmOverloads constructor(
         val old = owned
         if (current.desiredHost?.sameRequest(host) == true && old != null && (!old.closing || resumeAfterClose) &&
             !current.automaticConnectSuppressed) return true
+        factory.invalidateReviews()
         publish(current.copy(intentVersion = current.intentVersion + 1, automaticConnectSuppressed = false))
         request(host)
         return true
@@ -124,11 +136,39 @@ class SessionController @JvmOverloads constructor(
 
     fun disconnect() {
         disconnectEpoch.incrementAndGet()
+        factory.invalidateReviews()
         events.post { stop(false) }
     }
     override fun close() {
         disconnectEpoch.incrementAndGet()
+        factory.invalidateReviews()
         events.post { stop(true) }
+    }
+
+    /** Queue acceptance only; a command is never transferred to a replacement/recovered attempt. */
+    fun executeShellCommand(command: String): Boolean = postReadyCommand(command) { it.executeShellCommand(command) }
+
+    /** Result presentation is delivered through the weak Activity prompt bridge. */
+    fun executeExecCommand(command: String): Boolean = postReadyCommand(command) { it.executeExecCommand(command) }
+
+    private fun postReadyCommand(command: String, execute: (SessionAttempt) -> Boolean): Boolean {
+        if (command.isEmpty()) return false
+        val owner = commandOwner.get() ?: return false
+        val admitted = current
+        if (disconnectEpoch.get() != owner.disconnectEpoch || admitted.closed || !admitted.connection.isReady ||
+            admitted.generation != owner.generation || admitted.attemptHost !== owner.host ||
+            admitted.desiredHost?.sameRequest(owner.host) != true) return false
+        return events.post {
+            val snapshot = current
+            val active = owned
+            if (commandOwner.get() !== owner || disconnectEpoch.get() != owner.disconnectEpoch || snapshot.closed ||
+                !snapshot.connection.isReady || snapshot.generation != owner.generation ||
+                snapshot.attemptHost !== owner.host || snapshot.desiredHost?.sameRequest(owner.host) != true ||
+                active == null || active.generation != owner.generation || active.host !== owner.host || active.closing) {
+                return@post
+            }
+            execute(active.attempt)
+        }
     }
     private fun stop(terminal: Boolean) {
         if (current.closed) return
@@ -155,6 +195,7 @@ class SessionController @JvmOverloads constructor(
             return
         }
         owned = entry
+        commandOwner.set(CommandOwner(entry.generation, entry.host, disconnectEpoch.get()))
         val listener = object : SessionAttempt.Listener {
             override fun phase(phase: ConnectionState.Phase) { events.post {
                 if (!matches(entry)) return@post
@@ -190,6 +231,9 @@ class SessionController @JvmOverloads constructor(
 
     private fun closeOwned(entry: Owned, observation: ConnectionState) {
         if (entry.closing) return
+        commandOwner.get()?.takeIf { it.generation == entry.generation && it.host === entry.host }?.let {
+            commandOwner.compareAndSet(it, null)
+        }
         entry.closing = true // Invalidate every queued auth/trust/ready/loss event BEFORE cancellation.
         publish(current.copy(connection = observation))
         entry.attempt.cancelAndClose { failure -> events.post {

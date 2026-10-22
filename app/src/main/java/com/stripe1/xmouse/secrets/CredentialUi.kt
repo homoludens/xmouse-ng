@@ -120,6 +120,12 @@ class CredentialUi(private val activity: Activity) : CredentialPrompts {
 
     /** Leaving for the picker is not cancellation; stop() is called by the Activity except for this case. */
     fun hasPicker(): Boolean = keyRequest != null
+
+    /** Dismisses one service-owned prompt after its attempt is invalidated or completed. */
+    fun dismiss(request: CredentialReentryRequest) {
+        requests[request]?.let { finish(it, cancel = true) }
+    }
+
     fun onActivityResult(code: Int, result: Int, data: Intent?): Boolean {
         if (code != pickerCode || keyRequest == null) return false
         val pending = keyRequest!!

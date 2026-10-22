@@ -48,18 +48,18 @@ class LoggingPrivacyAndroidTest {
 
             ActivityScenario.launch<MainActivity>(Intent(target, MainActivity::class.java)).use { scenario ->
                 scenario.onActivity { activity ->
-                    val connection = MainActivity.conn
-                    connection.xMouseDisconnect()
-                    assertFalse("The test must not establish an SSH session", connection.isConnected)
+                    assertFalse("The test must not establish an SSH session",
+                        com.stripe1.xmouse.session.SessionForegroundService.hasRetainedSession(activity))
 
                     val adapter = CustomKeyboardButtonAdapter(activity, emptyList())
-                    adapter.execCommand("type", MainActivity.doTool, connection)
+                    adapter.execCommand("type", MainActivity.doTool, MainActivity.commandTransport)
 
                     activity.findViewById<EditText>(R.id.keyboard_input).setText(typedSentinel)
                     val malformedLayout = "title<xmousesep>synthetic<xmousesep>$errorSentinel<xmousesep>#ffffff"
                     assertNull(activity.loadKeyboardLayout(activity, malformedLayout))
 
-                    assertFalse("Input must not connect or execute remotely", connection.isConnected)
+                    assertFalse("Input must not connect or execute remotely",
+                        com.stripe1.xmouse.session.SessionForegroundService.hasRetainedSession(activity))
                     appPid = (target.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager)
                         .runningAppProcesses
                         ?.firstOrNull { it.processName == target.packageName }

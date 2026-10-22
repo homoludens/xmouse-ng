@@ -63,7 +63,13 @@ assert "class HostTrustReplacementUi" in replacement_ui
 assert "Replace trusted key" in replacement_ui and "Review replacement" in replacement_ui
 assert not re.search(r"import\s+com\.stripe1\.xmouse\.(transport|secrets)|\b(SshTransport|AuthenticationMaterial|CredentialRepository)\b", replacement_ui)
 for file in (source / "session").glob("*.kt"):
-    if file.name == "AndroidSessionOwner.kt":
+    # These are deliberate Android composition/presentation adapters, not the pure owner pipeline.
+    if file.name in (
+        "AndroidSessionOwner.kt",
+        "SessionForegroundService.kt",
+        "SessionActivityPresenter.kt",
+        "SessionCommandTransport.kt",
+    ):
         continue
     text = re.sub(r"/\*.*?\*/|//[^\n]*", "", file.read_text(), flags=re.S)
     assert not re.search(r"import\s+(android\.|androidx\.)|\b(Activity|Context|View|AlertDialog|Handler|MainActivity)\b", text), file
@@ -73,4 +79,17 @@ controller = (source / "session" / "SessionController.kt").read_text()
 assert "entry.closeCompleted" in controller and "current.cleanupUnconfirmed" in controller
 assert "WeakReference(observer)" in controller
 assert "repository.authenticate(selection, prompts, completion)" in (source / "session" / "AndroidSessionOwner.kt").read_text()
+session_interactions = (source / "session" / "SessionInteractions.kt").read_text()
+assert "WeakReference<Listener>" in session_interactions
+activity_presenter = (source / "session" / "SessionActivityPresenter.kt").read_text()
+assert "class SessionActivityPresenter" in activity_presenter
+assert "owner.attach(this)" in activity_presenter and "interactions?.detach()" in activity_presenter
+command_bridge = (source / "session" / "SessionCommandTransport.kt").read_text()
+assert "context.applicationContext" in command_bridge
+assert "SessionForegroundService" not in command_bridge
+main_activity = (source / "MainActivity.java").read_text()
+assert "new SessionCommandTransport(getApplicationContext())" in main_activity
+assert not re.search(r"\b(MyConnectionHandler|SshTransport|JschSshBackend)\b|xMouseTryConnect|xMouseDisconnect", main_activity)
+assert "SessionForegroundService.requestConnect" not in main_activity  # starts are ticketed and permission-gated
+assert "SessionForegroundService.requestDisconnect" in main_activity
 print("SSH extraction/trust source boundaries passed; no unverified-host fallback.")

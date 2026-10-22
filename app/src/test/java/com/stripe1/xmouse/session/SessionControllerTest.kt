@@ -13,8 +13,12 @@ class SessionControllerTest {
         lateinit var listener: SessionAttempt.Listener
         lateinit var closed: (ConnectionFailure?) -> Unit
         var closes = 0
+        val shellCommands = mutableListOf<String>()
+        val execCommands = mutableListOf<String>()
         override fun start(listener: SessionAttempt.Listener) { this.listener = listener }
         override fun cancelAndClose(completion: (ConnectionFailure?) -> Unit) { closes++; closed = completion }
+        override fun executeShellCommand(command: String): Boolean { shellCommands.add(command); return true }
+        override fun executeExecCommand(command: String): Boolean { execCommands.add(command); return true }
     }
     private class Fixture : AutoCloseable {
         val queue = SessionFixtures.Queue()
@@ -132,6 +136,51 @@ class SessionControllerTest {
             f.queue.drain()
             assertEquals(b, f.controller.current.desiredHost)
             assertEquals(1, f.attempts.size)
+        }
+    }
+
+    @Test fun queuedShellAndExecCommandsAreDroppedAcrossHostReplacementAndRecovery() {
+        Fixture().use { f ->
+            f.connect(a)
+            val old = f.attempts.single()
+            old.listener.ready(); f.queue.drain()
+
+            // The replacement event is ahead of both admitted A commands, but none has run yet.
+            f.controller.connectIfNeeded(b)
+            assertTrue(f.controller.executeShellCommand("old shell"))
+            assertTrue(f.controller.executeExecCommand("old exec"))
+            f.queue.drain()
+            assertEquals(ConnectionState.Phase.CLOSING, f.controller.current.connection.phase)
+            assertTrue(old.shellCommands.isEmpty())
+            assertTrue(old.execCommands.isEmpty())
+
+            old.closed(null); f.queue.drain()
+            val replacement = f.attempts.last()
+            assertEquals(b, f.controller.current.desiredHost)
+            replacement.listener.ready(); f.queue.drain()
+            assertTrue(f.controller.current.connection.isReady)
+            assertTrue("old shell input must not be replayed on B", replacement.shellCommands.isEmpty())
+            assertTrue("old exec input must not be replayed on B", replacement.execCommands.isEmpty())
+        }
+    }
+
+    @Test fun explicitDisconnectInvalidatesAlreadyQueuedShellAndExecCommands() {
+        Fixture().use { f ->
+            f.connect(a)
+            val active = f.attempts.single()
+            active.listener.ready(); f.queue.drain()
+
+            assertTrue(f.controller.executeShellCommand("queued before disconnect"))
+            assertTrue(f.controller.executeExecCommand("queued before disconnect"))
+            f.controller.disconnect() // Epoch invalidation is synchronous; the queue has not run yet.
+            f.queue.drain()
+            assertTrue(active.shellCommands.isEmpty())
+            assertTrue(active.execCommands.isEmpty())
+            assertEquals(ConnectionState.Phase.CLOSING, f.controller.current.connection.phase)
+            active.closed(null); f.queue.drain()
+            assertEquals(ConnectionState.Phase.DISCONNECTED, f.controller.current.connection.phase)
+            assertTrue(active.shellCommands.isEmpty())
+            assertTrue(active.execCommands.isEmpty())
         }
     }
     @Test fun involuntaryLossRetainsIntentButNeverPretendsReadyOrAutomaticallyRecovers() {
