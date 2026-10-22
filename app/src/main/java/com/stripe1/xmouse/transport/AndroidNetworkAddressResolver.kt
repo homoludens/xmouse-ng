@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import com.stripe1.xmouse.permissions.LocalNetworkPermissionCoordinator
+import java.io.IOException
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.UnknownHostException
@@ -12,22 +13,44 @@ import java.util.concurrent.CancellationException
 import java.util.function.BooleanSupplier
 
 /** Fresh hostname lookup and socket routing on the active, permission-checked Android network. */
-class AndroidNetworkAddressResolver(
-    context: Context,
+class AndroidNetworkAddressResolver internal constructor(
+    private val connectivity: ConnectivityManager,
     private val localNetworkPermission: LocalNetworkPermissionCoordinator,
+    private val fallback: ((Network, String, () -> Unit) -> Array<InetAddress>)? = null,
 ) : SshAddressResolver {
-    private val connectivity = requireNotNull(
-        context.applicationContext.getSystemService(ConnectivityManager::class.java),
+    constructor(context: Context, localNetworkPermission: LocalNetworkPermissionCoordinator) : this(
+        requireNotNull(context.applicationContext.getSystemService(ConnectivityManager::class.java)),
+        localNetworkPermission,
     )
 
     override fun resolve(host: String, current: BooleanSupplier): SshAddressResolver.Resolution {
         checkAttempt(current)
         checkAccess()
         val network = connectivity.activeNetwork ?: throw UnknownHostException()
-        val resolved = network.getAllByName(host)
-        checkAttempt(current)
-        checkAccess()
-        if (connectivity.activeNetwork != network) throw SshAddressResolver.NetworkChangedException()
+        val checkCurrent = {
+            checkAttempt(current)
+            checkAccess()
+            if (connectivity.activeNetwork != network) throw SshAddressResolver.NetworkChangedException()
+        }
+        val resolved = try {
+            network.getAllByName(host).also { if (it.isEmpty()) throw UnknownHostException() }
+        } catch (unresolved: UnknownHostException) {
+            checkCurrent()
+            if (MdnsAddressCodec.localName(host) == null) throw unresolved
+            try {
+                fallback?.invoke(network, host, checkCurrent) ?: QueryOnlyMdnsResolver(
+                    open = { AndroidMdnsSocket.open(connectivity, network) },
+                ).resolve(host, checkCurrent)
+            } catch (failure: IOException) {
+                checkCurrent()
+                if (failure is SshAddressResolver.ResolutionTimeoutException ||
+                    failure is SshAddressResolver.AccessDeniedException ||
+                    failure is SshAddressResolver.NetworkChangedException
+                ) throw failure
+                throw UnknownHostException() // Socket/setup failure is still a resolution failure.
+            }
+        }
+        checkCurrent()
 
         val candidates = boundedUnique(resolved)
         if (candidates.isEmpty()) throw UnknownHostException()

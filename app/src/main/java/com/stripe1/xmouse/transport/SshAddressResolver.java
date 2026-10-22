@@ -39,6 +39,11 @@ public interface SshAddressResolver {
         private static final long serialVersionUID = 1L;
     }
 
+    /** A bounded lookup expired before finding any matching address, not an SSH/TCP timeout. */
+    final class ResolutionTimeoutException extends IOException {
+        private static final long serialVersionUID = 1L;
+    }
+
     /** JVM/default adapter for isolated tests and non-Android callers; Android injects its Network resolver. */
     static SshAddressResolver system() {
         return (host, current) -> {

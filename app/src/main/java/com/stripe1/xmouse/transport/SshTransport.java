@@ -507,6 +507,7 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
         for (int depth = 0; failure != null && depth < 8; depth++, failure = failure.getCause()) {
             if (failure instanceof SshAddressResolver.AccessDeniedException) return Failure.PERMISSION;
             if (failure instanceof SshAddressResolver.NetworkChangedException) return Failure.RESOLUTION;
+            if (failure instanceof SshAddressResolver.ResolutionTimeoutException) return Failure.RESOLUTION_TIMEOUT;
         }
         return null;
     }
