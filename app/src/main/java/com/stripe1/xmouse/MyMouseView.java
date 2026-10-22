@@ -12,12 +12,18 @@ import android.view.MotionEvent;
 import android.view.View;
 
 import androidx.core.view.MotionEventCompat;
+import com.stripe1.xmouse.session.InputGestureToken;
 
 /**
  * Created by bradley on 12/15/15.
  */
 public class MyMouseView extends View {
     //TODO: two finger scroll, pinch to zoom
+
+    /** Keep this view's input bound to its creating screen, even after another Activity attaches. */
+    private final MainActivity activity;
+    private InputGestureToken gestureToken;
+    private IDoTool gestureTool;
 
     //private final float MINP = 0.25f;
     //private final float MAXP = 0.75f;
@@ -54,6 +60,7 @@ public class MyMouseView extends View {
 
     public MyMouseView(Context c) {
         super(c);
+        activity = (MainActivity) c;
 
         mPaint = new Paint();
         mPaint.setAntiAlias(true);
@@ -218,10 +225,15 @@ public class MyMouseView extends View {
         curr = new PointF(event.getX(), event.getY());
         double newDist = 0;
 
-
-        switch (event.getAction()) {
+        switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
-
+                if (gestureToken != null) activity.cancelControlInputGesture(gestureToken);
+                gestureToken = activity.beginControlInputGesture();
+                gestureTool = activity.createDoToolForInput(gestureToken);
+                if (gestureToken == null || gestureTool == null) {
+                    resetLocalState(true);
+                    return true;
+                }
                 downStart = System.currentTimeMillis();
                 if (downStart - downEnd < MainActivity.setting_mdelay) {
                     touch_move(x, y, true);
@@ -235,6 +247,7 @@ public class MyMouseView extends View {
                 invalidate();
                 break;
             case MotionEvent.ACTION_MOVE:
+                if (!hasLiveGesture()) return true;
 
                 int xDiff1 = (int) Math.abs(curr.x - start.x);
                 int yDiff1 = (int) Math.abs(curr.y - start.y);
@@ -294,6 +307,10 @@ public class MyMouseView extends View {
                 invalidate();
                 break;
             case MotionEvent.ACTION_UP:
+                if (!hasLiveGesture()) {
+                    resetLocalState(true);
+                    return true;
+                }
 
                 int xDiff = (int) Math.abs(curr.x - start.x);
                 int yDiff = (int) Math.abs(curr.y - start.y);
@@ -327,9 +344,52 @@ public class MyMouseView extends View {
                 invalidate();
 
                 // Legacy background-image SCP was disabled. Do not dispatch network work from this View.
+                activity.finishControlInputGesture(gestureToken);
+                gestureToken = null;
+                gestureTool = null;
+                break;
+            case MotionEvent.ACTION_CANCEL:
+                if (gestureToken != null) activity.cancelControlInputGesture(gestureToken);
+                resetLocalState(true);
                 break;
         }
         return true;
+    }
+
+    private boolean hasLiveGesture() {
+        if (gestureToken != null && activity.isControlInputTokenActive(gestureToken)) return true;
+        resetLocalState(true);
+        return false;
+    }
+
+    /** Lifecycle/focus loss resets local recognition without fabricating a click or release command. */
+    public void resetForInactiveSurface() {
+        resetLocalState(true);
+    }
+
+    private void resetLocalState(boolean clearDoubleTap) {
+        gestureToken = null;
+        gestureTool = null;
+        downStart = 0;
+        if (clearDoubleTap) downEnd = 0;
+        dragging = false;
+        draggable = true;
+        touching = false;
+        scrolling = false;
+        zooming = false;
+        firstTouch = true;
+        twoFingerScroll = false;
+        zoomCounter = 0;
+        dist = 0;
+        scaleFactor = 1;
+        mX = 0;
+        mY = 0;
+        yX = scrollStart;
+        yY = 0;
+        reX = 0;
+        reY = 0;
+        mPath.reset();
+        invalidate();
     }
 
 
@@ -349,23 +409,23 @@ public class MyMouseView extends View {
         if(dx <0 || dy <0){
             if(scroll){
                 if(MainActivity.setting_invert_scroll){
-                    MainActivity.doTool.mouseWheelUp();
+                    if (gestureTool != null) gestureTool.mouseWheelUp();
                 }else {
-                    MainActivity.doTool.mouseWheelDown();
+                    if (gestureTool != null) gestureTool.mouseWheelDown();
                 }
             } else {
-                MainActivity.doTool.mouseMoveRelative(dx, dy);
+                if (gestureTool != null) gestureTool.mouseMoveRelative(dx, dy);
             }
 
         }else{
             if(scroll){
                 if(MainActivity.setting_invert_scroll) {
-                    MainActivity.doTool.mouseWheelDown();
+                    if (gestureTool != null) gestureTool.mouseWheelDown();
                 }else{
-                    MainActivity.doTool.mouseWheelUp();
+                    if (gestureTool != null) gestureTool.mouseWheelUp();
                 }
             } else {
-                MainActivity.doTool.mouseMoveRelative(dx, dy);
+                if (gestureTool != null) gestureTool.mouseMoveRelative(dx, dy);
             }
         }
     }
@@ -374,22 +434,22 @@ public class MyMouseView extends View {
     public void OnXMouseClicked(ClickType type) {
         switch(type){
             case Left_click:
-                MainActivity.doTool.mouseClick(IDoTool.MOUSE_LEFT);
+                if (gestureTool != null) gestureTool.mouseClick(IDoTool.MOUSE_LEFT);
                 break;
             case Right_click:
-                MainActivity.doTool.mouseClick(IDoTool.MOUSE_RIGHT);
+                if (gestureTool != null) gestureTool.mouseClick(IDoTool.MOUSE_RIGHT);
                 break;
             case Drag_Down:
-                MainActivity.doTool.mouseDown(IDoTool.MOUSE_LEFT);
+                if (gestureTool != null) gestureTool.mouseDown(IDoTool.MOUSE_LEFT);
                 break;
             case Drag_up:
-                MainActivity.doTool.mouseUp(IDoTool.MOUSE_LEFT);
+                if (gestureTool != null) gestureTool.mouseUp(IDoTool.MOUSE_LEFT);
                 break;
             case Zoom_in:
-                MainActivity.doTool.key("Ctrl+plus");
+                if (gestureTool != null) gestureTool.key("Ctrl+plus");
                 break;
             case Zoom_out:
-                MainActivity.doTool.key("Ctrl+minus");
+                if (gestureTool != null) gestureTool.key("Ctrl+minus");
                 break;
             default:
                 break;

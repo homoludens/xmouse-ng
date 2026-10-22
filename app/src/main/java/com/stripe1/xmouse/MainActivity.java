@@ -57,8 +57,11 @@ import com.stripe1.xmouse.connection.ConnectionState;
 import com.stripe1.xmouse.session.SessionActivityPresenter;
 import com.stripe1.xmouse.session.SessionCommandTransport;
 import com.stripe1.xmouse.session.SessionController;
+import com.stripe1.xmouse.session.GyroscopeSamplingGate;
 import com.stripe1.xmouse.session.ForegroundConnectRequestResult;
 import com.stripe1.xmouse.session.SessionForegroundService;
+import com.stripe1.xmouse.session.InputGestureToken;
+import com.stripe1.xmouse.session.InputSurfaceToken;
 import com.stripe1.xmouse.session.SessionInteractions;
 import com.stripe1.xmouse.session.SessionSnapshot;
 
@@ -67,18 +70,22 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
+import java.util.WeakHashMap;
 
 public class MainActivity extends AppCompatActivity implements MyInterface, NavigationView.OnNavigationItemSelectedListener,
 		CoolDragAndDropGridView.DragAndDropListener,
 		SpanVariableGridView.OnItemClickListener,
 		SpanVariableGridView.OnItemLongClickListener,
-		myDialogFragment.NoticeDialogListener,
-		SensorEventListener{
+		myDialogFragment.NoticeDialogListener{
 	private static final String TAG = "MainActivity";
 	public static final String ACTION_OPEN_SESSION_CONTROLS = "com.stripe1.xmouse.action.OPEN_SESSION_CONTROLS";
 	private static final String PREF_NOTIFICATION_PERMISSION_REQUESTED = "session_notification_permission_requested";
+	private static final String PREF_GYRO_ENABLED = "control_gyro_enabled";
 	private static final String POST_NOTIFICATIONS_PERMISSION = "android.permission.POST_NOTIFICATIONS";
 
 	MenuItem conDiscButton = null;
@@ -104,6 +111,29 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	private CredentialUi credentialUi;
 	private Toolbar toolbar;
 	private final Handler mainHandler = new Handler(Looper.getMainLooper());
+	private SensorManager sensorManager;
+	private Sensor gyroscope;
+	private GyroscopeSamplingGate gyroSamplingGate;
+	private ToggleButton gyroToggle;
+	private DrawerLayout drawerLayout;
+	private MyMouseView mouseControlView;
+	private MyJSView joystickControlView;
+	private boolean activityResumed;
+	private boolean windowFocused;
+	private boolean drawerOpen;
+	private InputSurfaceToken controlInputSurface;
+	private final Map<Integer, InputGestureToken> volumeInputGestures = new HashMap<>();
+	private static final class CapturedButtonGesture {
+		final InputGestureToken token;
+		CapturedButtonGesture(InputGestureToken token) { this.token = token; }
+	}
+	private final WeakHashMap<View, CapturedButtonGesture> mouseButtonGestures = new WeakHashMap<>();
+	/** A canceled pointer owns subsequent unqualified clicks until a new DOWN; accessibility is explicit. */
+	private final WeakHashMap<View, Boolean> cancelledButtonTouches = new WeakHashMap<>();
+	private final WeakHashMap<View, Boolean> accessibilityButtonActivations = new WeakHashMap<>();
+	/** Only non-null while an owned touch UP invokes the legacy XML click callback synchronously. */
+	private View capturedTouchClickView;
+	private final IdentityHashMap<GyroscopeSamplingGate.Listener, SensorEventListener> sensorListeners = new IdentityHashMap<>();
 	private long bindingGeneration;
 	private long activityGeneration;
 	private long hostSelectionGeneration;
@@ -164,8 +194,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	private TextView recentCmdTextView;
 
 
-	private Sensor gyroscope;
-
 	private Button jsSwitch;
 	private Button js_jsSwitch;
 
@@ -190,19 +218,49 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 	}
 	public void xMouseClickMouse(View v){
-
+		InputGestureToken gesture = takeButtonActivationGesture(v);
+		Object token = gesture != null ? gesture :
+				(canUseActiveSurfaceForButtonClick(v) ? activeControlInputToken() : null);
+		if (!isInputTokenActive(token)) {
+			if (gesture != null && commandTransport != null) commandTransport.cancelInputGesture(gesture);
+			return;
+		}
+		IDoTool inputTool = createDoToolForInput(token);
+		if (inputTool == null) return;
 		int id = v.getId();
 		if (id == R.id.firstMouseButton || id == R.id.js_firstMouseButton) {
-			doTool.mouseClick(IDoTool.MOUSE_LEFT);
+			inputTool.mouseClick(IDoTool.MOUSE_LEFT);
 		} else if (id == R.id.secondMouseButton || id == R.id.js_secondMouseButton) {
-			doTool.mouseClick(IDoTool.MOUSE_MIDDLE);
+			inputTool.mouseClick(IDoTool.MOUSE_MIDDLE);
 		} else if (id == R.id.thirdMouseButton || id == R.id.js_thirdMouseButton) {
-			doTool.mouseClick(IDoTool.MOUSE_RIGHT);
+			inputTool.mouseClick(IDoTool.MOUSE_RIGHT);
 		} else if (id == R.id.fourthMouseButton || id == R.id.js_fourthMouseButton) {
-			doTool.mouseWheelUp();
+			inputTool.mouseWheelUp();
 		} else if (id == R.id.fifthMouseButton || id == R.id.js_fifthMouseButton) {
-			doTool.mouseWheelDown();
+			inputTool.mouseWheelDown();
 		}
+		if (gesture != null && commandTransport != null) commandTransport.finishInputGesture(gesture);
+	}
+
+	private InputGestureToken takeButtonActivationGesture(View view) {
+		if (isAccessibilityButtonActivation(view)) return null;
+		CapturedButtonGesture captured = mouseButtonGestures.remove(view);
+		if (capturedTouchClickView == view) {
+			return captured != null && isInputTokenActive(captured.token) ? captured.token : null;
+		}
+		// A click not dispatched from our currently-owned UP is a fresh accessibility/programmatic
+		// activation. Never let an overlapping touch lease replace its current surface capability.
+		if (captured != null && commandTransport != null) commandTransport.cancelInputGesture(captured.token);
+		return null;
+	}
+
+	private boolean isAccessibilityButtonActivation(View view) {
+		return Boolean.TRUE.equals(accessibilityButtonActivations.get(view));
+	}
+
+	private boolean canUseActiveSurfaceForButtonClick(View view) {
+		return capturedTouchClickView != view &&
+				(!cancelledButtonTouches.containsKey(view) || isAccessibilityButtonActivation(view));
 	}
 	@Override
 	public boolean onCreateOptionsMenu(Menu menu) {
@@ -234,9 +292,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		credentialUi = new CredentialUi(this);
 		sessionPresenter = new SessionActivityPresenter(this, credentialUi, this);
 
-		SensorManager sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
-		gyroscope= sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
-		sensorManager.registerListener((SensorEventListener) this,gyroscope,SensorManager.SENSOR_DELAY_FASTEST);
+		initializeGyroscopeSampling();
 
 
 
@@ -294,12 +350,28 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			}
 		});*/
 
-		DrawerLayout drawer = (DrawerLayout) findViewById(R.id.drawer_layout);
+		drawerLayout = (DrawerLayout) findViewById(R.id.drawer_layout);
 		ActionBarDrawerToggle toggle = new ActionBarDrawerToggle(
-				this, drawer, toolbar, R.string.navigation_drawer_open, R.string.navigation_drawer_close);
-		drawer.addDrawerListener(toggle);
+				this, drawerLayout, toolbar, R.string.navigation_drawer_open, R.string.navigation_drawer_close);
+		drawerLayout.addDrawerListener(toggle);
 		toggle.syncState();
-		getOnBackPressedDispatcher().addCallback(this, new DrawerBackCallback(drawer));
+		drawerLayout.addDrawerListener(new DrawerLayout.SimpleDrawerListener() {
+			@Override public void onDrawerSlide(View drawerView, float slideOffset) {
+				if (slideOffset > 0f && !drawerOpen) {
+					drawerOpen = true;
+					deactivateControlInputSurface();
+				}
+			}
+			@Override public void onDrawerOpened(View drawerView) {
+				drawerOpen = true;
+				deactivateControlInputSurface();
+			}
+			@Override public void onDrawerClosed(View drawerView) {
+				drawerOpen = false;
+				updateControlInputSurface();
+			}
+		});
+		getOnBackPressedDispatcher().addCallback(this, new DrawerBackCallback(drawerLayout));
 
 		mouseLayout = (LinearLayout) findViewById(R.id.mouse);
 		keyboardLayout = (LinearLayout) findViewById(R.id.keyboard);
@@ -311,10 +383,31 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 		jsSwitch=findViewById(R.id.jsToggle);
 
-		mouseLayout.addView(new MyMouseView(this));
+		mouseControlView = new MyMouseView(this);
+		mouseLayout.addView(mouseControlView);
 		//keyboardLayout.addView(new MyKeyboardView(getBaseContext(), MainActivity.this));
 
-		jsLayout.addView(new MyJSView(this));
+		joystickControlView = new MyJSView(this);
+		jsLayout.addView(joystickControlView);
+		gyroToggle = findViewById(R.id.gyroToggle);
+		gyroToggle.setChecked(PreferenceManager.getDefaultSharedPreferences(this)
+				.getBoolean(PREF_GYRO_ENABLED, false));
+		gyroToggle.setOnCheckedChangeListener((buttonView, isChecked) -> {
+			PreferenceManager.getDefaultSharedPreferences(this).edit()
+					.putBoolean(PREF_GYRO_ENABLED, isChecked).apply();
+			refreshGyroscopeSampling();
+		});
+		installMouseButtonInputCapture(R.id.firstMouseButton);
+		installMouseButtonInputCapture(R.id.secondMouseButton);
+		installMouseButtonInputCapture(R.id.thirdMouseButton);
+		installMouseButtonInputCapture(R.id.fourthMouseButton);
+		installMouseButtonInputCapture(R.id.fifthMouseButton);
+		installMouseButtonInputCapture(R.id.js_firstMouseButton);
+		installMouseButtonInputCapture(R.id.js_secondMouseButton);
+		installMouseButtonInputCapture(R.id.js_thirdMouseButton);
+		installMouseButtonInputCapture(R.id.js_fourthMouseButton);
+		installMouseButtonInputCapture(R.id.js_fifthMouseButton);
+		installMouseButtonInputCapture(R.id.keyboard_send);
 
 		jsSwitch.setOnClickListener(new View.OnClickListener() {
 			@Override
@@ -535,8 +628,16 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		}
 	}
 	public void xMouseKeyboardSend(View v){
-
-		useKeyboardSendText();
+		InputGestureToken gesture = takeButtonActivationGesture(v);
+		Object token = gesture != null ? gesture :
+				(canUseActiveSurfaceForButtonClick(v) ? activeControlInputToken() : null);
+		if (!isInputTokenActive(token)) {
+			if (gesture != null && commandTransport != null) commandTransport.cancelInputGesture(gesture);
+			return;
+		}
+		IDoTool inputTool = createDoToolForInput(token);
+		if (inputTool != null) useKeyboardSendText(inputTool);
+		if (gesture != null && commandTransport != null) commandTransport.finishInputGesture(gesture);
 	}
 
 	@Override
@@ -549,6 +650,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	@Override
 	protected void onResume() {
 		super.onResume();
+		activityResumed = true;
 		Log.d(TAG, "activity_resumed");
 		final boolean openedFromNotification = suppressLegacyAutoConnectOnResume;
 		suppressLegacyAutoConnectOnResume = false;
@@ -570,6 +672,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		initMenu();
 		showConnectionStat();
 		initDoTool();
+		windowFocused = getWindow().getDecorView().hasWindowFocus();
+		updateControlInputSurface();
 	}
 
 	private void requestAutomaticForegroundSession() {
@@ -649,6 +753,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 				!getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return;
 		sessionSnapshot = snapshot;
 		showConnectionStat();
+		updateControlInputSurface();
 	}
 
 	private void closeSessionObservation() {
@@ -673,9 +778,160 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 
 	private void clearShellPresentationTarget() {
+		deactivateControlInputSurface();
 		if (commandTransport != null && sessionPresenter != null) {
 			commandTransport.clearPresentationToken(sessionPresenter.presentationToken());
 		}
+	}
+
+	private void updateControlInputSurface() {
+		boolean eligible = activityResumed && windowFocused && !drawerOpen &&
+				(drawerLayout == null || !drawerLayout.isDrawerOpen(GravityCompat.START)) &&
+				!isFinishing() && !isDestroyed() && sessionPresenter != null && commandTransport != null &&
+				getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) &&
+				sessionSnapshot != null && sessionSnapshot.getConnection().isReady() &&
+				sessionPresenter.presentationToken() != null;
+		if (!eligible) {
+			deactivateControlInputSurface();
+			return;
+		}
+		if (controlInputSurface != null && commandTransport.isInputTokenActive(controlInputSurface)) {
+			refreshGyroscopeSampling();
+			return;
+		}
+		controlInputSurface = null;
+		InputSurfaceToken activated = commandTransport.activateControlSurface(sessionPresenter.presentationToken());
+		controlInputSurface = activated;
+		refreshGyroscopeSampling();
+	}
+
+	private void deactivateControlInputSurface() {
+		InputSurfaceToken old = controlInputSurface;
+		controlInputSurface = null;
+		for (Map.Entry<View, CapturedButtonGesture> entry : new ArrayList<>(mouseButtonGestures.entrySet())) {
+			entry.getKey().setPressed(false);
+			cancelledButtonTouches.put(entry.getKey(), Boolean.TRUE);
+			if (commandTransport != null) commandTransport.cancelInputGesture(entry.getValue().token);
+		}
+		for (InputGestureToken gesture : new ArrayList<>(volumeInputGestures.values())) {
+			if (commandTransport != null) commandTransport.cancelInputGesture(gesture);
+		}
+		if (commandTransport != null) commandTransport.deactivateControlSurface(old);
+		mouseButtonGestures.clear();
+		volumeInputGestures.clear();
+		if (mouseControlView != null) mouseControlView.resetForInactiveSurface();
+		if (joystickControlView != null) joystickControlView.resetForInactiveSurface();
+		refreshGyroscopeSampling();
+	}
+
+	private void refreshGyroscopeSampling() {
+		if (gyroSamplingGate != null) {
+			gyroSamplingGate.update(activityResumed, controlInputSurface,
+					gyroToggle != null && gyroToggle.isChecked());
+		}
+	}
+
+	private boolean isInputTokenActive(Object token) {
+		return commandTransport != null && commandTransport.isInputTokenActive(token);
+	}
+
+	public boolean isControlInputTokenActive(Object token) {
+		return isInputTokenActive(token);
+	}
+
+	private void installMouseButtonInputCapture(int viewId) {
+		View button = findViewById(viewId);
+		if (button == null) return;
+		button.setOnTouchListener((view, event) -> {
+			switch (event.getActionMasked()) {
+				case android.view.MotionEvent.ACTION_DOWN:
+					cancelledButtonTouches.remove(view);
+					CapturedButtonGesture old = mouseButtonGestures.remove(view);
+					if (old != null && commandTransport != null) commandTransport.cancelInputGesture(old.token);
+					InputGestureToken gesture = beginControlInputGesture();
+					if (gesture != null) {
+						mouseButtonGestures.put(view, new CapturedButtonGesture(gesture));
+						view.setPressed(true);
+					}
+					break;
+				case android.view.MotionEvent.ACTION_MOVE:
+					CapturedButtonGesture moving = mouseButtonGestures.get(view);
+					if (moving != null && (!isInputTokenActive(moving.token) || event.getX() < 0 || event.getY() < 0 ||
+							event.getX() >= view.getWidth() || event.getY() >= view.getHeight())) {
+						mouseButtonGestures.remove(view);
+						view.setPressed(false);
+						cancelledButtonTouches.put(view, Boolean.TRUE);
+						if (commandTransport != null) commandTransport.cancelInputGesture(moving.token);
+					}
+					break;
+				case android.view.MotionEvent.ACTION_CANCEL:
+					CapturedButtonGesture cancelled = mouseButtonGestures.remove(view);
+					view.setPressed(false);
+					if (cancelled != null) cancelledButtonTouches.put(view, Boolean.TRUE);
+					if (cancelled != null && commandTransport != null) commandTransport.cancelInputGesture(cancelled.token);
+					break;
+				case android.view.MotionEvent.ACTION_UP:
+					CapturedButtonGesture completed = mouseButtonGestures.get(view);
+					view.setPressed(false);
+					boolean inside = event.getX() >= 0 && event.getY() >= 0 &&
+						event.getX() < view.getWidth() && event.getY() < view.getHeight();
+					if (completed != null && inside && isInputTokenActive(completed.token)) {
+						capturedTouchClickView = view;
+						boolean clicked;
+						try { clicked = view.performClick(); }
+						finally { capturedTouchClickView = null; }
+						if (!clicked) {
+							mouseButtonGestures.remove(view);
+							if (commandTransport != null) commandTransport.cancelInputGesture(completed.token);
+						}
+					} else if (completed != null) {
+						mouseButtonGestures.remove(view);
+						cancelledButtonTouches.put(view, Boolean.TRUE);
+						if (commandTransport != null) commandTransport.cancelInputGesture(completed.token);
+					}
+					return true;
+			}
+			// Consume pointer sequences. A validated touch UP above invokes performClick explicitly;
+			// stale UP after lifecycle reset cannot be turned into a click on the next surface.
+			return true;
+		});
+		button.setAccessibilityDelegate(new View.AccessibilityDelegate() {
+			@Override public boolean performAccessibilityAction(View host, int action, Bundle arguments) {
+				if (action != android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK) {
+					return super.performAccessibilityAction(host, action, arguments);
+				}
+				accessibilityButtonActivations.put(host, Boolean.TRUE);
+				try { return super.performAccessibilityAction(host, action, arguments); }
+				finally { accessibilityButtonActivations.remove(host); }
+			}
+		});
+	}
+
+	public InputSurfaceToken activeControlInputToken() {
+		InputSurfaceToken token = controlInputSurface;
+		return isInputTokenActive(token) ? token : null;
+	}
+
+	public InputGestureToken beginControlInputGesture() {
+		return commandTransport == null ? null : commandTransport.beginInputGesture(activeControlInputToken());
+	}
+
+	public IDoTool createDoToolForInput(Object token) {
+		if (commandTransport == null || token == null) return null;
+		CommandTransport scoped = commandTransport.forInputToken(token);
+		return createDoTool(scoped);
+	}
+
+	public CommandTransport commandTransportForInput(Object token) {
+		return commandTransport == null || token == null ? null : commandTransport.forInputToken(token);
+	}
+
+	public void finishControlInputGesture(InputGestureToken token) {
+		if (commandTransport != null) commandTransport.finishInputGesture(token);
+	}
+
+	public void cancelControlInputGesture(InputGestureToken token) {
+		if (commandTransport != null) commandTransport.cancelInputGesture(token);
 	}
 
 	@Override
@@ -952,14 +1208,24 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 	@Override
 	protected void onPause() {
+		activityResumed = false;
+		deactivateControlInputSurface();
 		KEYLOAYOUTFILENAME = "keyLayoutFile.csv";
 		saveKeyboardLayout();
 		super.onPause();
 		// Another activity is taking focus (this activity is about to be "paused").
 	}
 	@Override
+	public void onWindowFocusChanged(boolean hasFocus) {
+		super.onWindowFocusChanged(hasFocus);
+		windowFocused = hasFocus;
+		if (hasFocus) updateControlInputSurface();
+		else deactivateControlInputSurface();
+	}
+	@Override
 	protected void onStop() {
 		activityGeneration++;
+		deactivateControlInputSurface();
 		unbindSessionService();
 		if (sessionPresenter != null) sessionPresenter.stop(credentialUi != null && credentialUi.hasPicker());
 		super.onStop();
@@ -969,6 +1235,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 	@Override
 	protected void onDestroy() {
+		activityResumed = false;
+		deactivateControlInputSurface();
 		cancelPendingForegroundSessionRequest();
 		unbindSessionService();
 		if (sessionPresenter != null) sessionPresenter.destroy();
@@ -1046,14 +1314,53 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 
 	public void initDoTool() {
+		doTool = createDoTool(commandTransport);
+	}
+
+	private IDoTool createDoTool(CommandTransport transport) {
 		switch (setting_dotool_initial) {
-			case "ydotool": doTool = new YDoTool(commandTransport); break;
-			case "xdotool": doTool = new XDoTool(commandTransport); break;
+			case "ydotool": return new YDoTool(transport);
+			case "xdotool": return new XDoTool(transport);
 			default:
 				Log.w(TAG, "unknown_command_backend");
-				doTool = new XDoTool(commandTransport);
-				break;
+				return new XDoTool(transport);
 		}
+	}
+
+	private void initializeGyroscopeSampling() {
+		sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
+		gyroscope = sensorManager == null ? null : sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
+		gyroSamplingGate = new GyroscopeSamplingGate(new GyroscopeSamplingGate.SensorFacade() {
+			@Override public boolean hasGyroscope() { return sensorManager != null && gyroscope != null; }
+			@Override public boolean register(GyroscopeSamplingGate.Listener listener) {
+				if (sensorManager == null || gyroscope == null) return false;
+				SensorEventListener platformListener = new SensorEventListener() {
+					@Override public void onSensorChanged(SensorEvent event) {
+						if (event.sensor.getType() == Sensor.TYPE_GYROSCOPE && event.values != null && event.values.length >= 3) {
+							listener.onSample(event.values[0], event.values[2]);
+						}
+					}
+					@Override public void onAccuracyChanged(Sensor sensor, int accuracy) { }
+				};
+				boolean registered = sensorManager.registerListener(platformListener, gyroscope,
+						SensorManager.SENSOR_DELAY_FASTEST, mainHandler);
+				if (registered) sensorListeners.put(listener, platformListener);
+				return registered;
+			}
+			@Override public void unregister(GyroscopeSamplingGate.Listener listener) {
+				SensorEventListener platformListener = sensorListeners.remove(listener);
+				if (platformListener != null && sensorManager != null) sensorManager.unregisterListener(platformListener);
+			}
+		}, this::onGyroscopeMotion);
+	}
+
+	private void onGyroscopeMotion(InputSurfaceToken token, float gyroscopeY, float gyroscopeZ) {
+		gyroscopeY *= setting_gyro_y_sensitivity;
+		gyroscopeZ *= setting_gyro_z_sensitivity;
+		if (Math.abs(gyroscopeZ) < setting_gyro_z_threshold && Math.abs(gyroscopeY) < setting_gyro_y_threshold) return;
+		IDoTool inputTool = createDoToolForInput(token);
+		if (inputTool != null) inputTool.mouseMoveRelative(
+				gyroscopeZ * -15, gyroscopeY * -15);
 	}
 
 	@Override
@@ -1063,9 +1370,11 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	   case KeyEvent.KEYCODE_SEARCH:
 	   case KeyEvent.KEYCODE_BACK:*/
 			case KeyEvent.KEYCODE_VOLUME_UP:
+				captureVolumeGesture(keyCode, event);
 				event.startTracking();
 				return true;
 			case KeyEvent.KEYCODE_VOLUME_DOWN:
+				captureVolumeGesture(keyCode, event);
 				event.startTracking();
 				return true;
 		}
@@ -1077,21 +1386,33 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
        /*case KeyEvent.KEYCODE_MENU:
        case KeyEvent.KEYCODE_SEARCH:*/
 			case KeyEvent.KEYCODE_VOLUME_UP:
-				if(event.isTracking() && !event.isCanceled()){
+				InputGestureToken volumeUp = volumeInputGestures.remove(keyCode);
+				if(event.isTracking() && !event.isCanceled() && isInputTokenActive(volumeUp)){
 					//Toast.makeText(this, "Volumen Up released", Toast.LENGTH_SHORT).show();
-					doTool.key("XF86AudioRaiseVolume");
+					createDoToolForInput(volumeUp).key("XF86AudioRaiseVolume");
 
 				}
+				if (volumeUp != null && commandTransport != null) commandTransport.finishInputGesture(volumeUp);
 				return true;
 			case KeyEvent.KEYCODE_VOLUME_DOWN:
-				if(event.isTracking() && !event.isCanceled()){
+				InputGestureToken volumeDown = volumeInputGestures.remove(keyCode);
+				if(event.isTracking() && !event.isCanceled() && isInputTokenActive(volumeDown)){
 					//Toast.makeText(this, "Volumen Down released", Toast.LENGTH_SHORT).show();case
-					doTool.key("XF86AudioLowerVolume");
+					createDoToolForInput(volumeDown).key("XF86AudioLowerVolume");
 				}
+				if (volumeDown != null && commandTransport != null) commandTransport.finishInputGesture(volumeDown);
 				return true;
 
 		}
 		return super.onKeyUp(keyCode, event);
+	}
+
+	private void captureVolumeGesture(int keyCode, KeyEvent event) {
+		if (event.getRepeatCount() != 0) return;
+		InputGestureToken old = volumeInputGestures.remove(keyCode);
+		if (old != null && commandTransport != null) commandTransport.cancelInputGesture(old);
+		InputGestureToken gesture = beginControlInputGesture();
+		if (gesture != null) volumeInputGestures.put(keyCode, gesture);
 	}
 
 	public void confirmLayoutReload(String title, String msg,final boolean def){
@@ -1688,13 +2009,17 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 	}
 	private void useKeyboardSendText() {
+		useKeyboardSendText(doTool);
+	}
+
+	private void useKeyboardSendText(IDoTool inputTool) {
 		CharSequence contents = ET.getText();
 		String t = contents.toString();
-		if(!t.isEmpty()){
+		if(inputTool != null && !t.isEmpty()){
 			t = t.replaceAll("'", "'\\\"'\\\"'"); // -> xdotool type ''"'"''
 			t = t.replaceAll("\"", "\\\"");       // -> xdotool type '"'
 
-			doTool.type("'" + t + "'");
+			inputTool.type("'" + t + "'");
 			if(setting_keyboard_autoclear){
 				ET.setText("");
 			}
@@ -1723,28 +2048,4 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 	}
 
-	@Override
-	public void onSensorChanged(SensorEvent sensorEvent) {
-		if(sensorEvent.sensor.getType()==Sensor.TYPE_GYROSCOPE)
-		{
-			float gyroscopeX=sensorEvent.values[1];
-			float gyroscopeY=sensorEvent.values[0];
-			float gyroscopeZ=sensorEvent.values[2];
-
-			gyroscopeY*=setting_gyro_y_sensitivity;
-			gyroscopeZ*=setting_gyro_z_sensitivity;
-
-			ToggleButton mouseSwitch=findViewById(R.id.gyroToggle);
-			if (mouseSwitch.isChecked()) {
-				if (Math.abs(gyroscopeZ) >= setting_gyro_z_threshold || Math.abs(gyroscopeY) >= setting_gyro_y_threshold) {
-					doTool.mouseMoveRelative(gyroscopeZ * -15, gyroscopeY * -15);
-				}
-			}
-		}
-	}
-
-	@Override
-	public void onAccuracyChanged(Sensor sensor, int i) {
-
-	}
 }

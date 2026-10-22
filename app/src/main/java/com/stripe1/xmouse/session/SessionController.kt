@@ -4,9 +4,12 @@ import com.stripe1.xmouse.connection.ConnectionFailure
 import com.stripe1.xmouse.connection.ConnectionState
 import java.lang.ref.WeakReference
 import java.util.concurrent.Executor
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import java.util.function.BooleanSupplier
 
 /** One attempt owns credentials, prompts and transport, including every late completion's cleanup. */
 interface SessionAttempt {
@@ -23,6 +26,27 @@ interface SessionAttempt {
     /** Optional opaque target captured by the input proxy at submission; never a UI reference. */
     fun executeShellCommand(command: String, presentation: SessionInteractions.PresentationToken?): Boolean =
         executeShellCommand(command)
+    /** Input commands retain their capability through the transport queue, not just this owner queue. */
+    fun executeInputCommand(
+        command: String,
+        presentation: SessionInteractions.PresentationToken?,
+        isCurrent: BooleanSupplier,
+        onWriteStarting: Runnable,
+    ): Boolean {
+        if (!isCurrent.asBoolean) return false
+        onWriteStarting.run()
+        return executeShellCommand(command, presentation)
+    }
+    /** Release bypasses the revoked surface but remains scoped to this exact attempt and tracked hold. */
+    fun executeInputRelease(
+        command: String,
+        shouldRelease: BooleanSupplier,
+        onWriteStarting: Runnable,
+    ): Boolean {
+        if (!shouldRelease.asBoolean) return false
+        onWriteStarting.run()
+        return executeShellCommand(command, null)
+    }
     fun executeExecCommand(command: String, presentation: SessionInteractions.PresentationToken): Boolean = false
 }
 
@@ -60,6 +84,49 @@ class SessionController @JvmOverloads constructor(
     /** Immutable admission token: callers can validate a ready session without reading queue-owned state. */
     private data class CommandOwner(val generation: Long, val host: SessionHost, val disconnectEpoch: Long)
     private val commandOwner = AtomicReference<CommandOwner?>()
+    private data class ActiveInputSurface(
+        val token: InputSurfaceToken,
+        val owner: CommandOwner,
+        val presentation: SessionInteractions.PresentationToken?,
+        val transportAllowed: AtomicBoolean = AtomicBoolean(true),
+        val releaseScopeRequested: AtomicBoolean = AtomicBoolean(),
+        val slotReleased: AtomicBoolean = AtomicBoolean(),
+    )
+    private class InputGesture(
+        val token: InputGestureToken,
+        val surface: ActiveInputSurface,
+        val accepting: AtomicBoolean = AtomicBoolean(true),
+        val active: AtomicBoolean = AtomicBoolean(true),
+        /** Normal UP stops new admission but deliberately leaves already-admitted transport work valid. */
+        val transportAllowed: AtomicBoolean = AtomicBoolean(true),
+    )
+    private data class HeldButtonKey(
+        val surface: InputSurfaceToken,
+        val generation: Long,
+        val backendButton: String,
+    )
+    private data class HeldButton(
+        val key: HeldButtonKey,
+        val gesture: InputGestureToken?,
+        val owner: CommandOwner,
+        val releaseCommand: String,
+        val writes: TrackedButtonWriteState,
+    )
+    private class PendingInputRelease(val surface: ActiveInputSurface) {
+        var wholeSurface = false
+        val gestures = LinkedHashMap<InputGestureToken, InputGesture>()
+    }
+    /** A single active control presentation; its owner includes the exact attempt/host/epoch. */
+    private val activeInputSurface = AtomicReference<ActiveInputSurface?>()
+    private val inputGestures = ConcurrentHashMap<InputGestureToken, InputGesture>()
+    private val inputGestureCount = AtomicInteger()
+    private val inputSurfaceCount = AtomicInteger()
+    /** Coalesces exact surface/gesture release scopes into bounded controller-queue work. */
+    private val inputCleanupScheduled = AtomicBoolean()
+    private val inputCleanupLock = Any()
+    private val pendingInputReleases = LinkedHashMap<InputSurfaceToken, PendingInputRelease>()
+    /** Mutated only on the serialized controller queue. */
+    private val heldButtons = LinkedHashMap<HeldButtonKey, HeldButton>()
     private var owned: Owned? = null
     private var resumeAfterClose = false
     private val observers = mutableListOf<Observation>()
@@ -161,11 +228,313 @@ class SessionController @JvmOverloads constructor(
     fun executeExecCommand(command: String, presentation: SessionInteractions.PresentationToken): Boolean =
         postReadyCommand(command) { it.executeExecCommand(command, presentation) }
 
-    private fun postReadyCommand(command: String, execute: (SessionAttempt) -> Boolean): Boolean {
+    /**
+     * Opens an input-only capability for the exact ready attempt currently attached to the controls.
+     * Replacing a surface invalidates its gestures immediately and releases its tracked buttons on
+     * this controller's ordered background lane.
+     */
+    fun activateControlSurface(presentation: SessionInteractions.PresentationToken?): InputSurfaceToken? {
+        val owner = commandOwner.get() ?: return null
+        if (!isCurrentReadyOwner(owner)) return null
+        if (!reserveInputSurfaceSlot()) return null
+        val token = InputSurfaceToken()
+        val next = ActiveInputSurface(token, owner, presentation)
+        val previous = activeInputSurface.getAndSet(next)
+        if (previous != null) retireInputSurface(previous, release = true)
+        if (activeInputSurface.get() !== next || !isCurrentReadyOwner(owner)) {
+            if (activeInputSurface.compareAndSet(next, null)) retireInputSurface(next, release = true)
+            else retireInputSurface(next, release = true)
+            return null
+        }
+        return token
+    }
+
+    fun isControlSurfaceActive(token: InputSurfaceToken?): Boolean {
+        if (token == null) return false
+        val surface = activeInputSurface.get() ?: return false
+        return surface.token === token && surface.transportAllowed.get() && isCurrentReadyOwner(surface.owner)
+    }
+
+    /** Revokes first, then queues best-effort releases without waiting on the caller. */
+    fun deactivateControlSurface(token: InputSurfaceToken?) {
+        if (token == null) return
+        while (true) {
+            val surface = activeInputSurface.get() ?: return
+            if (surface.token !== token) return
+            if (activeInputSurface.compareAndSet(surface, null)) {
+                retireInputSurface(surface, release = true)
+                return
+            }
+        }
+    }
+
+    fun beginInputGesture(surfaceToken: InputSurfaceToken?): InputGestureToken? {
+        if (surfaceToken == null) return null
+        val surface = activeInputSurface.get() ?: return null
+        if (surface.token !== surfaceToken || !surface.transportAllowed.get() || !isCurrentReadyOwner(surface.owner)) return null
+        if (!reserveInputGestureSlot()) return null
+        val gesture = InputGestureToken()
+        val lease = InputGesture(gesture, surface)
+        inputGestures[gesture] = lease
+        // A concurrent focus/surface transition must not leave a fresh old-surface lease open.
+        if (activeInputSurface.get() !== surface) {
+            lease.accepting.set(false)
+            lease.active.set(false)
+            lease.transportAllowed.set(false)
+            removeInputGesture(lease)
+            return null
+        }
+        return gesture
+    }
+
+    fun isInputGestureActive(token: InputGestureToken?): Boolean {
+        if (token == null) return false
+        val gesture = inputGestures[token] ?: return false
+        return gesture.active.get() && gesture.accepting.get() && gesture.transportAllowed.get() &&
+            gesture.surface.transportAllowed.get() && activeInputSurface.get() === gesture.surface
+    }
+
+    /** A normal UP closes admission after already-admitted commands, preserving FIFO ordering. */
+    fun finishInputGesture(token: InputGestureToken?) {
+        val gesture = token?.let(inputGestures::get) ?: return
+        if (!gesture.accepting.compareAndSet(true, false)) return
+        // The synchronous admission close rejects new gesture input. One coalesced queue event retires
+        // any number of finished leases after input commands already admitted to that FIFO lane.
+        scheduleInputCleanup()
+    }
+
+    /** ACTION_CANCEL invalidates queued gesture work synchronously and requests best-effort release. */
+    fun cancelInputGesture(token: InputGestureToken?) {
+        val gesture = token?.let(inputGestures::get) ?: return
+        if (!gesture.active.compareAndSet(true, false)) return
+        gesture.accepting.set(false)
+        gesture.transportAllowed.set(false)
+        requestGestureInputRelease(gesture)
+        scheduleInputCleanup()
+    }
+
+    /** Control shell input is scoped to either the live surface or one DOWN..UP gesture lease. */
+    fun executeInputCommand(command: String, token: Any?): Boolean {
+        val surface: ActiveInputSurface
+        val gesture: InputGesture?
+        when (token) {
+            is InputSurfaceToken -> {
+                surface = activeInputSurface.get()?.takeIf {
+                    it.token === token && it.transportAllowed.get()
+                } ?: return false
+                gesture = null
+            }
+            is InputGestureToken -> {
+                gesture = inputGestures[token]?.takeIf {
+                    it.active.get() && it.accepting.get() && it.transportAllowed.get() &&
+                        it.surface.transportAllowed.get() && activeInputSurface.get() === it.surface
+                } ?: return false
+                surface = gesture.surface
+            }
+            else -> return false
+        }
+        val parsedHold = TrackedInputCommand.parse(command)
+        val admissionIsCurrent = {
+            activeInputSurface.get() === surface &&
+                (gesture == null || (inputGestures[gesture.token] === gesture &&
+                    gesture.active.get() && gesture.accepting.get()))
+        }
+        val dispatchIsCurrent = {
+            activeInputSurface.get() === surface &&
+                (gesture == null || (inputGestures[gesture.token] === gesture && gesture.active.get()))
+        }
+        val transportIsCurrent = BooleanSupplier { isTransportInputCurrent(surface, gesture) }
+        return postReadyCommand(command, surface.owner,
+            admissionIsCurrent = admissionIsCurrent,
+            dispatchIsCurrent = dispatchIsCurrent) { attempt ->
+            val key = parsedHold?.let {
+                HeldButtonKey(surface.token, surface.owner.generation, it.backendButton)
+            }
+            val previous = key?.let(heldButtons::get)
+            val tracked = if (parsedHold?.down == true && key != null) {
+                HeldButton(key, gesture?.token, surface.owner, parsedHold.releaseCommand,
+                    previous?.writes ?: TrackedButtonWriteState())
+            } else previous
+            val writeStarting = Runnable {
+                when {
+                    parsedHold?.down == true -> tracked?.writes?.markDownWriteStarting()
+                    parsedHold != null -> tracked?.writes?.markReleaseWriteStarting()
+                }
+                if (parsedHold != null && !parsedHold.down && key != null && tracked != null) {
+                    events.post { heldButtons.remove(key, tracked) }
+                }
+            }
+            val accepted = attempt.executeInputCommand(command, surface.presentation, transportIsCurrent, writeStarting)
+            if (accepted && parsedHold?.down == true && key != null && tracked != null) {
+                heldButtons[key] = tracked
+            }
+            accepted
+        }
+    }
+
+    private fun isTransportInputCurrent(surface: ActiveInputSurface, gesture: InputGesture?): Boolean =
+        surface.transportAllowed.get() && activeInputSurface.get() === surface &&
+            isCurrentReadyOwner(surface.owner) &&
+            // A normal UP closes further admission and retires the local gesture record, but it
+            // must not invalidate commands that already crossed this controller's FIFO queue.
+            // Cancellation and surface retirement revoke transportAllowed synchronously.
+            (gesture == null || gesture.transportAllowed.get())
+
+    private fun isCurrentReadyOwner(owner: CommandOwner): Boolean {
+        val snapshot = current
+        return commandOwner.get() === owner && disconnectEpoch.get() == owner.disconnectEpoch &&
+            !snapshot.closed && snapshot.connection.isReady && snapshot.generation == owner.generation &&
+            snapshot.attemptHost === owner.host && snapshot.desiredHost?.sameRequest(owner.host) == true
+    }
+
+    private fun retireInputSurface(surface: ActiveInputSurface, release: Boolean) {
+        surface.transportAllowed.set(false)
+        inputGestures.values.filter { it.surface === surface }.forEach { gesture ->
+            gesture.accepting.set(false)
+            gesture.active.set(false)
+            gesture.transportAllowed.set(false)
+        }
+        if (release) {
+            if (surface.releaseScopeRequested.compareAndSet(false, true)) requestSurfaceInputRelease(surface)
+            scheduleInputCleanup()
+        } else releaseInputSurfaceSlot(surface)
+    }
+
+    private fun requestSurfaceInputRelease(surface: ActiveInputSurface) {
+        synchronized(inputCleanupLock) {
+            val pending = pendingInputReleases.getOrPut(surface.token) { PendingInputRelease(surface) }
+            pending.wholeSurface = true
+            pending.gestures.clear()
+        }
+    }
+
+    private fun requestGestureInputRelease(gesture: InputGesture) {
+        synchronized(inputCleanupLock) {
+            val pending = pendingInputReleases.getOrPut(gesture.surface.token) {
+                PendingInputRelease(gesture.surface)
+            }
+            if (!pending.wholeSurface) pending.gestures[gesture.token] = gesture
+        }
+    }
+
+    /** At most one cleanup event is pending; repeated finishes/releases are folded into its state. */
+    private fun scheduleInputCleanup() {
+        if (!inputCleanupScheduled.compareAndSet(false, true)) return
+        // Only leases finished before this event was enqueued may be retired by it. A gesture that
+        // finishes while the event is pending gets one coalesced follow-up behind its own FIFO work.
+        val finishedGestures = inputGestures.values.filter { !it.active.get() || !it.accepting.get() }
+        val posted = events.post {
+            try {
+                finishedGestures.forEach { gesture ->
+                    if (inputGestures[gesture.token] === gesture &&
+                        (!gesture.active.get() || !gesture.accepting.get())) {
+                        gesture.active.set(false)
+                        removeInputGesture(gesture)
+                    }
+                }
+                val releases = synchronized(inputCleanupLock) {
+                    pendingInputReleases.values.map { pending ->
+                        Triple(pending.surface, pending.wholeSurface, pending.gestures.values.toList())
+                    }.also { pendingInputReleases.clear() }
+                }
+                releases.forEach { (surface, wholeSurface, gestures) ->
+                    if (wholeSurface) {
+                        releaseHeldInputForSurface(surface)
+                        inputGestures.values.filter { it.surface === surface }.forEach(::removeInputGesture)
+                        releaseInputSurfaceSlot(surface)
+                    } else {
+                        gestures.forEach { gesture ->
+                            releaseHeldInputForGesture(surface, gesture)
+                            removeInputGesture(gesture)
+                        }
+                    }
+                }
+            } finally {
+                inputCleanupScheduled.set(false)
+                if (hasPendingInputReleases() || hasFinishedInputGestures()) scheduleInputCleanup()
+            }
+        }
+        if (!posted) {
+            inputCleanupScheduled.set(false)
+            retireFinishedInputGestures()
+            val abandoned = synchronized(inputCleanupLock) {
+                pendingInputReleases.values.map { it.surface }.also { pendingInputReleases.clear() }
+            }
+            abandoned.forEach(::releaseInputSurfaceSlot)
+        }
+    }
+
+    private fun retireFinishedInputGestures() {
+        inputGestures.values.filter { !it.active.get() || !it.accepting.get() }.forEach(::removeInputGesture)
+    }
+
+    private fun hasFinishedInputGestures(): Boolean =
+        inputGestures.values.any { !it.active.get() || !it.accepting.get() }
+
+    private fun hasPendingInputReleases(): Boolean = synchronized(inputCleanupLock) {
+        pendingInputReleases.isNotEmpty()
+    }
+
+    private fun removeInputGesture(gesture: InputGesture) {
+        if (inputGestures.remove(gesture.token, gesture)) inputGestureCount.decrementAndGet()
+    }
+
+    private fun reserveInputSurfaceSlot(): Boolean {
+        while (true) {
+            val current = inputSurfaceCount.get()
+            if (current >= MAX_INPUT_SURFACES) return false
+            if (inputSurfaceCount.compareAndSet(current, current + 1)) return true
+        }
+    }
+
+    private fun releaseInputSurfaceSlot(surface: ActiveInputSurface) {
+        if (surface.slotReleased.compareAndSet(false, true)) inputSurfaceCount.decrementAndGet()
+    }
+
+    private fun reserveInputGestureSlot(): Boolean {
+        while (true) {
+            val current = inputGestureCount.get()
+            if (current >= MAX_ACTIVE_INPUT_GESTURES) return false
+            if (inputGestureCount.compareAndSet(current, current + 1)) return true
+        }
+    }
+
+    private fun releaseHeldInputForSurface(surface: ActiveInputSurface) {
+        releaseHeldButtons(heldButtons.values.filter { it.key.surface === surface.token }, surface.owner)
+    }
+
+    private fun releaseHeldInputForGesture(surface: ActiveInputSurface, gesture: InputGesture) {
+        releaseHeldButtons(heldButtons.values.filter {
+            it.key.surface === surface.token && it.gesture === gesture.token
+        }, surface.owner)
+    }
+
+    /** Exact scope only; conditional transport release skips a DOWN that never reached provider write. */
+    private fun releaseHeldButtons(matches: List<HeldButton>, owner: CommandOwner) {
+        matches.forEach { heldButtons.remove(it.key, it) }
+        val active = owned
+        if (active == null || active.closing || !current.connection.isReady ||
+            active.generation != owner.generation || active.host !== owner.host) return
+        matches.forEach { held ->
+            active.attempt.executeInputRelease(
+                held.releaseCommand,
+                BooleanSupplier { held.writes.needsRelease() },
+                Runnable { held.writes.markReleaseWriteStarting() },
+            )
+        }
+    }
+
+    private fun postReadyCommand(
+        command: String,
+        expectedOwner: CommandOwner? = null,
+        admissionIsCurrent: () -> Boolean = { true },
+        dispatchIsCurrent: () -> Boolean = admissionIsCurrent,
+        execute: (SessionAttempt) -> Boolean,
+    ): Boolean {
         if (command.isEmpty()) return false
-        val owner = commandOwner.get() ?: return false
+        val owner = expectedOwner ?: commandOwner.get() ?: return false
         val admitted = current
-        if (disconnectEpoch.get() != owner.disconnectEpoch || admitted.closed || !admitted.connection.isReady ||
+        if (commandOwner.get() !== owner || !admissionIsCurrent() || disconnectEpoch.get() != owner.disconnectEpoch || admitted.closed || !admitted.connection.isReady ||
             admitted.generation != owner.generation || admitted.attemptHost !== owner.host ||
             admitted.desiredHost?.sameRequest(owner.host) != true) return false
         while (true) {
@@ -177,7 +546,7 @@ class SessionController @JvmOverloads constructor(
             try {
                 val snapshot = current
                 val active = owned
-                if (commandOwner.get() !== owner || disconnectEpoch.get() != owner.disconnectEpoch || snapshot.closed ||
+                if (commandOwner.get() !== owner || !dispatchIsCurrent() || disconnectEpoch.get() != owner.disconnectEpoch || snapshot.closed ||
                     !snapshot.connection.isReady || snapshot.generation != owner.generation ||
                     snapshot.attemptHost !== owner.host || snapshot.desiredHost?.sameRequest(owner.host) != true ||
                     active == null || active.generation != owner.generation || active.host !== owner.host || active.closing) {
@@ -252,6 +621,13 @@ class SessionController @JvmOverloads constructor(
 
     private fun closeOwned(entry: Owned, observation: ConnectionState) {
         if (entry.closing) return
+        val inputSurface = activeInputSurface.get()?.takeIf { it.owner.generation == entry.generation && it.owner.host === entry.host }
+        if (inputSurface != null && activeInputSurface.compareAndSet(inputSurface, null)) {
+            retireInputSurface(inputSurface, release = false)
+        }
+        // On host change, explicit disconnect, or detected loss, clear local holds before the attempt
+        // retires. Releases are best effort and remain tied to this exact old attempt/backend code.
+        releaseHeldInputForOwner(entry)
         commandOwner.get()?.takeIf { it.generation == entry.generation && it.host === entry.host }?.let {
             commandOwner.compareAndSet(it, null)
         }
@@ -275,6 +651,18 @@ class SessionController @JvmOverloads constructor(
             }
             if (current.closed) events.close()
         } }
+    }
+
+    private fun releaseHeldInputForOwner(entry: Owned) {
+        val matches = heldButtons.values.filter { it.owner.generation == entry.generation && it.owner.host === entry.host }
+        releaseHeldButtons(matches, CommandOwner(entry.generation, entry.host, disconnectEpoch.get()))
+        inputGestures.values.filter { it.surface.owner.generation == entry.generation && it.surface.owner.host === entry.host }
+            .forEach { gesture ->
+                gesture.accepting.set(false)
+                gesture.active.set(false)
+                gesture.transportAllowed.set(false)
+                removeInputGesture(gesture)
+            }
     }
 
     /** Closing an observation only detaches presentation. Pending dispatch is invalidated too. */
@@ -316,5 +704,9 @@ class SessionController @JvmOverloads constructor(
         override fun close() { active.set(false); listener.clear(); latest.set(null) }
     }
 
-    private companion object { const val MAX_PENDING_COMMAND_ADMISSIONS = 128 }
+    private companion object {
+        const val MAX_PENDING_COMMAND_ADMISSIONS = 128
+        const val MAX_ACTIVE_INPUT_GESTURES = 64
+        const val MAX_INPUT_SURFACES = 64
+    }
 }

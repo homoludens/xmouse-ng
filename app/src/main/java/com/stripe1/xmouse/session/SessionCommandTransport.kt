@@ -10,6 +10,8 @@ class SessionCommandTransport(context: Context) : CommandTransport {
     private val application = context.applicationContext as XMouseApplication
     /** Opaque screen capability only; Activity presenters/listeners are never retained here. */
     private val presentation = AtomicReference<SessionInteractions.PresentationToken?>()
+    /** Activity-local mirror; the controller remains the authoritative single active capability. */
+    private val controlSurface = AtomicReference<InputSurfaceToken?>()
 
     fun setPresentationToken(token: SessionInteractions.PresentationToken?) {
         presentation.set(token)
@@ -19,11 +21,54 @@ class SessionCommandTransport(context: Context) : CommandTransport {
         if (token != null) presentation.compareAndSet(token, null)
     }
 
+    fun activateControlSurface(token: SessionInteractions.PresentationToken?): InputSurfaceToken? {
+        val controller = application.sessionOwners.retainedOwnerOrNull()?.controller ?: return null
+        val previous = controlSurface.get()
+        if (previous != null && controller.isControlSurfaceActive(previous)) return previous
+        val activated = controller.activateControlSurface(token) ?: return null
+        controlSurface.set(activated)
+        return activated
+    }
+
+    fun deactivateControlSurface(token: InputSurfaceToken?) {
+        if (token == null || !controlSurface.compareAndSet(token, null)) return
+        application.sessionOwners.retainedOwnerOrNull()?.controller?.deactivateControlSurface(token)
+    }
+
+    fun activeControlSurface(): InputSurfaceToken? = controlSurface.get()
+
+    fun isInputTokenActive(token: Any?): Boolean {
+        val controller = application.sessionOwners.retainedOwnerOrNull()?.controller ?: return false
+        return when (token) {
+            is InputSurfaceToken -> controller.isControlSurfaceActive(token)
+            is InputGestureToken -> controller.isInputGestureActive(token)
+            else -> false
+        }
+    }
+
+    fun beginInputGesture(surface: InputSurfaceToken?): InputGestureToken? =
+        application.sessionOwners.retainedOwnerOrNull()?.controller?.beginInputGesture(surface)
+
+    fun finishInputGesture(token: InputGestureToken?) {
+        application.sessionOwners.retainedOwnerOrNull()?.controller?.finishInputGesture(token)
+    }
+
+    fun cancelInputGesture(token: InputGestureToken?) {
+        application.sessionOwners.retainedOwnerOrNull()?.controller?.cancelInputGesture(token)
+    }
+
     override fun executeShellCommand(command: String): Boolean {
-        // Read once at submission so queued work can never acquire a replacement screen's token.
-        val target = presentation.get()
-        return application.sessionOwners.retainedOwnerOrNull()?.controller
-            ?.executeShellCommand(command, target) ?: false
+        // Read once at submission; an inactive/detached screen cannot borrow a newer screen's lease.
+        val target = controlSurface.get() ?: return false
+        return executeInputCommand(command, target)
+    }
+
+    fun executeInputCommand(command: String, token: Any?): Boolean =
+        application.sessionOwners.retainedOwnerOrNull()?.controller?.executeInputCommand(command, token) ?: false
+
+    /** A View/gesture adapter captures this opaque token instead of reading a later active surface. */
+    fun forInputToken(token: Any): CommandTransport = object : CommandTransport {
+        override fun executeShellCommand(command: String): Boolean = executeInputCommand(command, token)
     }
 
     fun executeExecCommand(command: String, presentation: SessionInteractions.PresentationToken?): Boolean =

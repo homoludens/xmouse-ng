@@ -166,6 +166,7 @@ class SessionPipelineIntegrationTest {
         private val closeGate: SessionCloseGate? = null,
         closeTimeoutMillis: Long = 5_000,
         private val commandBackend: RecordingSshBackend? = null,
+        healthIntervalMillis: Int = 100,
     ) : AutoCloseable, SessionInteractions.Listener {
         val directory = Files.createTempDirectory("xmouse-session-loopback-").toFile()
         val queue = SessionFixtures.Queue()
@@ -187,7 +188,8 @@ class SessionPipelineIntegrationTest {
             }
         }
         val runtime = SshRuntime()
-        val limits = SshLimits(1000, 3000, 1000, 5000, 1000, 1000, 1000, 1000, 700, 1000, 3, 100, 300, 4096)
+        val limits = SshLimits(1000, 3000, 1000, 5000, 1000, 1000, 1000, 1000, 700, 1000, 3,
+            healthIntervalMillis, 300, 4096)
         private val backendFactory: (HostTrustRequests, Runnable) -> SshBackend = closeGate?.let { gate ->
             { trust, trusted -> gate.backend(trust, trusted) }
         } ?: commandBackend?.let { backend -> { _, _ -> backend } }
@@ -354,6 +356,136 @@ class SessionPipelineIntegrationTest {
             f.controller.disconnect()
             f.await { f.controller.current.attemptHost == null &&
                 f.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+        }
+    }
+
+    @Test fun cancelledInputQueuedBehindBlockedExecIsDroppedAtRealTransportAndOldHoldIsReleased() {
+        val backend = RecordingSshBackend()
+        Fixture(commandBackend = backend).use { f ->
+            val host = SessionFixtures.host("synthetic.invalid")
+            f.connect(host)
+            f.await { f.controller.current.connection.isReady }
+            val originalGeneration = f.controller.current.generation
+            val surface = requireNotNull(f.controller.activateControlSurface(f.presentation))
+            val gesture = requireNotNull(f.controller.beginInputGesture(surface))
+
+            assertTrue(f.controller.executeInputCommand("xdotool mousedown 1", gesture))
+            f.await { backend.writes.contains("xdotool mousedown 1\r\n") }
+
+            // The production transport coordinator now waits for a real provider exec operation.
+            backend.blockAt = "exec.connect"
+            backend.ignoreInterrupts = true
+            assertTrue(f.controller.executeExecCommand("synthetic blocked script", f.presentation))
+            f.queue.drain()
+            assertTrue("script did not reach the blocked provider operation", backend.entered.await(5, TimeUnit.SECONDS))
+
+            val unsentMotion = "xdotool mousemove_relative -- 21 22"
+            val unsentClick = "xdotool click 1"
+            val unsentDown = "xdotool mousedown 2"
+            assertTrue(f.controller.executeInputCommand(unsentMotion, gesture))
+            assertTrue(f.controller.executeInputCommand(unsentClick, gesture))
+            assertTrue(f.controller.executeInputCommand(unsentDown, gesture))
+            f.queue.drain() // All three crossed SessionController and were accepted by SshTransport.
+            assertEquals(listOf("xdotool mousedown 1\r\n"), backend.writes.toList())
+
+            f.controller.cancelInputGesture(gesture)
+            f.controller.deactivateControlSurface(surface)
+            f.queue.drain()
+            backend.release.countDown()
+
+            f.await {
+                backend.writes.contains("xdotool mouseup 1\r\n") &&
+                    f.execResults.any { it.first == "synthetic blocked script" } &&
+                    f.controller.current.connection.isReady
+            }
+            assertEquals("only the already-written DOWN gets its old-attempt release; revoked motion, click, and DOWN never reach provider write",
+                listOf(
+                "xdotool mousedown 1\r\n", "xdotool mouseup 1\r\n",
+            ), backend.writes.toList())
+            assertEquals(originalGeneration, f.controller.current.generation)
+            assertEquals(1, backend.events.count { it.name == "session.connect" })
+
+            val resumedSurface = requireNotNull(f.controller.activateControlSurface(f.presentation))
+            val resumedGesture = requireNotNull(f.controller.beginInputGesture(resumedSurface))
+            assertTrue(f.controller.executeInputCommand("xdotool mousemove_relative -- 1 2", resumedGesture))
+            f.await { backend.writes.contains("xdotool mousemove_relative -- 1 2\r\n") }
+            assertTrue(f.controller.current.connection.isReady)
+            assertEquals("fresh post-resume input stays on the same SSH session", 1,
+                backend.events.count { it.name == "session.connect" })
+        }
+    }
+
+    @Test fun cancelledInputIsRecheckedAtProviderWriteAfterTransportDispatchWithoutLosingSession() {
+        val backend = RecordingSshBackend()
+        Fixture(commandBackend = backend).use { f ->
+            val host = SessionFixtures.host("synthetic.invalid")
+            f.connect(host)
+            f.await { f.controller.current.connection.isReady }
+            val originalGeneration = f.controller.current.generation
+            val surface = requireNotNull(f.controller.activateControlSurface(f.presentation))
+            val gesture = requireNotNull(f.controller.beginInputGesture(surface))
+
+            // SshTransport has dequeued the input and submitted its operation, but healthy(scope)
+            // is stopped at the provider boundary immediately before the guarded write call.
+            backend.blockAt = "session.isConnected"
+            backend.ignoreInterrupts = true
+            assertTrue(f.controller.executeInputCommand("xdotool mousemove_relative -- 31 32", gesture))
+            f.queue.drain()
+            assertTrue("transport did not reach the provider-write gate", backend.entered.await(5, TimeUnit.SECONDS))
+
+            f.controller.cancelInputGesture(gesture)
+            f.controller.deactivateControlSurface(surface)
+            f.queue.drain()
+            val providerGate = backend.release
+            backend.blockAt = null
+            providerGate.countDown()
+
+            f.await { backend.events.any { it.name == "shell.isClosed" } }
+            assertTrue("the write-boundary revocation must not report session loss", f.controller.current.connection.isReady)
+            assertEquals(originalGeneration, f.controller.current.generation)
+            assertTrue("revoked input crossed the provider write boundary", backend.writes.isEmpty())
+            assertFalse("revocation was misclassified as a failed provider write",
+                backend.events.any { it.name == "session.close" })
+
+            val freshSurface = requireNotNull(f.controller.activateControlSurface(f.presentation))
+            val freshGesture = requireNotNull(f.controller.beginInputGesture(freshSurface))
+            assertTrue(f.controller.executeInputCommand("xdotool mousemove_relative -- 3 4", freshGesture))
+            f.await { backend.writes.contains("xdotool mousemove_relative -- 3 4\r\n") }
+            assertTrue(f.controller.current.connection.isReady)
+            assertEquals(1, backend.events.count { it.name == "session.connect" })
+        }
+    }
+
+    @Test fun finishedGestureKeepsAdmittedCommandsValidUntilTheProviderWriteBoundary() {
+        val backend = RecordingSshBackend()
+        Fixture(commandBackend = backend, healthIntervalMillis = 60_000).use { f ->
+            val host = SessionFixtures.host("synthetic.invalid")
+            f.connect(host)
+            f.await { f.controller.current.connection.isReady }
+            val originalGeneration = f.controller.current.generation
+            val surface = requireNotNull(f.controller.activateControlSurface(f.presentation))
+            val gesture = requireNotNull(f.controller.beginInputGesture(surface))
+
+            // Hold the already-dispatched transport operation immediately before its write guard.
+            backend.blockAt = "shell.isClosed"
+            backend.ignoreInterrupts = true
+            assertTrue(f.controller.executeInputCommand("xdotool mousemove_relative -- 5 6", gesture))
+            f.queue.drain()
+            assertTrue("transport did not reach the provider-write gate", backend.entered.await(5, TimeUnit.SECONDS))
+
+            f.controller.finishInputGesture(gesture)
+            f.queue.drain()
+            assertFalse("normal UP must end local gesture admission", f.controller.isInputGestureActive(gesture))
+
+            val providerGate = backend.release
+            backend.blockAt = null
+            providerGate.countDown()
+            f.await { backend.writes.contains("xdotool mousemove_relative -- 5 6\r\n") }
+
+            assertEquals("a command admitted before normal UP must reach the provider in FIFO order",
+                listOf("xdotool mousemove_relative -- 5 6\r\n"), backend.writes.toList())
+            assertTrue(f.controller.current.connection.isReady)
+            assertEquals(originalGeneration, f.controller.current.generation)
         }
     }
 

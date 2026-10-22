@@ -17,6 +17,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.provider.Settings
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -106,8 +107,13 @@ class SessionForegroundServiceAndroidTest {
     private var owner: RecordingOwner? = null
     private var transportOwner: RecordingTransportOwner? = null
     private var oldAutoConnect: Boolean? = null
+    private var oldKeyboardBatch: Boolean? = null
+    private var oldKeyboardBatchPresent = false
     private var oldInputBackend: String? = null
     private var oldInitialCommand: String? = null
+    private var oldGyroEnabled: Boolean? = null
+    private val oldGyroSettings = mutableMapOf<String, String?>()
+    private var oldSettingDelay: Int? = null
     private var savedScriptId = 0
     private var oldPermissionRequestedPreference: Boolean? = null
     private val device get() = UiDevice.getInstance(instrumentation)
@@ -378,6 +384,17 @@ class SessionForegroundServiceAndroidTest {
         val event = MotionEvent.obtain(downTime, eventTime, action, x, y, 0)
         try { assertTrue("legacy control rejected a touch event", view.onTouchEvent(event)) }
         finally { event.recycle() }
+    }
+
+    private fun dispatchCapturedButtonTouch(view: View, downTime: Long, eventTime: Long, action: Int, x: Float, y: Float) {
+        val event = MotionEvent.obtain(downTime, eventTime, action, x, y, 0)
+        try { assertTrue("captured button rejected its pointer sequence", view.dispatchTouchEvent(event)) }
+        finally { event.recycle() }
+    }
+
+    private fun useImmediateTouchDelayForTest() {
+        if (oldSettingDelay == null) oldSettingDelay = MainActivity.setting_delay
+        MainActivity.setting_delay = 0
     }
 
     private fun clickLegacyButton(activity: MainActivity, title: String) {
@@ -701,10 +718,26 @@ class SessionForegroundServiceAndroidTest {
             savedScriptId = 0
         }
         oldAutoConnect?.let { value -> defaultPreferences.edit { putBoolean("autologin_checkbox", value) } }
+        if (oldKeyboardBatchPresent) {
+            defaultPreferences.edit { putBoolean("setting_keyboard_batch", requireNotNull(oldKeyboardBatch)) }
+        } else defaultPreferences.edit { remove("setting_keyboard_batch") }
+        oldKeyboardBatchPresent = false
+        oldKeyboardBatch = null
         oldInputBackend?.let { value -> defaultPreferences.edit { putString("setting_dotool_initial", value) } }
             ?: defaultPreferences.edit { remove("setting_dotool_initial") }
         oldInitialCommand?.let { value -> defaultPreferences.edit { putString("setting_xdotool_initial", value) } }
             ?: defaultPreferences.edit { remove("setting_xdotool_initial") }
+        oldGyroEnabled?.let { value -> defaultPreferences.edit { putBoolean("control_gyro_enabled", value) } }
+            ?: defaultPreferences.edit { remove("control_gyro_enabled") }
+        if (oldGyroSettings.isNotEmpty()) {
+            defaultPreferences.edit {
+                oldGyroSettings.forEach { (key, value) ->
+                    if (value == null) remove(key) else putString(key, value)
+                }
+            }
+            oldGyroSettings.clear()
+        }
+        oldSettingDelay?.let { MainActivity.setting_delay = it }
         // Do not restore POST_NOTIFICATIONS with `pm revoke` from inside instrumentation: Android
         // terminates the target process on revocation, which also terminates this runner. The outer
         // verification invocation manages the device permission state between test runs.
@@ -1058,7 +1091,6 @@ class SessionForegroundServiceAndroidTest {
                 rawButton.getmCommand())
 
             addSavedScript(activity, scriptAlias, scriptCommand)
-            activity.findViewById<DrawerLayout>(R.id.drawer_layout).openDrawer(GravityCompat.START)
         }
 
         eventually {
@@ -1069,6 +1101,12 @@ class SessionForegroundServiceAndroidTest {
                 recordingOwner.backend.writes.contains("xdotool type '$keyboardText'\r\n") &&
                 recordingOwner.backend.writes.contains("xdotool key BackSpace\r\n") &&
                 recordingOwner.backend.writes.contains("$rawCustomCommand\r\n")
+        }
+        // Once the foreground inputs are observed at the provider boundary, suspend controls before
+        // exercising the saved-script drawer. Otherwise the new fail-closed transport admission is
+        // correctly allowed to drop input that has not yet reached the provider.
+        activityScenario.onActivity {
+            it.findViewById<DrawerLayout>(R.id.drawer_layout).openDrawer(GravityCompat.START)
         }
         waitForRecentCommand(activityScenario, rawCustomCommand)
         val shellCommandsBeforeScript = recordingOwner.backend.commandOrder.toList()
@@ -1120,10 +1158,11 @@ class SessionForegroundServiceAndroidTest {
         waitForRecentCommand(activityScenario, postRecreationCommand)
 
         val detachedScreenInput = "synthetic detached screen input after reattachment"
-        assertTrue("the retained session may accept old-view input without screen feedback",
+        assertFalse("a detached screen cannot borrow the reattached screen's input capability",
             detachedScreenTransport.get().executeShellCommand(detachedScreenInput))
-        eventually { recordingOwner.backend.writes.any { it == "$detachedScreenInput\r\n" } }
-        assertEquals("detached input must not borrow the new screen's recent-command target",
+        assertFalse("detached input is not written by the retained session",
+            recordingOwner.backend.writes.any { it == "$detachedScreenInput\r\n" })
+        assertEquals("detached input cannot borrow the new screen's recent-command target",
             postRecreationCommand, recentCommandTextOn(activityScenario))
 
         SessionForegroundService.requestDisconnect(context)
@@ -1136,6 +1175,482 @@ class SessionForegroundServiceAndroidTest {
         assertFalse("disconnected input must be rejected", disconnectedCommandAccepted)
         assertEquals("rejected input must not replace the last accepted command",
             postRecreationCommand, recentCommandTextOn(activityScenario))
+    }
+
+    @Test
+    fun cancelledMouseAndKeyboardButtonTouchUpsCannotBorrowResumedSurfaceButAccessibilityStillWorks() {
+        grantNotificationPermissionForDisclosureTest()
+        oldKeyboardBatchPresent = defaultPreferences.contains("setting_keyboard_batch")
+        oldKeyboardBatch = if (oldKeyboardBatchPresent)
+            defaultPreferences.getBoolean("setting_keyboard_batch", true) else null
+        defaultPreferences.edit { putBoolean("setting_keyboard_batch", true) }
+
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val startup = "synthetic input lifecycle startup"
+        val activityScenario = launchVisibleActivity(autoConnect = true, inputBackend = "xdotool",
+            initialCommand = startup)
+        eventually { recordingOwner.controller.current.connection.isReady }
+        eventually { recordingOwner.backend.writes.contains("$startup\r\n") }
+        recordingOwner.backend.writes.clear() // Exclude the profile's expected initial shell command.
+        eventually {
+            var active = false
+            activityScenario.onActivity { active = it.activeControlInputToken() != null }
+            active
+        }
+
+        val mouseButton = AtomicReference<View>()
+        val keyboardButton = AtomicReference<View>()
+        val oldMouseSurface = AtomicReference<InputSurfaceToken>()
+        var mouseDownTime = 0L
+        activityScenario.onActivity { activity ->
+            mouseButton.set(activity.findViewById(R.id.firstMouseButton))
+            assertTrue("mouse button was not laid out", mouseButton.get().width > 0)
+            oldMouseSurface.set(requireNotNull(activity.activeControlInputToken()))
+            mouseDownTime = SystemClock.uptimeMillis()
+            dispatchCapturedButtonTouch(mouseButton.get(), mouseDownTime, mouseDownTime,
+                MotionEvent.ACTION_DOWN, 20f, 20f)
+            assertTrue(mouseButton.get().isPressed)
+        }
+
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        eventually {
+            var inactive = false
+            activityScenario.onActivity { inactive = it.activeControlInputToken() == null }
+            inactive
+        }
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        val resumedMouseButton = AtomicReference<View>()
+        eventually {
+            var current: InputSurfaceToken? = null
+            activityScenario.onActivity { activity ->
+                current = activity.activeControlInputToken()
+                resumedMouseButton.set(activity.findViewById(R.id.firstMouseButton))
+            }
+            current != null && current !== oldMouseSurface.get()
+        }
+        activityScenario.onActivity {
+            dispatchCapturedButtonTouch(mouseButton.get(), mouseDownTime, SystemClock.uptimeMillis(),
+                MotionEvent.ACTION_UP, 20f, 20f)
+            assertTrue("stale mouse UP emitted input: ${recordingOwner.backend.writes}",
+                recordingOwner.backend.writes.isEmpty())
+            assertTrue("delayed click callback was not consumed", mouseButton.get().performClick())
+        }
+        assertTrue("stale mouse click callback emitted input: ${recordingOwner.backend.writes}",
+            recordingOwner.backend.writes.isEmpty())
+
+        activityScenario.onActivity {
+            assertTrue("a fresh accessibility click must not be blocked by canceled touch ownership",
+                resumedMouseButton.get().performAccessibilityAction(
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, android.os.Bundle()))
+        }
+        eventually { recordingOwner.backend.writes.contains("xdotool click 1\r\n") }
+        assertEquals(1, recordingOwner.backend.writes.count { it == "xdotool click 1\r\n" })
+
+        activityScenario.onActivity {
+            val button = resumedMouseButton.get()
+            assertTrue("resumed mouse button was not laid out", button.width > 0 && button.height > 0)
+            val freshDown = SystemClock.uptimeMillis()
+            val x = button.width / 2f
+            val y = button.height / 2f
+            dispatchCapturedButtonTouch(button, freshDown, freshDown, MotionEvent.ACTION_DOWN, x, y)
+            dispatchCapturedButtonTouch(button, freshDown, freshDown + 1, MotionEvent.ACTION_UP, x, y)
+        }
+        eventually { recordingOwner.backend.writes.count { it == "xdotool click 1\r\n" } == 2 }
+
+        val oldKeyboardSurface = AtomicReference<InputSurfaceToken>()
+        var keyboardDownTime = 0L
+        activityScenario.onActivity { activity ->
+            activity.findViewById<View>(R.id.fab).performClick()
+            activity.findViewById<EditText>(R.id.keyboard_input).setText("input_lifecycle_fixture")
+            keyboardButton.set(activity.findViewById(R.id.keyboard_send))
+            assertTrue("keyboard send button was not laid out", keyboardButton.get().width > 0)
+            oldKeyboardSurface.set(requireNotNull(activity.activeControlInputToken()))
+            keyboardDownTime = SystemClock.uptimeMillis()
+            dispatchCapturedButtonTouch(keyboardButton.get(), keyboardDownTime, keyboardDownTime,
+                MotionEvent.ACTION_DOWN, 20f, 20f)
+        }
+
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        eventually {
+            var inactive = false
+            activityScenario.onActivity { inactive = it.activeControlInputToken() == null }
+            inactive
+        }
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        val resumedKeyboardButton = AtomicReference<View>()
+        eventually {
+            var current: InputSurfaceToken? = null
+            activityScenario.onActivity { activity ->
+                current = activity.activeControlInputToken()
+                resumedKeyboardButton.set(activity.findViewById(R.id.keyboard_send))
+            }
+            current != null && current !== oldKeyboardSurface.get()
+        }
+        activityScenario.onActivity {
+            dispatchCapturedButtonTouch(keyboardButton.get(), keyboardDownTime, SystemClock.uptimeMillis(),
+                MotionEvent.ACTION_UP, 20f, 20f)
+            assertTrue("delayed click callback was not consumed", keyboardButton.get().performClick())
+        }
+        assertFalse("stale keyboard-send UP typed text on the resumed surface",
+            recordingOwner.backend.writes.any { it.startsWith("xdotool type ") })
+
+        activityScenario.onActivity {
+            assertTrue("a legitimate accessibility click must remain usable despite canceled touch ownership",
+                resumedKeyboardButton.get().performAccessibilityAction(
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, android.os.Bundle()))
+        }
+        eventually { recordingOwner.backend.writes.contains("xdotool type 'input_lifecycle_fixture'\r\n") }
+        assertEquals(2, recordingOwner.backend.writes.count { it == "xdotool click 1\r\n" })
+        assertEquals(1, recordingOwner.backend.writes.count { it == "xdotool type 'input_lifecycle_fixture'\r\n" })
+        activityScenario.onActivity {
+            val button = resumedKeyboardButton.get()
+            assertTrue("resumed keyboard-send button was not laid out", button.width > 0 && button.height > 0)
+            it.findViewById<EditText>(R.id.keyboard_input).setText("input_lifecycle_fixture")
+            val freshDown = SystemClock.uptimeMillis()
+            val x = button.width / 2f
+            val y = button.height / 2f
+            dispatchCapturedButtonTouch(button, freshDown, freshDown, MotionEvent.ACTION_DOWN, x, y)
+            dispatchCapturedButtonTouch(button, freshDown, freshDown + 1, MotionEvent.ACTION_UP, x, y)
+        }
+        eventually { recordingOwner.backend.writes.count { it == "xdotool type 'input_lifecycle_fixture'\r\n" } == 2 }
+        assertEquals(2, recordingOwner.backend.writes.count { it == "xdotool click 1\r\n" })
+        assertEquals(2, recordingOwner.backend.writes.count { it == "xdotool type 'input_lifecycle_fixture'\r\n" })
+        assertTrue(recordingOwner.controller.current.connection.isReady)
+    }
+
+    @Test
+    fun switchingToSettingsDuringTouchpadDragReleasesOnTheSameSessionAndRejectsStaleInput() {
+        grantNotificationPermissionForDisclosureTest()
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity(autoConnect = true, inputBackend = "xdotool")
+        eventually { recordingOwner.controller.current.connection.isReady }
+        val originalGeneration = recordingOwner.controller.current.generation
+        val oldActivity = AtomicReference<MainActivity>()
+        val mouseReference = AtomicReference<MyMouseView>()
+        val staleButton = AtomicReference<View>()
+        val downTime = SystemClock.uptimeMillis()
+
+        activityScenario.onActivity { activity ->
+            oldActivity.set(activity)
+            useImmediateTouchDelayForTest()
+            val mouseLayout = activity.findViewById<android.widget.LinearLayout>(R.id.mouse)
+            val mouse = (0 until mouseLayout.childCount).map { mouseLayout.getChildAt(it) }
+                .filterIsInstance<MyMouseView>().single()
+            mouseReference.set(mouse)
+            staleButton.set(activity.findViewById(R.id.firstMouseButton))
+            val x = mouse.width / 2f
+            dispatchTouch(mouse, downTime, downTime, MotionEvent.ACTION_DOWN, x, 40f)
+            SystemClock.sleep(20)
+            dispatchTouch(mouse, downTime, downTime + 10, MotionEvent.ACTION_MOVE, x + 12f, 50f)
+        }
+        eventually { recordingOwner.backend.writes.contains("xdotool mousedown 1\r\n") }
+        assertFalse("the drag is still held before leaving", recordingOwner.backend.writes.contains("xdotool mouseup 1\r\n"))
+
+        activityScenario.onActivity { it.startActivity(Intent(Settings.ACTION_SETTINGS)) }
+        assertTrue("system Settings did not become foreground", device.wait(
+            Until.hasObject(By.pkg("com.android.settings")), 10_000))
+        eventually { recordingOwner.backend.writes.contains("xdotool mouseup 1\r\n") }
+        assertTrue("the same SSH attempt remains ready while Settings is foreground",
+            recordingOwner.controller.current.connection.isReady)
+        assertEquals(originalGeneration, recordingOwner.controller.current.generation)
+        assertEquals("input suspension must not close or replace the session", 0,
+            recordingOwner.backend.events.count { it.name == "session.close" })
+
+        activityScenario.onActivity { activity ->
+            assertNull("a paused Activity has no active input capability", activity.activeControlInputToken())
+            val mouse = mouseReference.get()
+            dispatchTouch(mouse, downTime, downTime + 20, MotionEvent.ACTION_MOVE,
+                mouse.width / 2f + 18f, 60f)
+            dispatchTouch(mouse, downTime, downTime + 30, MotionEvent.ACTION_UP,
+                mouse.width / 2f + 18f, 60f)
+            assertFalse(activity.commandTransport.executeShellCommand("stale background shell input"))
+            val keyDown = KeyEvent(downTime, downTime, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_VOLUME_UP, 0)
+            val keyUp = KeyEvent(downTime, downTime + 1, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_VOLUME_UP, 0)
+            activity.onKeyDown(KeyEvent.KEYCODE_VOLUME_UP, keyDown)
+            activity.onKeyUp(KeyEvent.KEYCODE_VOLUME_UP, keyUp)
+            staleButton.get().performClick()
+            activity.findViewById<EditText>(R.id.keyboard_input).setText("stale background keyboard")
+            MainActivity::class.java.getDeclaredMethod("useKeyboardSendText")
+                .apply { isAccessible = true }.invoke(activity)
+        }
+        val writesAfterBackgroundEvents = recordingOwner.backend.writes.toList()
+        device.pressBack()
+        eventually {
+            var active = false
+            activityScenario.onActivity { activity ->
+                active = activity.hasWindowFocus() && activity.activeControlInputToken() != null
+            }
+            active
+        }
+        assertTrue(recordingOwner.controller.current.connection.isReady)
+        assertEquals(originalGeneration, recordingOwner.controller.current.generation)
+
+        activityScenario.onActivity { activity ->
+            val mouse = mouseReference.get()
+            dispatchTouch(mouse, downTime, downTime + 40, MotionEvent.ACTION_MOVE,
+                mouse.width / 2f + 20f, 60f)
+            dispatchTouch(mouse, downTime, downTime + 50, MotionEvent.ACTION_UP,
+                mouse.width / 2f + 20f, 60f)
+            val freshDown = SystemClock.uptimeMillis()
+            val x = mouse.width / 2f
+            useImmediateTouchDelayForTest()
+            dispatchTouch(mouse, freshDown, freshDown, MotionEvent.ACTION_DOWN, x, 40f)
+            SystemClock.sleep(20)
+            dispatchTouch(mouse, freshDown, freshDown + 10, MotionEvent.ACTION_MOVE, x + 12f, 50f)
+            dispatchTouch(mouse, freshDown, freshDown + 20, MotionEvent.ACTION_UP, x + 12f, 50f)
+        }
+        val freshDragDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (recordingOwner.backend.writes.count { it == "xdotool mouseup 1\r\n" } < 2 &&
+            System.nanoTime() < freshDragDeadline) Thread.sleep(10)
+        assertTrue("the returned touchpad drag did not reach provider write: ${recordingOwner.backend.writes}",
+            recordingOwner.backend.writes.count { it == "xdotool mouseup 1\r\n" } >= 2)
+        assertEquals("late old events do not write after returning", writesAfterBackgroundEvents.size + 3,
+            recordingOwner.backend.writes.size)
+        assertEquals("the foreground session remains the original attempt", originalGeneration,
+            recordingOwner.controller.current.generation)
+        assertTrue(recordingOwner.controller.current.connection.isReady)
+    }
+
+    @Test
+    fun ydotoolCustomMouseDownReleasesWithCapturedCodeWhenControlActivityPauses() {
+        grantNotificationPermissionForDisclosureTest()
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity(autoConnect = true, inputBackend = "ydotool")
+        eventually { recordingOwner.controller.current.connection.isReady }
+        val originalGeneration = recordingOwner.controller.current.generation
+        activityScenario.onActivity { activity ->
+            val adapter = CustomKeyboardButtonAdapter(activity, emptyList())
+            adapter.execCommand("mousedown 3", activity.doTool, activity.commandTransport)
+        }
+        eventually { recordingOwner.backend.writes.contains("ydotool click 0x41\r\n") }
+
+        activityScenario.onActivity { it.startActivity(Intent(Settings.ACTION_SETTINGS)) }
+        assertTrue(device.wait(Until.hasObject(By.pkg("com.android.settings")), 10_000))
+        eventually { recordingOwner.backend.writes.contains("ydotool click 0x81\r\n") }
+        assertTrue(recordingOwner.controller.current.connection.isReady)
+        assertEquals(originalGeneration, recordingOwner.controller.current.generation)
+        assertFalse("the xdotool mapping must not be used for this ydotool hold",
+            recordingOwner.backend.writes.contains("xdotool mouseup 3\r\n"))
+
+        device.pressBack()
+        eventually {
+            var active = false
+            activityScenario.onActivity { active = it.activeControlInputToken() != null }
+            active
+        }
+        activityScenario.onActivity { activity ->
+            val adapter = CustomKeyboardButtonAdapter(activity, emptyList())
+            adapter.execCommand("mousedown 3", activity.doTool, activity.commandTransport)
+            adapter.execCommand("mouseup 3", activity.doTool, activity.commandTransport)
+        }
+        eventually { recordingOwner.backend.writes.count { it == "ydotool click 0x81\r\n" } >= 2 }
+        assertEquals(originalGeneration, recordingOwner.controller.current.generation)
+        assertTrue(recordingOwner.controller.current.connection.isReady)
+    }
+
+    @Test
+    fun touchCancelReleasesDragWithoutClickAndResetsJoystickForFreshDown() {
+        grantNotificationPermissionForDisclosureTest()
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity(autoConnect = true, inputBackend = "xdotool")
+        eventually { recordingOwner.controller.current.connection.isReady }
+        val mouseReference = AtomicReference<MyMouseView>()
+        val joystickReference = AtomicReference<MyJSView>()
+        val now = SystemClock.uptimeMillis()
+        activityScenario.onActivity { activity ->
+            useImmediateTouchDelayForTest()
+            val mouse = (0 until activity.findViewById<android.widget.LinearLayout>(R.id.mouse).childCount)
+                .map { activity.findViewById<android.widget.LinearLayout>(R.id.mouse).getChildAt(it) }
+                .filterIsInstance<MyMouseView>().single()
+            mouseReference.set(mouse)
+            val x = mouse.width / 2f
+            dispatchTouch(mouse, now, now, MotionEvent.ACTION_DOWN, x, 40f)
+            SystemClock.sleep(20)
+            dispatchTouch(mouse, now, now + 10, MotionEvent.ACTION_MOVE, x + 12f, 50f)
+        }
+        eventually { recordingOwner.backend.writes.contains("xdotool mousedown 1\r\n") }
+        activityScenario.onActivity { activity ->
+            val mouse = mouseReference.get()
+            dispatchTouch(mouse, now, now + 20, MotionEvent.ACTION_CANCEL,
+                mouse.width / 2f + 12f, 50f)
+        }
+        eventually { recordingOwner.backend.writes.contains("xdotool mouseup 1\r\n") }
+        assertFalse("ACTION_CANCEL never synthesizes the touchpad click",
+            recordingOwner.backend.writes.contains("xdotool click 1\r\n"))
+        val afterCancel = recordingOwner.backend.writes.size
+        activityScenario.onActivity { activity ->
+            val mouse = mouseReference.get()
+            dispatchTouch(mouse, now, now + 30, MotionEvent.ACTION_MOVE, mouse.width / 2f + 20f, 60f)
+            dispatchTouch(mouse, now, now + 40, MotionEvent.ACTION_UP, mouse.width / 2f + 20f, 60f)
+            assertEquals("post-cancel MOVE/UP cannot resume the old drag", afterCancel,
+                recordingOwner.backend.writes.size)
+            assertTrue(activity.findViewById<View>(R.id.jsToggle).performClick())
+            val joystick = (0 until activity.findViewById<android.widget.LinearLayout>(R.id.js).childCount)
+                .map { activity.findViewById<android.widget.LinearLayout>(R.id.js).getChildAt(it) }
+                .filterIsInstance<MyJSView>().single()
+            joystickReference.set(joystick)
+            val size = View.MeasureSpec.makeMeasureSpec(240, View.MeasureSpec.EXACTLY)
+            joystick.measure(size, size)
+            joystick.layout(0, 0, 240, 240)
+            dispatchTouch(joystick, now, now, MotionEvent.ACTION_DOWN, 120f, 120f)
+            dispatchTouch(joystick, now, now + 10, MotionEvent.ACTION_MOVE, 170f, 90f)
+        }
+        eventually { recordingOwner.backend.writes.size >= afterCancel + 2 }
+        activityScenario.onActivity { activity ->
+            dispatchTouch(joystickReference.get(), now, now + 20, MotionEvent.ACTION_CANCEL, 170f, 90f)
+        }
+        eventually { recordingOwner.backend.writes.size >= afterCancel + 2 }
+        val afterJoystickCancel = recordingOwner.backend.writes.size
+        activityScenario.onActivity { activity ->
+            val joystick = joystickReference.get()
+            dispatchTouch(joystick, now, now + 30, MotionEvent.ACTION_MOVE, 200f, 50f)
+            dispatchTouch(joystick, now, now + 40, MotionEvent.ACTION_UP, 200f, 50f)
+            assertEquals("joystick cancellation stops stale movement", afterJoystickCancel,
+                recordingOwner.backend.writes.size)
+            val cx = MyJSView::class.java.getDeclaredField("cx").apply { isAccessible = true }.getInt(joystick)
+            val cy = MyJSView::class.java.getDeclaredField("cy").apply { isAccessible = true }.getInt(joystick)
+            assertEquals(cx, MyJSView::class.java.getDeclaredField("hx").apply { isAccessible = true }.getInt(joystick))
+            assertEquals(cy, MyJSView::class.java.getDeclaredField("hy").apply { isAccessible = true }.getInt(joystick))
+            dispatchTouch(joystick, now + 50, now + 50, MotionEvent.ACTION_DOWN, 120f, 120f)
+            dispatchTouch(joystick, now + 50, now + 60, MotionEvent.ACTION_MOVE, 170f, 90f)
+        }
+        eventually { recordingOwner.backend.writes.size > afterJoystickCancel }
+        assertTrue(recordingOwner.controller.current.connection.isReady)
+    }
+
+    @Test
+    fun injectedGyroscopeRegistrationAndLateCallbacksStayOnMainAndStopWithTheSurface() {
+        val mainThread = Looper.getMainLooper().thread
+        val callbackThread = AtomicReference<Thread>()
+        val registerThread = AtomicReference<Thread>()
+        val unregisterThread = AtomicReference<Thread>()
+        val callbacks = AtomicInteger()
+        lateinit var registeredListener: GyroscopeSamplingGate.Listener
+        val gate = GyroscopeSamplingGate(object : GyroscopeSamplingGate.SensorFacade {
+            override fun hasGyroscope() = true
+            override fun register(listener: GyroscopeSamplingGate.Listener): Boolean {
+                registerThread.set(Thread.currentThread())
+                registeredListener = listener
+                return true
+            }
+            override fun unregister(listener: GyroscopeSamplingGate.Listener) {
+                assertSame(registeredListener, listener)
+                unregisterThread.set(Thread.currentThread())
+            }
+        }, GyroscopeSamplingGate.MotionCallback { _, _, _ ->
+            callbackThread.set(Thread.currentThread())
+            callbacks.incrementAndGet()
+        })
+        val surface = InputSurfaceToken()
+
+        instrumentation.runOnMainSync {
+            gate.update(resumed = true, controlSurface = surface, userEnabled = true)
+            registeredListener.onSample(1f, 2f)
+        }
+        assertTrue(gate.isSampling)
+        assertSame(mainThread, registerThread.get())
+        assertSame(mainThread, callbackThread.get())
+        assertEquals(1, callbacks.get())
+
+        instrumentation.runOnMainSync {
+            gate.update(resumed = false, controlSurface = surface, userEnabled = true)
+            registeredListener.onSample(3f, 4f)
+        }
+        assertFalse(gate.isSampling)
+        assertSame(mainThread, unregisterThread.get())
+        assertEquals("a queued callback from the unregistered sensor lease is inert", 1, callbacks.get())
+    }
+
+    @Test
+    fun mainActivityLifecycleStopsAndRestartsItsGyroscopeInputLease() {
+        grantNotificationPermissionForDisclosureTest()
+        oldGyroEnabled = if (defaultPreferences.contains("control_gyro_enabled"))
+            defaultPreferences.getBoolean("control_gyro_enabled", false) else null
+        listOf("gyro_z_sensitivity_list", "gyro_y_sensitivity_list", "gyro_z_threshold_list",
+            "gyro_y_threshold_list").forEach { key ->
+            oldGyroSettings[key] = if (defaultPreferences.contains(key)) defaultPreferences.getString(key, null) else null
+        }
+        defaultPreferences.edit { putBoolean("control_gyro_enabled", false) }
+        defaultPreferences.edit {
+            putString("gyro_z_sensitivity_list", "1.0f")
+            putString("gyro_y_sensitivity_list", "1.0f")
+            putString("gyro_z_threshold_list", "0.5f")
+            putString("gyro_y_threshold_list", "0.5f")
+        }
+
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity(autoConnect = true, inputBackend = "xdotool")
+        eventually { recordingOwner.controller.current.connection.isReady }
+        eventually {
+            var active = false
+            activityScenario.onActivity { active = it.activeControlInputToken() != null }
+            active
+        }
+
+        val registered = CopyOnWriteArrayList<GyroscopeSamplingGate.Listener>()
+        val unregistered = CopyOnWriteArrayList<GyroscopeSamplingGate.Listener>()
+        val gateReference = AtomicReference<GyroscopeSamplingGate>()
+        activityScenario.onActivity { activity ->
+            val motion = MainActivity::class.java.getDeclaredMethod(
+                "onGyroscopeMotion", InputSurfaceToken::class.java, java.lang.Float.TYPE, java.lang.Float.TYPE,
+            ).apply { isAccessible = true }
+            val gate = GyroscopeSamplingGate(object : GyroscopeSamplingGate.SensorFacade {
+                override fun hasGyroscope() = true
+                override fun register(listener: GyroscopeSamplingGate.Listener): Boolean {
+                    registered.add(listener)
+                    return true
+                }
+                override fun unregister(listener: GyroscopeSamplingGate.Listener) { unregistered.add(listener) }
+            }, GyroscopeSamplingGate.MotionCallback { token, y, z -> motion.invoke(activity, token, y, z) })
+            MainActivity::class.java.getDeclaredField("gyroSamplingGate").apply { isAccessible = true }
+                .set(activity, gate)
+            gateReference.set(gate)
+
+            val toggle = activity.findViewById<android.widget.ToggleButton>(R.id.gyroToggle)
+            assertFalse("test begins with gyro disabled to avoid real platform registration", toggle.isChecked)
+            toggle.performClick()
+            assertTrue(toggle.isChecked)
+        }
+        eventually { gateReference.get().isSampling && registered.size == 1 }
+        val firstListener = registered.single()
+        activityScenario.onActivity { firstListener.onSample(0f, 20f) }
+        eventually { recordingOwner.backend.writes.any { it.startsWith("xdotool mousemove_relative -- ") } }
+        val writesBeforeLeaving = recordingOwner.backend.writes.size
+        val originalGeneration = recordingOwner.controller.current.generation
+
+        activityScenario.onActivity { it.startActivity(Intent(Settings.ACTION_SETTINGS)) }
+        assertTrue("system Settings did not become foreground", device.wait(
+            Until.hasObject(By.pkg("com.android.settings")), 10_000))
+        eventually { !gateReference.get().isSampling && unregistered.contains(firstListener) }
+        val writesWhilePaused = recordingOwner.backend.writes.size
+        assertEquals("the Activity lifecycle unregisters gyro before later sensor callbacks", writesBeforeLeaving,
+            writesWhilePaused)
+        activityScenario.onActivity { firstListener.onSample(0f, 25f) }
+        assertEquals("a callback queued for the retired Activity surface cannot send motion", writesWhilePaused,
+            recordingOwner.backend.writes.size)
+        assertEquals(originalGeneration, recordingOwner.controller.current.generation)
+        assertTrue(recordingOwner.controller.current.connection.isReady)
+
+        device.pressBack()
+        eventually {
+            var active = false
+            activityScenario.onActivity { active = it.activeControlInputToken() != null }
+            active && gateReference.get().isSampling && registered.size == 2
+        }
+        val resumedListener = registered.last()
+        activityScenario.onActivity {
+            firstListener.onSample(0f, 30f)
+            resumedListener.onSample(0f, 20f)
+        }
+        eventually { recordingOwner.backend.writes.size == writesWhilePaused + 1 }
+        assertEquals("only the resumed surface's new gyro lease produces remote movement",
+            writesWhilePaused + 1, recordingOwner.backend.writes.size)
+        assertEquals(originalGeneration, recordingOwner.controller.current.generation)
     }
 
     @Test

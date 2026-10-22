@@ -4,6 +4,9 @@ import com.stripe1.xmouse.connection.*
 import org.junit.Assert.*
 import org.junit.Test
 import java.util.concurrent.Executor
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class SessionControllerTest {
     private val a = SessionFixtures.host()
@@ -13,13 +16,18 @@ class SessionControllerTest {
         lateinit var listener: SessionAttempt.Listener
         lateinit var closed: (ConnectionFailure?) -> Unit
         var closes = 0
+        var shellCommandCountAtClose = -1
         var acceptShell = true
         private val commandResults = interactions.beginCommandResults()
         val shellCommands = mutableListOf<String>()
         val execCommands = mutableListOf<String>()
         val commandOrder = mutableListOf<String>()
         override fun start(listener: SessionAttempt.Listener) { this.listener = listener }
-        override fun cancelAndClose(completion: (ConnectionFailure?) -> Unit) { closes++; closed = completion }
+        override fun cancelAndClose(completion: (ConnectionFailure?) -> Unit) {
+            closes++
+            shellCommandCountAtClose = shellCommands.size
+            closed = completion
+        }
         override fun executeShellCommand(command: String): Boolean = executeShellCommand(command, null)
         override fun executeShellCommand(
             command: String,
@@ -61,6 +69,30 @@ class SessionControllerTest {
             attempts.lastOrNull()?.takeIf { it.closes > 0 }?.closed?.invoke(null); queue.drain()
             interactions.detach()
         }
+    }
+    private class BlockingPostQueue : SessionEventQueue {
+        private val work = java.util.ArrayDeque<Runnable>()
+        val blockNextPost = AtomicBoolean()
+        val postEntered = CountDownLatch(1)
+        val allowPost = CountDownLatch(1)
+        var closed = false
+        override fun post(action: Runnable): Boolean {
+            if (blockNextPost.compareAndSet(true, false)) {
+                postEntered.countDown()
+                check(allowPost.await(5, TimeUnit.SECONDS))
+            }
+            return synchronized(work) {
+                if (closed) false else { work.addLast(action); true }
+            }
+        }
+        fun drain() {
+            repeat(1000) {
+                val next = synchronized(work) { if (work.isEmpty()) null else work.removeFirst() } ?: return
+                next.run()
+            }
+            error("blocking test queue did not settle")
+        }
+        override fun close() { closed = true }
     }
     private val phases = listOf(ConnectionState.Phase.PREPARING_CREDENTIALS, ConnectionState.Phase.RESOLVING,
         ConnectionState.Phase.CONNECTING, ConnectionState.Phase.AWAITING_TRUST, ConnectionState.Phase.AUTHENTICATING,
@@ -196,6 +228,231 @@ class SessionControllerTest {
             assertTrue(f.controller.current.connection.isReady)
             assertTrue("old shell input must not be replayed on B", replacement.shellCommands.isEmpty())
             assertTrue("old exec input must not be replayed on B", replacement.execCommands.isEmpty())
+        }
+    }
+
+    @Test fun inactiveSurfaceInvalidatesQueuedGestureInputBeforeOwnerDispatch() {
+        Fixture().use { f ->
+            f.connect(a)
+            val attempt = f.attempts.single()
+            attempt.listener.ready(); f.queue.drain()
+            val surface = requireNotNull(f.controller.activateControlSurface(f.presentation))
+            val gesture = requireNotNull(f.controller.beginInputGesture(surface))
+
+            assertTrue(f.controller.executeInputCommand("xdotool mousemove_relative -- 4 5", gesture))
+            f.controller.deactivateControlSurface(surface)
+            assertFalse("a canceled gesture cannot submit more movement", f.controller.executeInputCommand(
+                "xdotool mousemove_relative -- 6 7", gesture))
+            f.queue.drain()
+
+            assertTrue("input queued before focus loss is rejected before the active attempt writes it",
+                attempt.shellCommands.isEmpty())
+            assertFalse(f.controller.isControlSurfaceActive(surface))
+        }
+    }
+
+    @Test fun trackedXAndYButtonsReleaseInOrderAndDuplicateCancellationIsHarmless() {
+        for ((down, release) in listOf(
+            "xdotool mousedown 1" to "xdotool mouseup 1",
+            "ydotool click 0x41" to "ydotool click 0x81",
+        )) Fixture().use { f ->
+            f.connect(a)
+            val attempt = f.attempts.single()
+            attempt.listener.ready(); f.queue.drain()
+            val surface = requireNotNull(f.controller.activateControlSurface(f.presentation))
+            val gesture = requireNotNull(f.controller.beginInputGesture(surface))
+            assertTrue(f.controller.executeInputCommand(down, gesture))
+            f.queue.drain()
+            assertEquals(listOf(down), attempt.shellCommands)
+
+            f.controller.cancelInputGesture(gesture)
+            f.controller.cancelInputGesture(gesture)
+            f.controller.deactivateControlSurface(surface)
+            f.controller.deactivateControlSurface(surface)
+            f.queue.drain()
+
+            assertEquals("the release uses the actual backend code and follows its DOWN exactly once",
+                listOf(down, release), attempt.shellCommands)
+        }
+    }
+
+    @Test fun inputGestureFinishWorkIsCoalescedAndOutstandingLeasesAreBounded() {
+        Fixture().use { f ->
+            f.connect(a)
+            val attempt = f.attempts.single()
+            attempt.listener.ready(); f.queue.drain()
+            val surface = requireNotNull(f.controller.activateControlSurface(f.presentation))
+            val gestures = (0 until 64).map {
+                requireNotNull(f.controller.beginInputGesture(surface))
+            }
+
+            assertNull("a controller cannot retain more than its fixed active-gesture budget",
+                f.controller.beginInputGesture(surface))
+            gestures.forEach(f.controller::finishInputGesture)
+            assertEquals("many gesture finishes occupy only one serialized cleanup event", 1,
+                f.queue.pendingCount)
+            assertFalse(f.controller.isInputGestureActive(gestures.first()))
+            assertNull("finished leases stay bounded until their FIFO retirement runs",
+                f.controller.beginInputGesture(surface))
+
+            f.queue.drain()
+            assertEquals(0, f.queue.pendingCount)
+            assertNotNull("retiring finished leases returns their bounded capacity",
+                f.controller.beginInputGesture(surface))
+        }
+    }
+
+    @Test fun coalescedGestureRetirementStaysBehindEachGesturesAlreadyAdmittedInput() {
+        Fixture().use { f ->
+            f.connect(a)
+            val attempt = f.attempts.single()
+            attempt.listener.ready(); f.queue.drain()
+            val surface = requireNotNull(f.controller.activateControlSurface(f.presentation))
+            val first = requireNotNull(f.controller.beginInputGesture(surface))
+            val second = requireNotNull(f.controller.beginInputGesture(surface))
+
+            f.controller.finishInputGesture(first)
+            assertTrue(f.controller.executeInputCommand("xdotool mousemove_relative -- 1 2", second))
+            f.controller.finishInputGesture(second)
+            assertEquals("a second completion is coalesced rather than posted ahead of input", 2,
+                f.queue.pendingCount)
+            f.queue.drain()
+
+            assertEquals("the earlier cleanup cannot retire a later gesture before its admitted command",
+                listOf("xdotool mousemove_relative -- 1 2"), attempt.shellCommands)
+            assertFalse(f.controller.isInputGestureActive(first))
+            assertFalse(f.controller.isInputGestureActive(second))
+            assertEquals(0, f.queue.pendingCount)
+        }
+    }
+
+    @Test fun explicitDisconnectReleasesTrackedButtonsBeforeTheOldAttemptCloseBarrier() {
+        Fixture().use { f ->
+            f.connect(a)
+            val attempt = f.attempts.single()
+            attempt.listener.ready(); f.queue.drain()
+            val surface = requireNotNull(f.controller.activateControlSurface(f.presentation))
+            val gesture = requireNotNull(f.controller.beginInputGesture(surface))
+            assertTrue(f.controller.executeInputCommand("xdotool mousedown 1", gesture))
+            f.queue.drain()
+
+            f.controller.disconnect()
+            f.queue.drain()
+            assertEquals(listOf("xdotool mousedown 1", "xdotool mouseup 1"), attempt.shellCommands)
+            assertEquals("release is attempted synchronously before transport cancellation", 2,
+                attempt.shellCommandCountAtClose)
+            assertFalse(f.controller.isControlSurfaceActive(surface))
+
+            attempt.closed(null); f.queue.drain()
+            f.connect(b)
+            val replacement = f.attempts.last()
+            replacement.listener.ready(); f.queue.drain()
+            assertTrue("old held input must never replay on the replacement owner",
+                replacement.shellCommands.isEmpty())
+        }
+    }
+
+    @Test fun delayedRetirementReleasesOnlyItsSurfaceAndLateCancelCannotReleaseNewSurfaceHold() {
+        val queue = BlockingPostQueue()
+        val interactions = SessionInteractions(Executor { it.run() })
+        val screen = Fixture.Screen()
+        val presentation = interactions.attach(screen)
+        val attempt = Attempt(interactions)
+        val controller = SessionController({ attempt }, queue)
+        try {
+            controller.connectIfNeeded(a); queue.drain()
+            attempt.listener.ready(); queue.drain()
+            val surfaceA = requireNotNull(controller.activateControlSurface(presentation))
+            val gestureA = requireNotNull(controller.beginInputGesture(surfaceA))
+            assertTrue(controller.executeInputCommand("xdotool mousedown 1", gestureA))
+            queue.drain()
+
+            queue.blockNextPost.set(true)
+            val cancelThread = Thread({ controller.cancelInputGesture(gestureA) }, "blocked-input-retirement")
+            cancelThread.start()
+            assertTrue("cancel did not claim its coalesced cleanup post", queue.postEntered.await(2, TimeUnit.SECONDS))
+
+            // A's scheduler owns the cleanup flag but has not enqueued its work. B's DOWN is
+            // therefore ordered before A's cleanup event, reproducing the cross-surface race.
+            val surfaceB = requireNotNull(controller.activateControlSurface(presentation))
+            val gestureB = requireNotNull(controller.beginInputGesture(surfaceB))
+            assertTrue(controller.executeInputCommand("xdotool mousedown 3", gestureB))
+            controller.cancelInputGesture(gestureA) // A late duplicate must not affect B.
+
+            queue.allowPost.countDown()
+            cancelThread.join(2_000)
+            assertFalse("cleanup enqueue did not unblock", cancelThread.isAlive)
+            queue.drain()
+            assertEquals("retiring A must not clear or release B's already-dispatched hold",
+                listOf("xdotool mousedown 1", "xdotool mousedown 3", "xdotool mouseup 1"),
+                attempt.shellCommands)
+
+            controller.deactivateControlSurface(surfaceB)
+            queue.drain()
+            assertEquals("B's own surface retirement releases its hold exactly once",
+                listOf("xdotool mousedown 1", "xdotool mousedown 3", "xdotool mouseup 1", "xdotool mouseup 3"),
+                attempt.shellCommands)
+        } finally {
+            queue.allowPost.countDown()
+            controller.close(); queue.drain()
+            if (attempt.closes > 0) { attempt.closed(null); queue.drain() }
+            interactions.detach()
+        }
+    }
+
+    @Test fun normalGestureFinishKeepsItsUpOrderedAndDoesNotRestoreAfterNewSurfaceAttach() {
+        Fixture().use { f ->
+            f.connect(a)
+            val old = f.attempts.single()
+            old.listener.ready(); f.queue.drain()
+            val firstSurface = requireNotNull(f.controller.activateControlSurface(f.presentation))
+            val oldGesture = requireNotNull(f.controller.beginInputGesture(firstSurface))
+            assertTrue(f.controller.executeInputCommand("xdotool mousedown 3", oldGesture))
+            f.queue.drain()
+            assertTrue(f.controller.executeInputCommand("xdotool mouseup 3", oldGesture))
+            f.controller.finishInputGesture(oldGesture)
+            f.queue.drain()
+            assertEquals(listOf("xdotool mousedown 3", "xdotool mouseup 3"), old.shellCommands)
+
+            f.controller.deactivateControlSurface(firstSurface)
+            f.controller.deactivateControlSurface(firstSurface)
+            f.queue.drain()
+            f.controller.connectIfNeeded(b); f.queue.drain()
+            old.closed(null); f.queue.drain()
+            val fresh = f.attempts.last()
+            fresh.listener.ready(); f.queue.drain()
+            val secondSurface = requireNotNull(f.controller.activateControlSurface(f.presentation))
+            val freshGesture = requireNotNull(f.controller.beginInputGesture(secondSurface))
+
+            assertFalse("old gesture movement cannot borrow a replacement host's active surface",
+                f.controller.executeInputCommand("xdotool mousemove_relative -- 99 99", oldGesture))
+            assertFalse("the old host's held button must not be released on the new session",
+                fresh.shellCommands.any { it.contains("mouseup") })
+            assertTrue(f.controller.executeInputCommand("xdotool mousemove_relative -- 1 2", freshGesture))
+            f.queue.drain()
+            assertEquals(listOf("xdotool mousemove_relative -- 1 2"), fresh.shellCommands)
+        }
+    }
+
+    @Test fun rejectedReleaseClearsLedgerAndCannotReplayOnTheNextSurface() {
+        Fixture().use { f ->
+            f.connect(a)
+            val attempt = f.attempts.single()
+            attempt.listener.ready(); f.queue.drain()
+            val surface = requireNotNull(f.controller.activateControlSurface(f.presentation))
+            val gesture = requireNotNull(f.controller.beginInputGesture(surface))
+            assertTrue(f.controller.executeInputCommand("xdotool mousedown 2", gesture))
+            f.queue.drain()
+            attempt.acceptShell = false
+            f.controller.deactivateControlSurface(surface)
+            f.queue.drain()
+            attempt.acceptShell = true
+            val nextSurface = requireNotNull(f.controller.activateControlSurface(f.presentation))
+            assertNotNull(f.controller.beginInputGesture(nextSurface))
+            f.controller.deactivateControlSurface(nextSurface)
+            f.queue.drain()
+
+            assertEquals("a failed best-effort release is not replayed later", 1, attempt.shellCommands.size)
         }
     }
 

@@ -52,7 +52,7 @@ class LoggingPrivacyAndroidTest {
                         com.stripe1.xmouse.session.SessionForegroundService.hasRetainedSession(activity))
 
                     val adapter = CustomKeyboardButtonAdapter(activity, emptyList())
-                    adapter.execCommand("type", MainActivity.doTool, MainActivity.commandTransport)
+                    adapter.execCommand("type", activity.doTool, activity.commandTransport)
 
                     activity.findViewById<EditText>(R.id.keyboard_input).setText(typedSentinel)
                     val malformedLayout = "title<xmousesep>synthetic<xmousesep>$errorSentinel<xmousesep>#ffffff"

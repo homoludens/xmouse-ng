@@ -6,8 +6,14 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.view.MotionEvent;
 import android.view.View;
+import com.stripe1.xmouse.IDoTool;
+import com.stripe1.xmouse.session.InputGestureToken;
 
 public class MyJSView extends View {
+    /** Preserve this view's originating command proxy across screen recreation. */
+    private final MainActivity activity;
+    private InputGestureToken gestureToken;
+    private IDoTool gestureTool;
     private Paint base;
     private Paint dead_zone;
     private Paint hat;
@@ -30,6 +36,7 @@ public class MyJSView extends View {
 
     public MyJSView(Context c) {
         super(c);
+        activity = (MainActivity) c;
         
         base = new Paint();
         base.setAntiAlias(true);
@@ -83,44 +90,69 @@ public class MyJSView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        switch (event.getAction()) {
+        switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
+                if (gestureToken != null) activity.cancelControlInputGesture(gestureToken);
+                gestureToken = activity.beginControlInputGesture();
+                gestureTool = activity.createDoToolForInput(gestureToken);
+                if (gestureToken == null || gestureTool == null) {
+                    resetForInactiveSurface();
+                    return true;
+                }
+                moveHatTo(event.getX(), event.getY());
+                break;
             case MotionEvent.ACTION_MOVE:
-                int ex= (int) event.getX();
-                int ey= (int) event.getY();
-
-                int Mx=cx+cs/2;
-                int mx=cx-cs/2;
-                int My=cy+cs/2;
-                int my=cy-cs/2;
-                
-                int x=ex>Mx?Mx:ex<mx?mx:ex;
-                int y=ey>My?My:ey<my?my:ey;
-
-
-                int Mdx=cx+dzs/2;
-                int mdx=cx-dzs/2;
-                int Mdy=cy+dzs/2;
-                int mdy=cy-dzs/2;
-
-                boolean dz=x<Mdx&&x>mdx&&y<Mdy&&y>mdy;
-                hx=dz?cx:x;
-                hy=dz?cy:y;
-
-                jsmove();
-                invalidate();
-                
+                if (!hasLiveGesture()) return true;
+                moveHatTo(event.getX(), event.getY());
                 break;
             case MotionEvent.ACTION_UP:
-                hx=cx;
-                hy=cy;
-
-                invalidate();
-
+                if (hasLiveGesture()) activity.finishControlInputGesture(gestureToken);
+                resetForInactiveSurface();
+                break;
+            case MotionEvent.ACTION_CANCEL:
+                if (gestureToken != null) activity.cancelControlInputGesture(gestureToken);
+                resetForInactiveSurface();
                 break;
         }
 
         return true;
+    }
+
+    private boolean hasLiveGesture() {
+        if (gestureToken != null && activity.isControlInputTokenActive(gestureToken)) return true;
+        resetForInactiveSurface();
+        return false;
+    }
+
+    private void moveHatTo(float eventX, float eventY) {
+        int ex = (int) eventX;
+        int ey = (int) eventY;
+        int maxX = cx + cs / 2;
+        int minX = cx - cs / 2;
+        int maxY = cy + cs / 2;
+        int minY = cy - cs / 2;
+        int x = ex > maxX ? maxX : ex < minX ? minX : ex;
+        int y = ey > maxY ? maxY : ey < minY ? minY : ey;
+        int maxDeadX = cx + dzs / 2;
+        int minDeadX = cx - dzs / 2;
+        int maxDeadY = cy + dzs / 2;
+        int minDeadY = cy - dzs / 2;
+        boolean deadZone = x < maxDeadX && x > minDeadX && y < maxDeadY && y > minDeadY;
+        hx = deadZone ? cx : x;
+        hy = deadZone ? cy : y;
+        jsmove();
+        invalidate();
+    }
+
+    /** Cancellation/lifecycle loss requires a new DOWN and discards fractional old movement. */
+    public void resetForInactiveSurface() {
+        gestureToken = null;
+        gestureTool = null;
+        hx = cx;
+        hy = cy;
+        reX = 0;
+        reY = 0;
+        invalidate();
     }
 
 
@@ -136,6 +168,6 @@ public class MyJSView extends View {
         dx -= reX;
         dy -= reY;
 
-        MainActivity.doTool.mouseMoveRelative(dx, dy);
+        if (gestureTool != null) gestureTool.mouseMoveRelative(dx, dy);
     }
 }

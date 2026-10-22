@@ -140,6 +140,29 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
             return true
         }
 
+        override fun executeInputCommand(
+            command: String,
+            presentation: SessionInteractions.PresentationToken?,
+            isCurrent: BooleanSupplier,
+            onWriteStarting: Runnable,
+        ): Boolean {
+            if (!live.get() || !isCurrent.asBoolean) return false
+            val currentAtTransport = BooleanSupplier { live.get() && isCurrent.asBoolean }
+            if (!transport.executeInputCommand(command, currentAtTransport, onWriteStarting)) return false
+            if (presentation != null) interactions.recentCommand(commandResults, presentation, command)
+            return true
+        }
+
+        override fun executeInputRelease(
+            command: String,
+            shouldRelease: BooleanSupplier,
+            onWriteStarting: Runnable,
+        ): Boolean {
+            if (!live.get()) return false
+            val currentRelease = BooleanSupplier { live.get() && shouldRelease.asBoolean }
+            return transport.executeInputRelease(command, currentRelease, onWriteStarting)
+        }
+
         override fun executeExecCommand(
             command: String,
             presentation: SessionInteractions.PresentationToken,

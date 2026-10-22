@@ -216,6 +216,20 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
     public boolean send(String command, Callback<Void> callback) {
         return command != null && submit(callback, limits.write, Failure.WRITE_TIMEOUT, scope -> { write(scope, command); return null; });
     }
+    /** Input-only write with a capability rechecked after coordinator queueing and at provider write. */
+    public boolean executeInputCommand(String command, java.util.function.BooleanSupplier isCurrent,
+                                       Runnable onWriteStarting) {
+        return command != null && isCurrent != null && onWriteStarting != null &&
+                submit(null, limits.write, Failure.WRITE_TIMEOUT,
+                        scope -> { write(scope, command, isCurrent, onWriteStarting); return null; }, isCurrent);
+    }
+    /** Best-effort old-attempt release. Its hold predicate is checked in the coordinator and at write. */
+    public boolean executeInputRelease(String command, java.util.function.BooleanSupplier shouldRelease,
+                                      Runnable onWriteStarting) {
+        return command != null && shouldRelease != null && onWriteStarting != null &&
+                submit(null, limits.write, Failure.WRITE_TIMEOUT,
+                        scope -> { write(scope, command, shouldRelease, onWriteStarting); return null; }, shouldRelease);
+    }
     public boolean exec(String command, Callback<String> callback) {
         if (command == null || command.isEmpty()) return false;
         return submit(callback, limits.exec, Failure.EXEC_TIMEOUT, scope -> {
@@ -339,6 +353,10 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
     }
     private interface Work<T> { T run(Scope scope) throws Exception; }
     private <T> boolean submit(Callback<T> callback, int budget, Failure timeout, Work<T> action) {
+        return submit(callback, budget, timeout, action, null);
+    }
+    private <T> boolean submit(Callback<T> callback, int budget, Failure timeout, Work<T> action,
+                               java.util.function.BooleanSupplier dispatchGuard) {
         synchronized (submission) {
             if (!ready || disposed || queued >= 128) return false;
             Scope scope = owner; queued++;
@@ -346,11 +364,16 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
             worker.execute(() -> {
                 try {
                     if (!scope.current()) return;
+                    // An input may have been queued while a script/provider operation owned this
+                    // coordinator. Revoke it here without failing or disconnecting the SSH session.
+                    if (dispatchGuard != null && !isAllowed(dispatchGuard)) return;
                     long remaining = deadline - runtime.clock.getAsLong();
                     if (remaining <= 0) throw new Outcome(timeout);
                     T value = await(scope, runtime.operations, (int) Math.max(1, TimeUnit.NANOSECONDS.toMillis(remaining)), timeout,
                             () -> { healthy(scope); return action.run(scope); });
                     synchronized (submission) { if (scope.current() && callback != null) callback.success(value); }
+                } catch (InputRevoked ignored) {
+                    // Surface cancellation is not a transport failure and must not close the session.
                 } catch (Exception failure) {
                     lose(scope, failure instanceof Outcome ? ((Outcome) failure).failure : Failure.IO, callback);
                 } finally { synchronized (submission) { queued--; } }
@@ -431,8 +454,21 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
         if (scope.shell.isClosed()) throw new Outcome(Failure.CHANNEL_CLOSED);
     }
     private void write(Scope scope, String command) throws Exception {
-        check(scope); scope.input.write((command + "\r\n").getBytes(StandardCharsets.UTF_8));
+        write(scope, command, null, null);
+    }
+    private void write(Scope scope, String command, java.util.function.BooleanSupplier guard,
+                       Runnable onWriteStarting) throws Exception {
+        byte[] bytes = (command + "\r\n").getBytes(StandardCharsets.UTF_8);
+        check(scope);
+        // Keep this as the final admission check before entering the provider's write call. Bytes
+        // already in that call cannot be recalled, but still-queued commands fail closed here.
+        if (guard != null && !isAllowed(guard)) throw new InputRevoked();
+        if (onWriteStarting != null) onWriteStarting.run();
+        scope.input.write(bytes);
         check(scope); scope.input.flush();
+    }
+    private static boolean isAllowed(java.util.function.BooleanSupplier guard) {
+        try { return guard.getAsBoolean(); } catch (RuntimeException ignored) { return false; }
     }
     private interface Close { void run() throws Exception; }
     private static boolean socketTimedOut(Throwable failure) {
@@ -517,6 +553,7 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
         final Failure failure;
         Outcome(Failure failure) { this.failure = failure; }
     }
+    private static final class InputRevoked extends Exception { }
     /** Shared byte/work cap across both concurrently delivered streams. Excess is discarded until the
      * coordinator observes the flag and aborts; partial output is NEVER reported as successful output. */
     private static final class Capture {

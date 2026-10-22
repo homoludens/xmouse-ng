@@ -6,6 +6,7 @@ import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.MotionEvent;
 import android.widget.ArrayAdapter;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
@@ -14,6 +15,7 @@ import android.widget.Toast;
 import com.stripe1.xmouse.SpanVariableGridView.LayoutParams;
 
 import java.util.List;
+import java.util.WeakHashMap;
 
 public class CustomKeyboardButtonAdapter extends ArrayAdapter<CustomKeyboardButton> implements SpanVariableGridView.CalculateChildrenPosition {
 
@@ -27,6 +29,7 @@ public class CustomKeyboardButtonAdapter extends ArrayAdapter<CustomKeyboardButt
 
 	private Context mContext;
 	private LayoutInflater mLayoutInflater = null;
+	private final WeakHashMap<View, com.stripe1.xmouse.session.InputGestureToken> inputGestures = new WeakHashMap<>();
 
 	/*private View.OnClickListener onRemoveItemListener = new View.OnClickListener() {
 
@@ -109,10 +112,47 @@ public class CustomKeyboardButtonAdapter extends ArrayAdapter<CustomKeyboardButt
 
 			@Override
 			public void onClick(View v) {
-				execCommand(item.getmCommand(), MainActivity.doTool, MainActivity.commandTransport);
+				if (mContext instanceof MainActivity) {
+					MainActivity activity = (MainActivity) mContext;
+					com.stripe1.xmouse.session.InputGestureToken gesture = inputGestures.remove(v);
+					Object token = gesture != null ? gesture : activity.activeControlInputToken();
+					if (!activity.isControlInputTokenActive(token)) {
+						if (gesture != null) activity.cancelControlInputGesture(gesture);
+						return;
+					}
+					IDoTool inputTool = activity.createDoToolForInput(token);
+					CommandTransport inputTransport = activity.commandTransportForInput(token);
+					if (inputTool != null && inputTransport != null) {
+						execCommand(item.getmCommand(), inputTool, inputTransport);
+					}
+					if (gesture != null) activity.finishControlInputGesture(gesture);
+				}
 			}
 
 
+		});
+		convertView.setOnTouchListener((view, event) -> {
+			if (!(mContext instanceof MainActivity)) return false;
+			MainActivity activity = (MainActivity) mContext;
+			switch (event.getActionMasked()) {
+				case MotionEvent.ACTION_DOWN:
+					com.stripe1.xmouse.session.InputGestureToken old = inputGestures.remove(view);
+					if (old != null) activity.cancelControlInputGesture(old);
+					com.stripe1.xmouse.session.InputGestureToken gesture = activity.beginControlInputGesture();
+					if (gesture != null) inputGestures.put(view, gesture);
+					break;
+				case MotionEvent.ACTION_CANCEL:
+					com.stripe1.xmouse.session.InputGestureToken cancelled = inputGestures.remove(view);
+					if (cancelled != null) activity.cancelControlInputGesture(cancelled);
+					break;
+				case MotionEvent.ACTION_UP:
+					view.post(() -> {
+						com.stripe1.xmouse.session.InputGestureToken unfinished = inputGestures.remove(view);
+						if (unfinished != null) activity.finishControlInputGesture(unfinished);
+					});
+					break;
+			}
+			return false;
 		});
 
 
