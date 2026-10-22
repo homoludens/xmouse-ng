@@ -299,6 +299,7 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
 }
 
 internal fun SshTransport.Failure.toConnectionFailure(): ConnectionFailure = when (this) {
+    SshTransport.Failure.PERMISSION -> ConnectionFailure.Permission(ConnectionFailure.PermissionReason.REVOKED)
     SshTransport.Failure.RESOLUTION -> ConnectionFailure.Resolution(ConnectionFailure.ResolutionReason.NOT_FOUND)
     SshTransport.Failure.RESOLUTION_TIMEOUT -> ConnectionFailure.Resolution(ConnectionFailure.ResolutionReason.TIMED_OUT)
     SshTransport.Failure.PRIVATE_KEY -> ConnectionFailure.Authentication(ConnectionFailure.AuthenticationReason.KEY_UNAVAILABLE)

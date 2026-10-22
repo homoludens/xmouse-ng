@@ -39,7 +39,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class SshTransport implements CommandTransport, AutoCloseable {
     public enum Operation { CONNECT, WRITE, EXEC, SCP, DISCONNECT, TRUST_REPLACEMENT, MONITOR }
     public enum Failure { CONNECTION, PRIVATE_KEY, IO, CLOSED, HOST_TRUST, HOST_MISMATCH, TRUST_STORAGE,
-        RESOLUTION, RESOLUTION_TIMEOUT, CONNECTION_TIMEOUT, CHANNEL_TIMEOUT, WRITE_TIMEOUT,
+        PERMISSION, RESOLUTION, RESOLUTION_TIMEOUT, CONNECTION_TIMEOUT, CHANNEL_TIMEOUT, WRITE_TIMEOUT,
         EXEC_TIMEOUT, SCP_TIMEOUT, CLEANUP_TIMEOUT, OUTPUT_LIMIT, SESSION_LOST, CHANNEL_CLOSED, CAPACITY }
     public interface Callback<T> {
         void success(T value);
@@ -92,6 +92,7 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
             if (disposed) { authentication.close(); callback.failure(Failure.CLOSED); return; }
             invalidate();
             long token = generation;
+            long deadline = runtime.clock.getAsLong() + TimeUnit.MILLISECONDS.toNanos(limits.connection);
             connecting = true;
             worker.execute(() -> {
                 Scope scope;
@@ -100,7 +101,7 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
                     if (!runtime.owners.tryAcquire()) {
                         authentication.close(); connecting = false; callback.failure(Failure.CAPACITY); return;
                     }
-                    scope = new Scope(token);
+                    scope = new Scope(token, deadline);
                     retained.add(scope);
                     owner = scope;
                 }
@@ -109,9 +110,12 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
                 AtomicBoolean authenticationClaimed = new AtomicBoolean();
                 try {
                     progress(scope, Progress.RESOLVING);
-                    SshConnectionRequest resolved = await(scope, runtime.resolution, limits.resolution,
-                            Failure.RESOLUTION_TIMEOUT, () -> backend.resolve(request));
-                    scope.session = await(scope, runtime.operations, limits.preparation, Failure.CONNECTION_TIMEOUT, () -> {
+                    SshConnectionRequest resolved = await(scope, runtime.resolution,
+                            attemptBudget(scope, limits.resolution, Failure.RESOLUTION_TIMEOUT),
+                            Failure.RESOLUTION_TIMEOUT, () -> backend.resolve(request, () -> scope.current()));
+                    scope.session = await(scope, runtime.operations,
+                            attemptBudget(scope, limits.preparation, Failure.CONNECTION_TIMEOUT),
+                            Failure.CONNECTION_TIMEOUT, () -> {
                         if (!authenticationClaimed.compareAndSet(false, true)) throw new Outcome(Failure.CLOSED);
                         try {
                             SshBackend.Session created = backend.create(resolved, authentication, () -> scope.trustCurrent());
@@ -120,15 +124,19 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
                             return created;
                         } finally { authentication.close(); }
                     });
-                    await(scope, runtime.operations, limits.connection, Failure.CONNECTION_TIMEOUT, () -> {
+                    await(scope, runtime.operations,
+                            attemptBudget(scope, limits.connection, Failure.CONNECTION_TIMEOUT),
+                            Failure.CONNECTION_TIMEOUT, () -> {
                         progress(scope, Progress.CONNECTING);
                         scope.session.configure(limits);
-                        scope.session.connect(limits.connection);
+                        scope.session.connect(attemptBudget(scope, limits.connection, Failure.CONNECTION_TIMEOUT));
                         check(scope);
                         scope.session.clearAuthentication();
                         return null;
                     });
-                    await(scope, runtime.operations, limits.channel, Failure.CHANNEL_TIMEOUT, () -> {
+                    await(scope, runtime.operations,
+                            attemptBudget(scope, limits.channel, Failure.CHANNEL_TIMEOUT),
+                            Failure.CHANNEL_TIMEOUT, () -> {
                         SshBackend.Channel shell = scope.session.openChannel(request.shell.isEmpty() ? "shell" : "exec");
                         scope.add(shell::close);
                         scope.shell = shell;
@@ -141,11 +149,15 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
                         shell.connect(limits.channel);
                         return null;
                     });
-                    if (request.initialCommand != null) await(scope, runtime.operations, limits.write, Failure.WRITE_TIMEOUT,
+                    if (request.initialCommand != null) await(scope, runtime.operations,
+                            attemptBudget(scope, limits.write, Failure.WRITE_TIMEOUT), Failure.WRITE_TIMEOUT,
                             () -> { write(scope, request.initialCommand); return null; });
-                    await(scope, runtime.operations, limits.health, Failure.CONNECTION_TIMEOUT, () -> { healthy(scope); return null; });
+                    await(scope, runtime.operations,
+                            attemptBudget(scope, limits.health, Failure.CONNECTION_TIMEOUT),
+                            Failure.CONNECTION_TIMEOUT, () -> { healthy(scope); return null; });
                     synchronized (submission) {
                         check(scope);
+                        if (scope.deadline - runtime.clock.getAsLong() <= 0) throw new Outcome(Failure.CONNECTION_TIMEOUT);
                         ready = true; connecting = false;
                         scope.monitor = runtime.scheduler.scheduleWithFixedDelay(() -> monitor(scope),
                                 limits.healthInterval, limits.healthInterval, TimeUnit.MILLISECONDS);
@@ -159,8 +171,14 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
                     }
                 } catch (PrivateKeyImportException ignored) { failure = Failure.PRIVATE_KEY; }
                 catch (Outcome outcome) { failure = outcome.failure; }
+                catch (SshAddressResolver.AccessDeniedException ignored) { failure = Failure.PERMISSION; }
+                catch (SshAddressResolver.NetworkChangedException ignored) { failure = Failure.RESOLUTION; }
                 catch (java.net.UnknownHostException ignored) { failure = Failure.RESOLUTION; }
-                catch (Exception rejected) { failure = socketTimedOut(rejected) ? Failure.CONNECTION_TIMEOUT : Failure.CONNECTION; }
+                catch (Exception rejected) {
+                    Failure resolverFailure = resolverFailure(rejected);
+                    failure = resolverFailure != null ? resolverFailure :
+                            socketTimedOut(rejected) ? Failure.CONNECTION_TIMEOUT : Failure.CONNECTION;
+                }
                 finally {
                     if (authenticationClaimed.compareAndSet(false, true)) authentication.close();
                     if (failure != null || token != generation) scope.close();
@@ -448,6 +466,12 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
         } finally { if (active == future) active = null; }
     }
     private void check(Scope scope) throws Outcome { if (!scope.current()) throw new Outcome(Failure.CLOSED); }
+    private int attemptBudget(Scope scope, int configured, Failure expired) throws Outcome {
+        long remaining = scope.deadline - runtime.clock.getAsLong();
+        if (remaining <= 0) throw new Outcome(expired);
+        long millis = TimeUnit.NANOSECONDS.toMillis(remaining);
+        return (int) Math.min(configured, Math.max(1, millis));
+    }
     private void healthy(Scope scope) throws Exception {
         check(scope);
         if (!scope.session.isConnected()) throw new Outcome(Failure.SESSION_LOST);
@@ -478,6 +502,14 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
         }
         return false;
     }
+    private static Failure resolverFailure(Throwable failure) {
+        // JSch wraps exceptions thrown by SocketFactory.createSocket; retain typed route failures.
+        for (int depth = 0; failure != null && depth < 8; depth++, failure = failure.getCause()) {
+            if (failure instanceof SshAddressResolver.AccessDeniedException) return Failure.PERMISSION;
+            if (failure instanceof SshAddressResolver.NetworkChangedException) return Failure.RESOLUTION;
+        }
+        return null;
+    }
     private final class Slot {
         final Scope scope; final Close action;
         final AtomicBoolean claimed = new AtomicBoolean();
@@ -497,6 +529,7 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
     }
     private final class Scope {
         final long token;
+        final long deadline;
         final List<Slot> slots = new ArrayList<>();
         final List<Slot> closingSlots = new ArrayList<>();
         final AtomicBoolean polling = new AtomicBoolean();
@@ -504,7 +537,7 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
         int inFlight; boolean released;
         SshBackend.Session session; SshBackend.Channel shell; OutputStream input;
         volatile ScheduledFuture<?> monitor;
-        Scope(long token) { this.token = token; }
+        Scope(long token, long deadline) { this.token = token; this.deadline = deadline; }
         boolean current() { return token == generation && !closing && !expired && !disposed; }
         boolean trustCurrent() { return token == generation && !expired && !disposed; }
         synchronized Slot add(Close action) {

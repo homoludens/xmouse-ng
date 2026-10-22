@@ -4,6 +4,7 @@ import com.stripe1.xmouse.connection.Endpoint
 import com.stripe1.xmouse.connection.EndpointHost
 import com.stripe1.xmouse.connection.EndpointLocator
 import com.stripe1.xmouse.transport.*
+import org.apache.sshd.common.config.keys.PublicKeyEntry
 import org.apache.sshd.common.channel.Channel
 import org.apache.sshd.common.channel.ChannelListener
 import org.apache.sshd.common.keyprovider.KeyPairProvider
@@ -22,6 +23,8 @@ import org.apache.sshd.server.command.Command
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.*
+import java.net.Inet6Address
+import java.net.InetAddress
 import java.nio.file.Files
 import java.security.KeyPair
 import java.security.KeyPairGenerator
@@ -29,10 +32,13 @@ import java.security.spec.ECGenParameterSpec
 import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import java.util.function.BooleanSupplier
 
 /** Actual maintained JSch against an in-process synthetic server, never sshd/user accounts/real hosts. */
 class JschHostTrustIntegrationTest {
-    private class Server(address: String = "127.0.0.1", port: Int = 0, key: KeyPair = newKey()) : AutoCloseable {
+    private class Server(address: String = "127.0.0.1", port: Int = 0, val key: KeyPair = newKey(),
+                         private val acceptPassword: Boolean = true) : AutoCloseable {
         val credentialAuth = AtomicInteger()
         val authenticationRequests = AtomicInteger()
         val channelRequests = AtomicInteger()
@@ -50,7 +56,10 @@ class JschHostTrustIntegrationTest {
                     }
                 }
             }, ServerConnectionServiceFactory.INSTANCE)
-            setPasswordAuthenticator { user, password, _ -> credentialAuth.incrementAndGet(); onCredential(); user == "NOT_REAL_user" && password == "NOT_REAL_password" }
+            setPasswordAuthenticator { user, password, _ ->
+                credentialAuth.incrementAndGet(); onCredential()
+                acceptPassword && user == "NOT_REAL_user" && password == "NOT_REAL_password"
+            }
             setPublickeyAuthenticator { _, _, _ -> credentialAuth.incrementAndGet(); false }
             addChannelListener(object : ChannelListener {
                 override fun channelInitialized(channel: Channel) { channelRequests.incrementAndGet() }
@@ -87,13 +96,14 @@ class JschHostTrustIntegrationTest {
         override fun mismatch(mismatch: HostKeyMismatch) { this.mismatch = mismatch }
         fun await() { assertTrue(done.await(10, TimeUnit.SECONDS)) }
     }
-    private class Fixture(timeout: Long = 5000, io: TrustFileIo = TrustFileIo()) : AutoCloseable, HostTrustRequests.Listener {
+    private class Fixture(timeout: Long = 5000, io: TrustFileIo = TrustFileIo(),
+                          resolver: SshAddressResolver = SshAddressResolver.system()) : AutoCloseable, HostTrustRequests.Listener {
         val directory = Files.createTempDirectory("xmouse-actual-jsch-trust-").toFile()
         val repo = HostKeyRepository(directory, io)
         val prompts = LinkedBlockingQueue<HostTrustRequests.Request>()
         val requests = HostTrustRequests(repo, Executor { it.run() }, timeout).also { it.attach(this) }
         val worker = SshTransport.newWorker()
-        val transport = SshTransport(JschSshBackend(HostTrustPolicy(requests)), worker)
+        val transport = SshTransport(JschSshBackend(HostTrustPolicy(requests), resolver), worker)
         override fun show(request: HostTrustRequests.Request) { prompts.add(request) }
         override fun dismiss(request: HostTrustRequests.Request) { }
         fun prompt() = requireNotNull(prompts.poll(10, TimeUnit.SECONDS))
@@ -116,6 +126,21 @@ class JschHostTrustIntegrationTest {
         assertEquals(0, server.authenticationRequests.get())
         assertEquals(0, server.credentialAuth.get()); assertEquals(0, server.channelRequests.get()); assertEquals(0, server.commandRequests.get())
     }
+
+    private fun approvedKey(key: KeyPair): ApprovedHostKey {
+        val encoded = PublicKeyEntry.toString(key.public).substringAfter(' ')
+        return ApprovedHostKey.parse(java.util.Base64.getDecoder().decode(encoded))
+    }
+
+    private fun resolver(addresses: AtomicReference<List<InetAddress>>, lookups: AtomicInteger) =
+        SshAddressResolver { _, current ->
+            if (!current.asBoolean) throw java.util.concurrent.CancellationException()
+            lookups.incrementAndGet()
+            val snapshot = addresses.get()
+            object : SshAddressResolver.Resolution {
+                override fun candidates(): List<InetAddress> = snapshot
+            }
+        }
 
     @Test fun actualJschWaitsForDurableExplicitApprovalBeforePasswordAuthenticationAndInitialCommand() {
         Server().use { server -> Fixture().use { f ->
@@ -170,6 +195,101 @@ class JschHostTrustIntegrationTest {
                 noAuthenticationOrCommands(changedKey); assertTrue(f.prompts.isEmpty())
             }
         } }
+    }
+
+    @Test fun actualJschFallsBackAfterTcpFailureAndResolvesAgainAfterNetworkChange() {
+        val key = Server.newKey()
+        val addresses = AtomicReference(listOf(InetAddress.getByName("127.0.0.254"), InetAddress.getByName("127.0.0.1")))
+        val lookups = AtomicInteger()
+        Server(key = key).use { first ->
+            Server("127.0.0.2", first.ssh.port, key).use { moved ->
+                Fixture(resolver = resolver(addresses, lookups)).use { f ->
+                    // Keep the scope object itself: normalization/resolution must not strip its interface ID.
+                    val scoped = Inet6Address.getByAddress(null, InetAddress.getByName("fe80::1").address, 7)
+                    val scopedRequest = SshConnectionRequest(Endpoint.manual("desktop.local", first.ssh.port),
+                        "desktop.local", "", null).resolved(scoped)
+                    assertEquals(7, (scopedRequest.resolvedAddress as Inet6Address).scopeId)
+                    val bounded = (1..12).map { octet ->
+                        InetAddress.getByAddress(byteArrayOf(192.toByte(), 0, 2, octet.toByte()))
+                    }
+                    assertEquals(SshAddressResolver.MAX_CANDIDATES,
+                        scopedRequest.resolved(bounded).resolvedAddresses.size)
+
+                    val initial = f.connect(first)
+                    f.prompt().accept() // The first refused TCP candidate did not start another SSH identity flow.
+                    initial.await(); assertNull(initial.failure)
+                    assertEquals(1, first.credentialAuth.get())
+                    val stopped = Result(); f.transport.disconnect(stopped); stopped.await(); assertNull(stopped.failure)
+
+                    // A subsequent attempt sees the moved host's fresh answer while trust stays keyed to desktop.local.
+                    addresses.set(listOf(InetAddress.getByName("127.0.0.2")))
+                    val next = f.connect(moved, address = "127.0.0.2")
+                    next.await(); assertNull(next.failure)
+                    assertEquals(2, lookups.get())
+                    assertTrue(f.prompts.isEmpty())
+                    assertEquals(1, moved.credentialAuth.get())
+                    val disconnected = Result(); f.transport.disconnect(disconnected); disconnected.await()
+                }
+            }
+        }
+    }
+
+    @Test fun actualJschTrustAuthenticationAndStaleRouteFailuresNeverFallThroughToAnotherAddress() {
+        val trustedKey = Server.newKey()
+        Server("127.0.0.2", 0, trustedKey).use { fallback ->
+            val endpoint = Endpoint.manual("desktop.local", fallback.ssh.port)
+            val addresses = AtomicReference(listOf(InetAddress.getByName("127.0.0.1"), InetAddress.getByName("127.0.0.2")))
+            Fixture(resolver = resolver(addresses, AtomicInteger())).use { f ->
+                f.repo.approve(endpoint.identity, approvedKey(trustedKey), BooleanSupplier { true })
+                Server("127.0.0.1", fallback.ssh.port, Server.newKey()).use { changedKey ->
+                    val mismatch = f.connect(changedKey, endpoint = endpoint)
+                    mismatch.await()
+                    assertEquals(SshTransport.Failure.HOST_MISMATCH, mismatch.failure)
+                    assertNotNull(mismatch.mismatch)
+                    noAuthenticationOrCommands(changedKey)
+                    assertEquals("the trusted second address was not attempted after a key mismatch", 0,
+                        fallback.credentialAuth.get())
+                }
+
+                Server("127.0.0.1", fallback.ssh.port, trustedKey, acceptPassword = false).use { rejectedPassword ->
+                    val authentication = f.connect(rejectedPassword, endpoint = endpoint)
+                    authentication.await()
+                    assertEquals(SshTransport.Failure.CONNECTION, authentication.failure)
+                    assertTrue(rejectedPassword.credentialAuth.get() > 0)
+                    assertEquals("authentication failure is terminal, not an address-retry signal", 0,
+                        fallback.credentialAuth.get())
+                }
+            }
+
+            // A TCP refusal racing route invalidation must report the typed route failure, not
+            // the socket error, and must not continue to the otherwise-valid second candidate.
+            for (permissionRevoked in listOf(false, true)) {
+                val checks = AtomicInteger()
+                val staleResolver = SshAddressResolver { _, current ->
+                    assertTrue(current.asBoolean)
+                    object : SshAddressResolver.Resolution {
+                        override fun candidates(): List<InetAddress> =
+                            listOf(InetAddress.getByName("127.0.0.1"), InetAddress.getByName("127.0.0.2"))
+                        override fun isCurrent(): Boolean = checks.incrementAndGet() < 5
+                        override fun checkCurrent() {
+                            if (!isCurrent()) {
+                                if (permissionRevoked) throw SshAddressResolver.AccessDeniedException()
+                                throw SshAddressResolver.NetworkChangedException()
+                            }
+                        }
+                    }
+                }
+                Fixture(resolver = staleResolver).use { stale ->
+                    stale.repo.approve(endpoint.identity, approvedKey(trustedKey), BooleanSupplier { true })
+                    val staleResult = stale.connect(fallback, endpoint = endpoint)
+                    staleResult.await()
+                    assertEquals("route validity checks=${checks.get()}",
+                        if (permissionRevoked) SshTransport.Failure.PERMISSION else SshTransport.Failure.RESOLUTION,
+                        staleResult.failure)
+                    assertEquals("stale candidates cannot connect to the second address", 0, fallback.credentialAuth.get())
+                }
+            }
+        }
     }
     @Test fun actualJschBlocksChangedKeyAcrossReconnectAlternateAddressAndDiscoveredIdentitiesUntilConfirmedReplacement() {
         val oldKey = Server.newKey()

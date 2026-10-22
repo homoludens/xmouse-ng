@@ -13,8 +13,13 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
-/** JSch/socket adaptation and single-address resolution seam: no Android, UI, logger or trust decision. */
+/** JSch/socket adaptation: Android/network policy is supplied through the attempt-local resolver seam. */
 public final class JschSshBackend implements SshBackend {
     public interface SessionPolicy {
         void configure(JSch jsch, com.jcraft.jsch.Session session, Endpoint endpoint) throws Exception;
@@ -25,12 +30,25 @@ public final class JschSshBackend implements SshBackend {
     }
 
     private final SessionPolicy policy;
+    private final SshAddressResolver resolver;
 
-    public JschSshBackend(SessionPolicy policy) { this.policy = policy; }
+    public JschSshBackend(SessionPolicy policy) { this(policy, SshAddressResolver.system()); }
+
+    public JschSshBackend(SessionPolicy policy, SshAddressResolver resolver) {
+        this.policy = policy;
+        this.resolver = resolver;
+    }
 
     @Override public SshConnectionRequest resolve(SshConnectionRequest request) throws Exception {
-        // Intentionally a single-address seam. Network-aware candidate resolution remains task 6.3.
-        return request.resolved(InetAddress.getByName(request.address));
+        return resolve(request, () -> true);
+    }
+
+    @Override public SshConnectionRequest resolve(SshConnectionRequest request, BooleanSupplier current) throws Exception {
+        if (!current.getAsBoolean()) throw new CancellationException();
+        SshAddressResolver.Resolution result = resolver.resolve(request.address, current);
+        if (!current.getAsBoolean()) throw new CancellationException();
+        result.checkCurrent();
+        return request.resolved(result);
     }
 
     @Override public Session create(SshConnectionRequest request, AuthenticationMaterial authentication) throws Exception {
@@ -43,12 +61,14 @@ public final class JschSshBackend implements SshBackend {
     }
 
     @Override public Session create(SshConnectionRequest request, AuthenticationMaterial authentication,
-                                    java.util.function.BooleanSupplier current) throws Exception {
+                                    BooleanSupplier current) throws Exception {
         JSch jsch = new JSch();
         com.jcraft.jsch.Session session = null;
         try {
             session = jsch.getSession(authentication.getHost().getUser(), request.address, request.endpoint.getPort());
-            policy.configure(jsch, session, request.endpoint, current);
+            BooleanSupplier routeCurrent = () -> current.getAsBoolean() &&
+                    (request.addressResolution == null || request.addressResolution.isCurrent());
+            policy.configure(jsch, session, request.endpoint, routeCurrent);
             if (authentication.getUseKey()) {
                 // All source parsing and JSch identity publication MUST stay inside this boundary.
                 BoundedSshKey.addIdentity(jsch, authentication.getPrivateKey(), authentication.getPassphrase());
@@ -59,7 +79,7 @@ public final class JschSshBackend implements SshBackend {
             }
             session.setX11Host("127.0.0.1");
             session.setX11Port(6000);
-            return new JschSession(jsch, session, request);
+            return new JschSession(jsch, session, request, routeCurrent);
         } catch (Exception failure) {
             if (session != null) session.disconnect();
             try { jsch.removeAllIdentity(); } catch (Exception ignored) { }
@@ -71,25 +91,50 @@ public final class JschSshBackend implements SshBackend {
         private final JSch jsch;
         private final com.jcraft.jsch.Session session;
         private final SshConnectionRequest request;
+        private final BooleanSupplier current;
         private volatile Socket socket;
         private volatile boolean aborted;
         private volatile long lastInbound;
         private SshLimits limits = SshLimits.production();
-        JschSession(JSch jsch, com.jcraft.jsch.Session session, SshConnectionRequest request) {
-            this.jsch = jsch; this.session = session; this.request = request;
+        JschSession(JSch jsch, com.jcraft.jsch.Session session, SshConnectionRequest request,
+                    BooleanSupplier current) {
+            this.jsch = jsch; this.session = session; this.request = request; this.current = current;
         }
         @Override public void configure(SshLimits limits) { this.limits = limits; }
         @Override public void connect() throws Exception { connect(limits.connection); }
         @Override public void connect(int timeoutMillis) throws Exception {
             session.setSocketFactory(new com.jcraft.jsch.SocketFactory() {
                 @Override public Socket createSocket(String host, int port) throws IOException {
-                    if (request.resolvedAddress == null) throw new IOException();
-                    Socket created = new Socket();
-                    socket = created; // Publish BEFORE TCP connect so cancellation can break it.
-                    if (aborted) { created.close(); throw new IOException(); }
-                    created.connect(new InetSocketAddress(request.resolvedAddress, port), limits.tcp);
-                    if (aborted) { created.close(); throw new IOException(); }
-                    return created;
+                    if (request.resolvedAddresses.isEmpty()) throw new UnknownHostException();
+                    long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+                    IOException lastFailure = null;
+                    for (InetAddress candidate : request.resolvedAddresses) {
+                        Socket created = new Socket();
+                        socket = created; // Publish BEFORE route binding/TCP connect so cancellation can break it.
+                        try {
+                            ensureCurrent();
+                            if (request.addressResolution != null) {
+                                request.addressResolution.checkCurrent();
+                                request.addressResolution.bind(created);
+                                request.addressResolution.checkCurrent();
+                            }
+                            int remaining = (int) Math.min(limits.tcp,
+                                    TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
+                            if (remaining <= 0) throw new SocketTimeoutException();
+                            created.connect(new InetSocketAddress(candidate, port), Math.max(1, remaining));
+                            ensureCurrent();
+                            if (request.addressResolution != null) request.addressResolution.checkCurrent();
+                            return created;
+                        } catch (IOException failure) {
+                            try { created.close(); } catch (IOException ignored) { }
+                            if (socket == created) socket = null;
+                            if (aborted) throw failure;
+                            if (request.addressResolution != null) request.addressResolution.checkCurrent();
+                            if (!isCurrent()) throw failure;
+                            lastFailure = failure;
+                        }
+                    }
+                    throw lastFailure == null ? new UnknownHostException() : lastFailure;
                 }
                 @Override public InputStream getInputStream(Socket socket) throws IOException {
                     return new java.io.FilterInputStream(socket.getInputStream()) {
@@ -117,6 +162,12 @@ public final class JschSshBackend implements SshBackend {
             aborted = true;
             Socket owned = socket;
             if (owned != null) owned.close();
+        }
+        private void ensureCurrent() throws IOException {
+            if (aborted || !isCurrent()) throw new IOException();
+        }
+        private boolean isCurrent() {
+            try { return current.getAsBoolean(); } catch (RuntimeException ignored) { return false; }
         }
         @Override public void clearAuthentication() throws Exception { jsch.removeAllIdentity(); }
         @Override public Channel openChannel(String type) throws Exception { return new JschChannel(session.openChannel(type)); }

@@ -274,14 +274,25 @@ class SshDeadlineTest {
     @Test fun disconnectDuringResolutionDiscardsItsLateAddressAndDoesNotDelayTheFreshAttempt() {
         val entered = CountDownLatch(1); val release = CountDownLatch(1)
         val resolves = AtomicInteger()
+        val staleResultObserved = java.util.concurrent.atomic.AtomicBoolean()
+        val createdAddresses = CopyOnWriteArrayList<java.net.InetAddress>()
         val recording = RecordingSshBackend()
         val backend = object : SshBackend by recording {
-            override fun resolve(request: SshConnectionRequest): SshConnectionRequest {
+            override fun resolve(request: SshConnectionRequest, current: java.util.function.BooleanSupplier): SshConnectionRequest {
                 if (resolves.getAndIncrement() == 0) {
                     entered.countDown()
                     while (true) try { release.await(); break } catch (_: InterruptedException) { }
                 }
-                return request
+                if (!current.asBoolean) {
+                    staleResultObserved.set(true)
+                    return request.resolved(java.net.InetAddress.getByName("203.0.113.99"))
+                }
+                return request.resolved(java.net.InetAddress.getByName("127.0.0.1"))
+            }
+            override fun create(request: SshConnectionRequest,
+                                authentication: com.stripe1.xmouse.secrets.AuthenticationMaterial): SshBackend.Session {
+                createdAddresses.add(requireNotNull(request.resolvedAddress))
+                return recording.create(request, authentication)
             }
         }
         try {
@@ -293,8 +304,31 @@ class SshDeadlineTest {
                 assertTrue(f.transport.isConnected); assertTrue(f.losses.isEmpty())
                 assertEquals(1L, cancelled.done.count)
                 assertEquals(1, recording.events.count { it.name == "create" })
+                assertTrue("the late lookup observed cancellation", staleResultObserved.get())
+                assertEquals(listOf(java.net.InetAddress.getByName("127.0.0.1")), createdAddresses)
             }
         } finally { release.countDown() }
+    }
+
+    @Test fun resolutionAndTcpHandshakeShareOneOverallConnectionDeadline() {
+        val recording = RecordingSshBackend().apply { blockAt = "session.connect"; ignoreInterrupts = true }
+        val backend = object : SshBackend by recording {
+            override fun resolve(request: SshConnectionRequest,
+                                current: java.util.function.BooleanSupplier): SshConnectionRequest {
+                Thread.sleep(130)
+                return request
+            }
+        }
+        Fixture(backend).use { f ->
+            val started = System.nanoTime()
+            val result = f.connect()
+            assertTrue(recording.entered.await(1, TimeUnit.SECONDS))
+            result.await()
+            assertEquals(SshTransport.Failure.CONNECTION_TIMEOUT, result.failure)
+            val elapsed = System.nanoTime() - started
+            assertTrue("resolution and handshake share the 350ms attempt budget", elapsed < TimeUnit.MILLISECONDS.toNanos(800))
+            recording.release.countDown()
+        }
     }
 
     @Test fun queueWaitingConsumesTheOperationBudgetRatherThanSendingExpiredInteraction() {

@@ -5,12 +5,18 @@ import com.stripe1.xmouse.trust.HostKeyMismatch;
 import com.stripe1.xmouse.trust.HostTrustException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.concurrent.CancellationException;
+import java.util.function.BooleanSupplier;
 
 /** Blocking resource seam. Calls run on bounded background lanes; abort/close may race timed-out I/O.
  * Implementations must make status reads thread safe and abort/close idempotent.
  */
 public interface SshBackend {
     default SshConnectionRequest resolve(SshConnectionRequest request) throws Exception { return request; }
+    default SshConnectionRequest resolve(SshConnectionRequest request, BooleanSupplier current) throws Exception {
+        if (!current.getAsBoolean()) throw new CancellationException();
+        return resolve(request);
+    }
     Session create(SshConnectionRequest request, AuthenticationMaterial authentication) throws Exception;
     default Session create(SshConnectionRequest request, AuthenticationMaterial authentication,
                            java.util.function.BooleanSupplier current) throws Exception { return create(request, authentication); }
