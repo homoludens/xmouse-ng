@@ -1541,7 +1541,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		} else if (id == R.id.action_edit_layout) {
 			showNoticeDialog(getBaseContext());
 		} else if (id == R.id.action_exit) {
-			// Finishing the control screen detaches this Activity; it does not own the session.
+			// Exit is an explicit session dismissal, unlike ordinary Activity pause/destruction.
+			disconnectForegroundSessionFromUi();
 			this.finish();
 			return true;
 		}

@@ -763,7 +763,8 @@ class SessionForegroundServiceAndroidTest {
         instrumentation.runOnMainSync {
             nullResult = binding.binder.serviceForTests.onStartCommand(null, 0, 8101)
         }
-        assertEquals(Service.START_NOT_STICKY, nullResult)
+        assertEquals("a null OS restart cannot revive a session after process death",
+            Service.START_NOT_STICKY, nullResult)
         scenario!!.onActivity { activity ->
             activity.startService(Intent(activity, SessionForegroundService::class.java).setAction("untrusted.invalid"))
         }
@@ -797,7 +798,7 @@ class SessionForegroundServiceAndroidTest {
         val bootReceiver = context.packageManager.queryBroadcastReceivers(
             Intent(Intent.ACTION_BOOT_COMPLETED).setPackage(context.packageName), PackageManager.MATCH_DISABLED_COMPONENTS,
         )
-        assertTrue("a boot-triggered start path was introduced", bootReceiver.isEmpty())
+        assertTrue("a boot-triggered receiver must not bypass a force-stop", bootReceiver.isEmpty())
         unbind(activityScenario, binding)
     }
 
@@ -1392,6 +1393,9 @@ class SessionForegroundServiceAndroidTest {
         assertEquals(originalGeneration, recordingOwner.controller.current.generation)
         assertEquals("input suspension must not close or replace the session", 0,
             recordingOwner.backend.events.count { it.name == "session.close" })
+        assertTrue("ordinary app switching retains the ongoing session notification",
+            context.getSystemService(NotificationManager::class.java).activeNotifications
+                .any { it.id == NOTIFICATION_ID })
 
         activityScenario.onActivity { activity ->
             assertNull("a paused Activity has no active input capability", activity.activeControlInputToken())
@@ -1446,6 +1450,72 @@ class SessionForegroundServiceAndroidTest {
         assertEquals("the foreground session remains the original attempt", originalGeneration,
             recordingOwner.controller.current.generation)
         assertTrue(recordingOwner.controller.current.connection.isReady)
+    }
+
+    @Test
+    fun taskRemovalAndExitClearSessionIntentTransportAndNotification() {
+        grantNotificationPermissionForDisclosureTest()
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity(autoConnect = true)
+        eventually { recordingOwner.controller.current.connection.isReady }
+        val binding = bind(activityScenario)
+        eventually { binding.binder.snapshot.connection.isReady }
+        assertTrue(context.getSystemService(NotificationManager::class.java).activeNotifications
+            .any { it.id == NOTIFICATION_ID })
+
+        instrumentation.runOnMainSync {
+            binding.binder.serviceForTests.onTaskRemoved(null)
+            binding.binder.serviceForTests.onTaskRemoved(null)
+        }
+        eventually {
+            recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED &&
+                recordingOwner.controller.current.automaticConnectSuppressed && !binding.binder.isForeground
+        }
+        assertNull(recordingOwner.controller.current.desiredHost)
+        assertEquals(1, recordingOwner.backend.events.count { it.name == "session.close" })
+        assertTrue(recordingOwner.backend.channels.all { it.closed })
+        assertFalse("task dismissal removes the ongoing notification",
+            context.getSystemService(NotificationManager::class.java).activeNotifications
+                .any { it.id == NOTIFICATION_ID })
+
+        // Repeated task cleanup remains a no-op for the already closed transport.
+        assertEquals(1, recordingOwner.backend.events.count { it.name == "session.close" })
+        unbind(activityScenario, binding)
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        eventually { binding.binder.destroyedForTests }
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        assertEquals("task dismissal suppresses saved auto-connect on return", 1, recordingOwner.attemptsCreated)
+
+        // A later deliberate Connect is still allowed; Exit then uses the same explicit stop path.
+        requestConnect(activityScenario)
+        eventually { recordingOwner.controller.current.connection.isReady }
+        assertEquals(2, recordingOwner.attemptsCreated)
+        val exitBinding = bind(activityScenario)
+        eventually { exitBinding.binder.snapshot.connection.isReady }
+        assertTrue(context.getSystemService(NotificationManager::class.java).activeNotifications
+            .any { it.id == NOTIFICATION_ID })
+        unbind(activityScenario, exitBinding)
+        val exitFinished = AtomicBoolean()
+        activityScenario.onActivity { activity ->
+            val toolbar = activity.findViewById<Toolbar>(R.id.toolbar)
+            if (toolbar.menu.findItem(R.id.action_exit) == null) activity.menuInflater.inflate(R.menu.main, toolbar.menu)
+            assertTrue("Exit action must be handled",
+                activity.onOptionsItemSelected(toolbar.menu.findItem(R.id.action_exit)))
+            exitFinished.set(activity.isFinishing)
+        }
+        assertTrue("Exit must close the control Activity", exitFinished.get())
+        eventually {
+            exitBinding.binder.destroyedForTests &&
+                recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED &&
+                recordingOwner.controller.current.automaticConnectSuppressed &&
+                context.getSystemService(NotificationManager::class.java).activeNotifications
+                    .none { it.id == NOTIFICATION_ID }
+        }
+        assertNull(recordingOwner.controller.current.desiredHost)
+        assertEquals("Exit closes the second transport too", 2,
+            recordingOwner.backend.events.count { it.name == "session.close" })
+        assertTrue(recordingOwner.backend.channels.all { it.closed })
     }
 
     @Test

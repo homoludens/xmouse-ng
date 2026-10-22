@@ -47,7 +47,7 @@ Complexity amendment (2026-10-21): the user approved promoting 4.1 to `[high]` a
 - [x] 5.5 [low] Route legacy input, custom buttons, and scripts through the service-backed ordered command sink; verify command-translation regressions still pass and transport loss discards unsent commands rather than replaying them after reconnection.
 - [x] 5.6 [low] Stop gyro and inactive control input, handle touch cancellation, and release tracked held inputs on leaving the control surface; verify app switching during a drag sends release when possible and returning does not resume stale input.
 - [x] 5.7 [high] Implement bounded failure detection and a foreground recovery attempt after involuntary interruption, preserving trust and permission checks; verify network-loss/return tests show honest state and explicit Disconnect suppresses auto-reconnect even with saved auto-connect enabled.
-- [ ] 5.8 [low] Wire Disconnect, Exit, and deliberate task dismissal to complete service/transport cleanup without treating ordinary app switching as dismissal; verify repeated cleanup is harmless, the notification disappears, and force-stop does not cause automatic restart.
+- [x] 5.8 [low] Wire Disconnect, Exit, and deliberate task dismissal to complete service/transport cleanup without treating ordinary app switching as dismissal; verify repeated cleanup is harmless, the notification disappears, and force-stop does not cause automatic restart.
 
 ## 6. Resolve hostnames and handle LAN permissions
 

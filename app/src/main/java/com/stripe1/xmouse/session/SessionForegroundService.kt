@@ -43,6 +43,7 @@ enum class SessionServiceStartFailure {
 class SessionForegroundService : Service() {
     @Volatile private var foregroundPromoted = false
     @Volatile private var destroyed = false
+    @Volatile private var explicitStopRequested = false
     @Volatile private var startFailure: SessionServiceStartFailure? = null
     @Volatile private var latestValidStartId = 0
     /** Observation-only bind-created instances must not become a Disconnect/auto-connect intent. */
@@ -69,15 +70,7 @@ class SessionForegroundService : Service() {
             // A notification action is a user-requested stop, never a connection capability. Do not
             // initialize an owner here: after process death a stale action must not select metadata,
             // recreate SSH work, or bypass the retained controller's cleanup barrier.
-            latestValidStartId = startId
-            latestRequestNeedsIdleStop = false
-            registry.cancelAllStarts()
-            activeStartTickets.clear()
-            registry.retainedOwnerOrNull()?.let { owner ->
-                owner.interactions.invalidate()
-                owner.controller.disconnect()
-            }
-            stopForegroundAndSelf(startId)
+            stopForExplicitUserAction(startId)
             return START_NOT_STICKY
         }
 
@@ -91,6 +84,7 @@ class SessionForegroundService : Service() {
         // Destruction safety applies only after this Service accepted an actual one-use start.
         // Merely binding to observe an idle retained owner must not mutate controller intent.
         acceptedStartedWork = true
+        explicitStopRequested = false
         activeStartTickets.add(requireNotNull(ticket))
 
         latestValidStartId = startId
@@ -275,6 +269,23 @@ class SessionForegroundService : Service() {
         stopSelfResult(startId)
     }
 
+    private fun stopForExplicitUserAction(startId: Int?) {
+        explicitStopRequested = true
+        if (startId != null) latestValidStartId = startId
+        latestRequestNeedsIdleStop = false
+        registry.cancelAllStarts()
+        activeStartTickets.clear()
+        registry.retainedOwnerOrNull()?.let { owner ->
+            owner.interactions.invalidate()
+            owner.controller.disconnect()
+        }
+        if (foregroundPromoted) {
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            foregroundPromoted = false
+        }
+        if (startId != null) stopSelfResult(startId) else stopSelf()
+    }
+
     private fun finishStart(ticket: String) {
         activeStartTickets.remove(ticket)
         registry.completeStart(ticket)
@@ -285,13 +296,20 @@ class SessionForegroundService : Service() {
         return false
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // Removing the task is deliberate dismissal; unlike ordinary Activity pause/destruction,
+        // it revokes recovery intent and clears the foreground disclosure as explicit Disconnect does.
+        stopForExplicitUserAction(null)
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         destroyed = true
         activeStartTickets.toList().forEach(::finishStart)
         // A service that accepted a real Connect/auto-connect request owns destruction cleanup.
         // A BIND_AUTO_CREATE-only observer does not: disconnecting here would suppress future
         // auto-connect and invalidate outstanding permission/start reservations just by observing.
-        if (acceptedStartedWork) registry.retainedOwnerOrNull()?.controller?.let { controller ->
+        if (acceptedStartedWork && !explicitStopRequested) registry.retainedOwnerOrNull()?.controller?.let { controller ->
             if (controller.current.desiredHost != null) controller.interrupted() else controller.disconnect()
         }
         if (foregroundPromoted) {
