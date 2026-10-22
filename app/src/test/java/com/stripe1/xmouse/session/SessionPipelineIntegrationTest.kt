@@ -194,8 +194,24 @@ class SessionPipelineIntegrationTest {
             { trust, trusted -> gate.backend(trust, trusted) }
         } ?: commandBackend?.let { backend -> { _, _ -> backend } }
             ?: { trust, trusted -> JschSshBackend(HostTrustPolicy(trust, trusted)) }
+        val resolutions = AtomicInteger()
         val factory = SshSessionAttemptFactory(credentials, HostKeyRepository(directory, TrustFileIo()), interactions, limits, runtime,
-            closeTimeoutMillis = closeTimeoutMillis, backendFactory = backendFactory)
+            closeTimeoutMillis = closeTimeoutMillis, backendFactory = { trust, trusted ->
+                val backend = backendFactory(trust, trusted)
+                object : SshBackend by backend {
+                    override fun create(request: SshConnectionRequest,
+                        authentication: com.stripe1.xmouse.secrets.AuthenticationMaterial,
+                        current: java.util.function.BooleanSupplier): SshBackend.Session =
+                        backend.create(request, authentication, current)
+                    override fun cancelPendingTrust() = backend.cancelPendingTrust()
+                    override fun replaceHostKey(mismatch: HostKeyMismatch, current: java.util.function.BooleanSupplier) =
+                        backend.replaceHostKey(mismatch, current)
+                    override fun resolve(request: SshConnectionRequest): SshConnectionRequest {
+                        resolutions.incrementAndGet()
+                        return backend.resolve(request)
+                    }
+                }
+            })
         val controller = SessionController(factory, queue)
         override fun show(prompt: SessionInteractions.Prompt) { prompts.add(prompt) }
         override fun dismiss(prompt: SessionInteractions.Prompt) { }
@@ -261,7 +277,7 @@ class SessionPipelineIntegrationTest {
         } }
     }
 
-    @Test fun productionControllerJschAndMinaPreserveMixedCommandOrderAndNeverReplayAfterLoss() {
+    @Test fun productionNetworkLossReturnRecoversFreshWithoutReplayAndChangedKeyBlocksFurtherRecovery() {
         val keyPair = Server.newKeyPair()
         val initialServer = Server(hostKeyPair = keyPair)
         val port = initialServer.ssh.port
@@ -296,13 +312,21 @@ class SessionPipelineIntegrationTest {
                 f.queue.drain()
                 f.await { f.controller.current.attemptHost == null &&
                     f.controller.current.connection.phase == ConnectionState.Phase.ERROR }
+                assertFalse(f.controller.current.connection.isReady)
+                assertEquals(host, f.controller.current.desiredHost)
+                assertEquals(1, f.reads.get())
                 assertTrue("the lost attempt must not publish its unsent exec result after loss",
                     f.execResults.none { it.first == "unsent-exec-after-mina-loss" })
                 initialServer.close()
 
                 Server(port, keyPair).use { reconnected ->
-                    f.connect(host)
+                    val permit = requireNotNull(f.controller.foregroundRecoveryPermit())
+                    repeat(5) { f.controller.recoverInForeground(permit, { true }) }; f.queue.drain()
                     f.await { f.controller.current.connection.isReady }
+                    assertEquals(2, f.resolutions.get())
+                    assertEquals(2, f.reads.get())
+                    assertEquals("recovery must reauthenticate normally", 1, reconnected.authentications.get())
+                    assertTrue("the saved host key is checked without another first-trust approval", f.prompts.isEmpty())
                     assertEquals("a fresh session starts without replaying either command admitted behind loss",
                         0, reconnected.shellCommands.count { it == "unsent-shell-after-mina-loss" })
                     assertFalse(reconnected.execCommands.contains("unsent-exec-after-mina-loss"))
@@ -310,9 +334,22 @@ class SessionPipelineIntegrationTest {
                     f.await { reconnected.shellCommands.contains("fresh-session-only") }
                     assertFalse(reconnected.shellCommands.any { it.startsWith("unsent-") })
                     assertFalse(reconnected.execCommands.any { it.startsWith("unsent-") })
-                    f.controller.disconnect()
+                    reconnected.disconnectClients()
                     f.await { f.controller.current.attemptHost == null &&
-                        f.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+                        f.controller.current.connection.phase == ConnectionState.Phase.ERROR }
+                }
+                Server(port).use { changed ->
+                    val permit = requireNotNull(f.controller.foregroundRecoveryPermit())
+                    f.controller.recoverInForeground(permit, { true }); f.queue.drain()
+                    f.await { f.controller.current.attemptHost == null &&
+                        f.controller.current.connection.failure == ConnectionFailure.Trust(ConnectionFailure.TrustReason.KEY_MISMATCH) }
+                    assertEquals(3, f.resolutions.get())
+                    assertEquals(0, changed.authentications.get())
+                    assertEquals(0, changed.commands.get())
+                    assertNull(f.controller.foregroundRecoveryPermit())
+                    repeat(5) { f.controller.recoverInForeground(permit, { true }) }; f.queue.drain()
+                    assertEquals(3, f.reads.get())
+                    assertFalse(f.controller.current.connection.isReady)
                 }
             } finally {
                 initialServer.close()

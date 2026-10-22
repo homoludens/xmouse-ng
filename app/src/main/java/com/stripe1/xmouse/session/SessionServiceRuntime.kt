@@ -2,6 +2,7 @@ package com.stripe1.xmouse.session
 
 import java.util.HashSet
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Application-owned interface retained independently of started/bound Service instances. */
 interface SessionServiceOwner {
@@ -13,6 +14,18 @@ interface SessionServiceOwner {
 enum class SessionStartMode(internal val action: String) {
     EXPLICIT_CONNECT(SessionForegroundService.ACTION_CONNECT),
     FOREGROUND_AUTO_CONNECT(SessionForegroundService.ACTION_AUTO_CONNECT),
+    FOREGROUND_RECOVERY(SessionForegroundService.ACTION_RECOVER),
+}
+
+internal data class SessionStartRequest(val mode: SessionStartMode,
+    val recovery: SessionController.RecoveryPermit? = null,
+    val foreground: ForegroundRecoveryWindow? = null)
+
+/** Revocable foreground capability. The service retains no Activity/View while dispatch is pending. */
+class ForegroundRecoveryWindow : AutoCloseable {
+    private val active = AtomicBoolean(true)
+    val isActive: Boolean get() = active.get()
+    override fun close() { active.set(false) }
 }
 
 /**
@@ -22,7 +35,7 @@ enum class SessionStartMode(internal val action: String) {
 class SessionOwnerRegistry internal constructor(private val ownerFactory: () -> SessionServiceOwner) {
     private val lock = Any()
     @Volatile private var retainedOwner: SessionServiceOwner? = null
-    private val pendingStarts = LinkedHashMap<String, SessionStartMode>()
+    private val pendingStarts = LinkedHashMap<String, SessionStartRequest>()
     private val dispatchedStarts = HashSet<String>()
     private val activeStarts = HashSet<String>()
 
@@ -33,10 +46,11 @@ class SessionOwnerRegistry internal constructor(private val ownerFactory: () -> 
     /** Does not initialize an owner; bind-only service destruction must not start session I/O. */
     internal fun retainedOwnerOrNull(): SessionServiceOwner? = retainedOwner
 
-    internal fun issueStart(mode: SessionStartMode): String? = synchronized(lock) {
+    internal fun issueStart(mode: SessionStartMode, recovery: SessionController.RecoveryPermit? = null,
+        foreground: ForegroundRecoveryWindow? = null): String? = synchronized(lock) {
         if (pendingStarts.size + activeStarts.size >= MAX_PENDING_STARTS) return@synchronized null
         val ticket = UUID.randomUUID().toString()
-        pendingStarts[ticket] = mode
+        pendingStarts[ticket] = SessionStartRequest(mode, recovery, foreground)
         ticket
     }
 
@@ -44,7 +58,7 @@ class SessionOwnerRegistry internal constructor(private val ownerFactory: () -> 
     internal fun dispatchStart(ticket: String): SessionStartMode? = synchronized(lock) {
         val mode = pendingStarts[ticket] ?: return@synchronized null
         if (!dispatchedStarts.add(ticket)) return@synchronized null
-        mode
+        mode.mode
     }
 
     /** True only for a live reservation that has not already been dispatched to the Service. */
@@ -52,11 +66,11 @@ class SessionOwnerRegistry internal constructor(private val ownerFactory: () -> 
         ticket != null && pendingStarts.containsKey(ticket) && ticket !in dispatchedStarts
     }
 
-    internal fun consumeStart(action: String?, ticket: String?): SessionStartMode? = synchronized(lock) {
+    internal fun consumeStart(action: String?, ticket: String?): SessionStartRequest? = synchronized(lock) {
         if (ticket.isNullOrBlank()) return@synchronized null
         val mode = pendingStarts.remove(ticket) ?: return@synchronized null
         if (!dispatchedStarts.remove(ticket)) return@synchronized null
-        if (mode.action != action) return@synchronized null
+        if (mode.mode.action != action) return@synchronized null
         activeStarts.add(ticket)
         mode
     }

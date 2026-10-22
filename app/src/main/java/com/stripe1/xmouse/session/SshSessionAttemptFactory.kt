@@ -30,10 +30,12 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
     private val backendFactory: (HostTrustRequests, Runnable) -> SshBackend = { trust, trusted ->
         JschSshBackend(HostTrustPolicy(trust, trusted))
     },
+    private val permissionFailure: () -> ConnectionFailure.Permission? = { null },
 ) : SessionAttemptFactory {
     init { require(credentialTimeoutMillis in 1..60_000); require(closeTimeoutMillis in 1..5_000) }
 
     override fun invalidateReviews() = interactions.invalidate()
+    override fun accessFailure(): ConnectionFailure.Permission? = permissionFailure()
 
     override fun create(host: SessionHost): SessionAttempt = Attempt(host)
 
@@ -52,6 +54,7 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
         private val closeCallbacks = mutableListOf<(ConnectionFailure?) -> Unit>()
         private var credentialTimer: ScheduledFuture<*>? = null
         private var closeTimer: ScheduledFuture<*>? = null
+        private var permissionTimer: ScheduledFuture<*>? = null
         private var mismatchObservation: HostTrustRequests.MismatchObservation? = null
         private var mismatchReviewEpoch = -1L
         private val trust = HostTrustRequests(trustRepository, Executor { it.run() }).also { it.attach(this) }
@@ -67,6 +70,11 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
             synchronized(lock) {
                 check(!started); started = true; this.listener = listener
                 if (!live.get()) { credentialsDone = true; return }
+                val denied = accessFailure()
+                if (denied != null) { credentialsDone = true; fail(denied); return }
+                permissionTimer = timers.scheduleWithFixedDelay({
+                    if (live.get()) accessFailure()?.let { fail(ConnectionFailure.Permission(ConnectionFailure.PermissionReason.REVOKED)) }
+                }, limits.healthInterval.toLong(), limits.healthInterval.toLong(), TimeUnit.MILLISECONDS)
                 credentialTimer = timers.schedule({
                     synchronized(lock) {
                         if (!credentialsDone && live.getAndSet(false)) {
@@ -91,6 +99,8 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
                 credentialTimer?.cancel(false)
                 interactions.clear(this)
                 if (!live.get()) { material?.close(); finishCloseIfPossible(); return }
+                val denied = accessFailure()
+                if (denied != null) { material?.close(); fail(denied); return }
                 if (material == null || material.host != host.authentication.host || material.useKey != host.authentication.useKey) {
                     material?.close()
                     fail(ConnectionFailure.Authentication(ConnectionFailure.AuthenticationReason.KEY_UNAVAILABLE))
@@ -199,6 +209,7 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
                 interactions.invalidateCommandResults(commandResults)
                 if (!started) credentialsDone = true
                 credentialTimer?.cancel(false)
+                permissionTimer?.cancel(false)
                 interactions.clear(this)
                 trust.detach()
                 closeTimer = timers.schedule({ synchronized(lock) {

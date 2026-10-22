@@ -845,18 +845,18 @@ class SessionForegroundServiceAndroidTest {
         eventually {
             firstBinding.binder.destroyedForTests && !firstBinding.binder.isForeground &&
                 recordingOwner.attempts.closes.get() == 1 &&
-                recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED &&
-                recordingOwner.controller.current.automaticConnectSuppressed
+                recordingOwner.controller.current.connection.phase == ConnectionState.Phase.ERROR &&
+                recordingOwner.controller.current.foregroundRecoveryAvailable
         }
-        assertNull("destroyed service must not leave an active session without its disclosure",
+        assertNotNull("involuntary service loss retains intent, but never a ready session without disclosure",
             recordingOwner.controller.current.desiredHost)
+        assertFalse(recordingOwner.controller.current.connection.isReady)
         activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
-        requestConnect(activityScenario)
         val recreatedBinding = bind(activityScenario)
         assertNotSame("service must be recreated after teardown", firstService, recreatedBinding.binder.serviceForTests)
         eventually { recreatedBinding.binder.snapshot.connection.isReady }
-        eventually { recordingOwner.selectionCalls.get() == 7 }
-        eventually { recordingOwner.selectionsCompleted.get() == 7 }
+        assertEquals("foreground recovery uses the retained host, not a new preference selection", 6,
+            recordingOwner.selectionCalls.get())
         instrumentation.waitForIdleSync()
         assertEquals("a new visible request may start a new attempt after confirmed cleanup", 2,
             recordingOwner.attempts.created.get())
@@ -871,7 +871,7 @@ class SessionForegroundServiceAndroidTest {
         activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
         requestConnect(activityScenario, automatic = true)
         val autoBinding = bind(activityScenario)
-        eventually { recordingOwner.selectionCalls.get() == 8 }
+        eventually { recordingOwner.selectionCalls.get() == 7 }
         eventually { recordingOwner.controller.current.automaticConnectSuppressed }
         eventually { !autoBinding.binder.isForeground }
         assertNull(recordingOwner.controller.current.desiredHost)
@@ -929,9 +929,44 @@ class SessionForegroundServiceAndroidTest {
         assertEquals(0, recordingOwner.backend.events.count { it.name == "session.close" })
         assertEquals(serviceInstances, SessionForegroundService.serviceInstancesCreatedForTests)
 
+        // Existing lifecycle coverage also exercises one representative interrupted-network return.
+        // Disable saved auto-connect: retained connection intent, not that preference, permits recovery.
+        defaultPreferences.edit { putBoolean("autologin_checkbox", false) }
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        recordingOwner.backend.channels.first { it.name == "shell" && !it.closed }.closed = true
+        eventually { recordingOwner.controller.current.attemptHost == null &&
+            recordingOwner.controller.current.connection.phase == ConnectionState.Phase.ERROR }
+        assertFalse(recordingOwner.controller.current.connection.isReady)
+        assertNotNull(recordingOwner.controller.current.desiredHost)
+        assertEquals(1, recordingOwner.attemptsCreated)
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        eventually { recordingOwner.controller.current.connection.isReady && recordingOwner.attemptsCreated == 2 }
+        assertEquals("recovery does not replace retained intent with saved host metadata", 1,
+            recordingOwner.selectionCalls.get())
+        assertEquals(2, recordingOwner.credentialReads.get())
+
+        // A failed foreground recovery must leave honest state and visible, deliberate Retry.
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        recordingOwner.backend.failAt = "session.connect"
+        recordingOwner.backend.channels.first { it.name == "shell" && !it.closed }.closed = true
+        eventually { recordingOwner.controller.current.attemptHost == null &&
+            recordingOwner.controller.current.connection.phase == ConnectionState.Phase.ERROR }
+        activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        eventually { recordingOwner.attemptsCreated == 3 && recordingOwner.controller.current.attemptHost == null }
+        assertFalse(recordingOwner.controller.current.connection.isReady)
+        assertFalse(recordingOwner.controller.current.foregroundRecoveryAvailable)
+        activityScenario.onActivity { activity ->
+            assertEquals("Connection failed", activity.findViewById<Toolbar>(R.id.toolbar).subtitle)
+        }
+        showSessionControlsFromMenu(activityScenario)
+        waitForText("Retry")
+        clickText("Disconnect")
+        eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+        assertEquals(3, recordingOwner.attemptsCreated)
+
         SessionForegroundService.requestDisconnect(context)
         eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
-        assertEquals(1, recordingOwner.backend.events.count { it.name == "session.close" })
+        assertEquals(3, recordingOwner.backend.events.count { it.name == "session.close" })
     }
 
     @Test
@@ -1985,7 +2020,8 @@ class SessionForegroundServiceAndroidTest {
         recordingOwner.attempts.failClose.set(true)
         unbind(activityScenario, firstBinding)
         activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
-        context.stopService(Intent(context, SessionForegroundService::class.java))
+        // This is deliberate Disconnect, not the involuntary service-loss case exercised above.
+        assertTrue(SessionForegroundService.requestDisconnect(context))
         eventually { firstBinding.binder.destroyedForTests }
         eventually {
             recordingOwner.controller.current.cleanupUnconfirmed &&
@@ -2081,6 +2117,10 @@ class SessionForegroundServiceAndroidTest {
 
         unbind(activityScenario, binding)
         activityScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        // Arm recovery before explicit Disconnect, proving the notification also revokes that intent.
+        recordingOwner.backend.channels.first { it.name == "shell" && !it.closed }.closed = true
+        eventually { recordingOwner.controller.current.attemptHost == null &&
+            recordingOwner.controller.current.foregroundRecoveryAvailable }
         disconnect.send()
         eventually {
             recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED &&

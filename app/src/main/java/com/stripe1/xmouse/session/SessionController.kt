@@ -53,6 +53,8 @@ interface SessionAttempt {
 fun interface SessionAttemptFactory {
     fun create(host: SessionHost): SessionAttempt
     fun invalidateReviews() { }
+    /** Read-only point-of-use prerequisite; never requests permission or starts network work. */
+    fun accessFailure(): ConnectionFailure.Permission? = null
 }
 
 /** Immutable, atomically observable intent + observation. No commands, secrets, or UI objects. */
@@ -63,6 +65,7 @@ data class SessionSnapshot(
     val intentVersion: Long = 0,
     val connection: ConnectionState = ConnectionState.Disconnected(),
     val automaticConnectSuppressed: Boolean = false,
+    val foregroundRecoveryAvailable: Boolean = false,
     val cleanupUnconfirmed: Boolean = false,
     val closed: Boolean = false,
 )
@@ -74,6 +77,8 @@ class SessionController @JvmOverloads constructor(
 ) : AutoCloseable {
     fun interface Observer { fun changed(snapshot: SessionSnapshot) }
     class AutoConnectPermit internal constructor(internal val version: Long)
+    class RecoveryPermit internal constructor(internal val generation: Long, internal val version: Long,
+        internal val disconnectEpoch: Long)
     @Volatile var current = SessionSnapshot()
         private set
     private var generation = 0L
@@ -169,6 +174,50 @@ class SessionController @JvmOverloads constructor(
 
     fun connectIfNeeded(host: SessionHost) { events.post { connectExplicitly(host) } }
 
+    fun foregroundRecoveryPermit(): RecoveryPermit? {
+        val snapshot = current
+        if (snapshot.closed || snapshot.automaticConnectSuppressed || !snapshot.foregroundRecoveryAvailable ||
+            snapshot.desiredHost == null || snapshot.cleanupUnconfirmed) return null
+        return RecoveryPermit(snapshot.generation, snapshot.intentVersion, disconnectEpoch.get())
+    }
+
+    /** Only a visible, one-use service start may call this; never called by a loss/health callback. */
+    internal fun recoverInForeground(permit: RecoveryPermit, isCurrentRequest: () -> Boolean,
+        onDecision: (Boolean) -> Unit = {}) {
+        val posted = events.post {
+            val host = current.desiredHost
+            if (!isCurrentRequest() || host == null || current.closed || current.automaticConnectSuppressed ||
+                !current.foregroundRecoveryAvailable || current.cleanupUnconfirmed ||
+                current.generation != permit.generation || current.intentVersion != permit.version ||
+                disconnectEpoch.get() != permit.disconnectEpoch) {
+                onDecision(false)
+                return@post
+            }
+            val denied = factory.accessFailure()
+            if (denied != null) {
+                // Keep the opportunity for a later foreground return after the user grants access.
+                publish(current.copy(connection = ConnectionState.Error(host.endpoint.identity, denied)))
+                onDecision(false)
+                return@post
+            }
+            factory.invalidateReviews()
+            publish(current.copy(foregroundRecoveryAvailable = false))
+            request(host) // Includes the exact old-attempt close barrier and a fresh factory/resolve.
+            onDecision(true)
+        }
+        if (!posted) onDecision(false)
+    }
+
+    /** Service loss is not user Disconnect. No attempt is restarted from this callback. */
+    fun interrupted() { events.post {
+        val old = owned ?: return@post
+        if (!matches(old)) return@post
+        resumeAfterClose = false
+        closeOwned(old, ConnectionState.Error(old.host.endpoint.identity,
+            ConnectionFailure.Transport(ConnectionFailure.TransportReason.CONNECTION_LOST)),
+            recoveryAvailable = current.connection.isReady)
+    } }
+
     /** Service Connects are accepted only if no explicit disconnect intervened during metadata lookup. */
     internal fun captureDisconnectEpoch(): Long = disconnectEpoch.get()
     internal fun connectIfNotDisconnectedSince(
@@ -190,7 +239,8 @@ class SessionController @JvmOverloads constructor(
         if (current.desiredHost?.sameRequest(host) == true && old != null && (!old.closing || resumeAfterClose) &&
             !current.automaticConnectSuppressed) return true
         factory.invalidateReviews()
-        publish(current.copy(intentVersion = current.intentVersion + 1, automaticConnectSuppressed = false))
+        publish(current.copy(intentVersion = current.intentVersion + 1, automaticConnectSuppressed = false,
+            foregroundRecoveryAvailable = false))
         request(host)
         return true
     }
@@ -565,7 +615,7 @@ class SessionController @JvmOverloads constructor(
         if (!terminal && current.desiredHost == null && current.automaticConnectSuppressed) return
         resumeAfterClose = false
         publish(current.copy(desiredHost = null, intentVersion = current.intentVersion + 1,
-            automaticConnectSuppressed = true, closed = terminal))
+            automaticConnectSuppressed = true, foregroundRecoveryAvailable = false, closed = terminal))
         val old = owned
         if (old == null) {
             publish(current.copy(connection = ConnectionState.Disconnected()))
@@ -608,7 +658,10 @@ class SessionController @JvmOverloads constructor(
             override fun failed(failure: ConnectionFailure) { events.post {
                 if (!matches(entry)) return@post
                 resumeAfterClose = false // Retain desired host, but never run a recovery loop here.
-                closeOwned(entry, ConnectionState.Error(host.endpoint.identity, failure))
+                // A failed recovery never rearms itself; only a newly interrupted ready session does.
+                closeOwned(entry, ConnectionState.Error(host.endpoint.identity, failure),
+                    recoveryAvailable = current.connection.isReady &&
+                        (failure is ConnectionFailure.Transport || failure is ConnectionFailure.Permission))
             } }
         }
         try { entry.attempt.start(listener) } catch (_: Exception) {
@@ -619,7 +672,8 @@ class SessionController @JvmOverloads constructor(
     private fun matches(entry: Owned) = owned === entry && entry.generation == current.generation &&
         !entry.closing && !current.closed
 
-    private fun closeOwned(entry: Owned, observation: ConnectionState) {
+    private fun closeOwned(entry: Owned, observation: ConnectionState,
+        recoveryAvailable: Boolean = current.foregroundRecoveryAvailable) {
         if (entry.closing) return
         val inputSurface = activeInputSurface.get()?.takeIf { it.owner.generation == entry.generation && it.owner.host === entry.host }
         if (inputSurface != null && activeInputSurface.compareAndSet(inputSurface, null)) {
@@ -632,7 +686,7 @@ class SessionController @JvmOverloads constructor(
             commandOwner.compareAndSet(it, null)
         }
         entry.closing = true // Invalidate every queued auth/trust/ready/loss event BEFORE cancellation.
-        publish(current.copy(connection = observation))
+        publish(current.copy(connection = observation, foregroundRecoveryAvailable = recoveryAvailable))
         entry.attempt.cancelAndClose { failure -> events.post {
             if (owned !== entry || entry.closeCompleted) return@post
             entry.closeCompleted = true

@@ -154,11 +154,16 @@ class SessionControllerTest {
             val beforeConnect = f.controller.automaticConnectPermit()
             f.connect(a); val old = f.attempts.single()
             val beforeDisconnect = f.controller.automaticConnectPermit()
+            old.listener.ready(); f.queue.drain()
+            old.listener.failed(loss); f.queue.drain()
+            val recovery = requireNotNull(f.controller.foregroundRecoveryPermit())
             f.controller.disconnect(); f.controller.disconnect(); f.queue.drain()
             old.listener.ready(); old.closed(null); f.queue.drain()
             listOf(beforeConnect, beforeDisconnect, f.controller.automaticConnectPermit()).forEach { f.controller.connectAutomatically(a, it) }
+            f.controller.recoverInForeground(recovery, { true })
             f.queue.drain(); assertEquals(1, f.attempts.size)
             assertTrue(f.controller.current.automaticConnectSuppressed)
+            assertNull(f.controller.foregroundRecoveryPermit())
             f.connect(b)
             f.controller.connectAutomatically(a, beforeDisconnect); f.queue.drain()
             assertEquals(b, f.controller.current.desiredHost); assertEquals(2, f.attempts.size)
@@ -574,7 +579,7 @@ class SessionControllerTest {
         }
     }
 
-    @Test fun involuntaryLossRetainsIntentButNeverPretendsReadyOrAutomaticallyRecovers() {
+    @Test fun involuntaryLossRetainsIntentAndAllowsOnlyOneFreshForegroundRecoveryUntilDeliberateRetry() {
         Fixture().use { f ->
             f.connect(a); val old = f.attempts.single(); old.listener.ready(); f.queue.drain()
             old.listener.failed(loss); f.queue.drain()
@@ -583,7 +588,26 @@ class SessionControllerTest {
             assertEquals(ConnectionState.Error(a.endpoint.identity, loss), f.controller.current.connection)
             f.controller.connectAutomatically(a, f.controller.automaticConnectPermit()); f.queue.drain()
             assertEquals(1, f.attempts.size)
-            f.connect(a); assertEquals(2, f.attempts.size)
+            val permit = requireNotNull(f.controller.foregroundRecoveryPermit())
+            var visible = true
+            f.controller.recoverInForeground(permit, { visible })
+            visible = false
+            f.queue.drain()
+            assertEquals("a screen that left before dispatch cannot recover in the background", 1, f.attempts.size)
+            f.controller.recoverInForeground(permit, { true }); f.queue.drain()
+            assertEquals(2, f.attempts.size)
+            assertEquals(a, f.controller.current.desiredHost)
+            assertFalse(f.controller.current.connection.isReady)
+            val recovery = f.attempts.last()
+            recovery.listener.failed(loss); f.queue.drain(); recovery.closed(null); f.queue.drain()
+            assertNull("failed recovery leaves manual Retry, not another foreground retry", f.controller.foregroundRecoveryPermit())
+            repeat(10) {
+                f.controller.recoverInForeground(permit, { true })
+                f.controller.connectAutomatically(a, f.controller.automaticConnectPermit())
+            }
+            f.queue.drain(); assertEquals(2, f.attempts.size)
+            assertEquals(ConnectionState.Error(a.endpoint.identity, loss), f.controller.current.connection)
+            f.connect(a); assertEquals(3, f.attempts.size)
         }
     }
     @Test fun closeFailureOrDeadlineBlocksAnyNewHostAndNeverReportsTheOldOneClosed() {
@@ -596,16 +620,21 @@ class SessionControllerTest {
             assertEquals(ConnectionFailure.Transport(ConnectionFailure.TransportReason.CLEANUP_UNCONFIRMED), f.controller.current.connection.failure)
         }
     }
-    @Test fun deliberateRetryDuringLossCleanupWaitsForBarrierWhileAutomaticReturnCannotRequestRecovery() {
+    @Test fun foregroundRecoveryDuringLossCleanupWaitsForExactOldBarrierAndStalePermitCannotChangeHosts() {
         Fixture().use { f ->
             f.connect(a); val old = f.attempts.single()
-            old.listener.ready(); f.queue.drain(); old.listener.failed(loss); f.queue.drain()
+            old.listener.ready(); f.queue.drain(); f.controller.interrupted(); f.queue.drain()
             f.controller.connectAutomatically(a, f.controller.automaticConnectPermit()); f.queue.drain()
             assertEquals(1, f.attempts.size)
-            f.connect(a); assertEquals(1, f.attempts.size)
+            val permit = requireNotNull(f.controller.foregroundRecoveryPermit())
+            repeat(3) { f.controller.recoverInForeground(permit, { true }) }; f.queue.drain()
+            assertEquals(1, f.attempts.size)
             old.closed(null); f.queue.drain()
             assertEquals(2, f.attempts.size)
             f.attempts.last().listener.ready(); f.queue.drain(); assertTrue(f.controller.current.connection.isReady)
+            f.connect(b)
+            f.controller.recoverInForeground(permit, { true }); f.queue.drain()
+            assertEquals(b, f.controller.current.desiredHost)
         }
     }
     @Test fun explicitDisconnectDuringLossCleanupFinishesDisconnectedRatherThanRestoringTheOldError() {

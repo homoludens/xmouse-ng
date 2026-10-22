@@ -28,6 +28,7 @@ class SshSessionAttemptFactoryTest {
         val runtime = SshRuntime()
         val limits = SshLimits(800, 800, 800, 1200, 800, 500, 500, 500, 400, 300, 3, 50, 200, 4096)
         val interactions = SessionInteractions(Executor { it.run() })
+        @Volatile var permissionDenied = false
         val factory = SshSessionAttemptFactory(credentials, HostKeyRepository(directory, TrustFileIo()), interactions,
             limits, runtime, credentialMillis, closeMillis, { _, _ ->
                 val backend = RecordingSshBackend().apply {
@@ -43,6 +44,8 @@ class SshSessionAttemptFactoryTest {
                     override fun create(request: SshConnectionRequest, authentication: AuthenticationMaterial, current: BooleanSupplier) =
                         create(request, authentication)
                 }
+            }, permissionFailure = {
+                if (permissionDenied) ConnectionFailure.Permission(ConnectionFailure.PermissionReason.DENIED) else null
             })
         val controller = SessionController(factory, queue)
         fun connect(host: SessionHost) { controller.connectIfNeeded(host); queue.drain() }
@@ -156,17 +159,37 @@ class SshSessionAttemptFactoryTest {
         }
     }
 
-    @Test fun wrongHostMaterialIsRejectedBeforeTransportCreationAndLossDoesNotStartRecovery() {
+    @Test fun wrongHostMaterialAndPermissionLossFailHonestlyAndForegroundRecoveryRequiresAccess() {
         Fixture().use { f ->
+            f.permissionDenied = true
+            f.connect(a)
+            eventually(f.queue) { f.controller.current.attemptHost == null }
+            assertTrue(f.credentials.reads.isEmpty())
+            assertTrue(f.controller.current.connection.failure is ConnectionFailure.Permission)
+            f.permissionDenied = false
             f.connect(a); val wrong = f.credentials.succeed(0, b)
             eventually(f.queue) { f.controller.current.connection.phase == ConnectionState.Phase.ERROR }
             assertTrue(f.identities.isEmpty()); assertTrue(wrong.password.all { it == 0.toByte() })
             eventually(f.queue) { f.controller.current.attemptHost == null }
             f.connect(b); f.credentials.succeed(1, b)
             eventually(f.queue) { f.controller.current.connection.isReady }
-            f.backends.last().channels.single().closed = true
-            eventually(f.queue) { f.controller.current.connection.phase == ConnectionState.Phase.ERROR }
+            f.permissionDenied = true
+            eventually(f.queue) { f.controller.current.attemptHost == null &&
+                f.controller.current.connection.failure == ConnectionFailure.Permission(ConnectionFailure.PermissionReason.REVOKED) }
+            assertFalse(f.controller.current.connection.isReady)
             assertEquals(b, f.controller.current.desiredHost); assertEquals(2, f.credentials.reads.size)
+            val attemptsBeforeRecovery = f.backends.size
+            val permit = requireNotNull(f.controller.foregroundRecoveryPermit())
+            f.controller.recoverInForeground(permit, { true }); f.queue.drain()
+            assertEquals("missing permission cannot even read credentials or resolve", 2, f.credentials.reads.size)
+            assertEquals(attemptsBeforeRecovery, f.backends.size)
+            f.permissionDenied = false
+            f.controller.recoverInForeground(permit, { true }); f.queue.drain()
+            assertEquals(3, f.credentials.reads.size)
+            f.credentials.succeed(2, b)
+            eventually(f.queue) { f.controller.current.connection.isReady }
+            assertEquals(2, f.backends.sumOf { backend -> backend.events.count { it.name == "resolve" } })
+            assertEquals(2, f.identities.size)
         }
     }
 

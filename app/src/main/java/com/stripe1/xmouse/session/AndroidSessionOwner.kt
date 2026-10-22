@@ -1,9 +1,12 @@
 package com.stripe1.xmouse.session
 
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import com.stripe1.xmouse.connection.Endpoint
+import com.stripe1.xmouse.connection.ConnectionFailure
 import com.stripe1.xmouse.secrets.AndroidCredentials
 import com.stripe1.xmouse.secrets.CredentialRepository
 import com.stripe1.xmouse.trust.AndroidHostTrust
@@ -42,7 +45,13 @@ class AndroidSessionOwner private constructor(
                     catch (_: Exception) { completion.complete(null, null) }
                 }
             }
-            val factory = SshSessionAttemptFactory(provider, AndroidHostTrust.open(app), interactions)
+            val factory = SshSessionAttemptFactory(provider, AndroidHostTrust.open(app), interactions,
+                permissionFailure = {
+                    val internet = app.checkSelfPermission(android.Manifest.permission.INTERNET) == PackageManager.PERMISSION_GRANTED
+                    val local = Build.VERSION.SDK_INT < 37 ||
+                        app.checkSelfPermission("android.permission.ACCESS_LOCAL_NETWORK") == PackageManager.PERMISSION_GRANTED
+                    if (internet && local) null else ConnectionFailure.Permission(ConnectionFailure.PermissionReason.DENIED)
+                })
             return AndroidSessionOwner(repository, interactions, SessionController(factory))
         }
     }

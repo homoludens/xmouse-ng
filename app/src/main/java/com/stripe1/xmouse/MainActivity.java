@@ -59,6 +59,7 @@ import com.stripe1.xmouse.session.SessionCommandTransport;
 import com.stripe1.xmouse.session.SessionController;
 import com.stripe1.xmouse.session.GyroscopeSamplingGate;
 import com.stripe1.xmouse.session.ForegroundConnectRequestResult;
+import com.stripe1.xmouse.session.ForegroundRecoveryWindow;
 import com.stripe1.xmouse.session.SessionForegroundService;
 import com.stripe1.xmouse.session.InputGestureToken;
 import com.stripe1.xmouse.session.InputSurfaceToken;
@@ -107,6 +108,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	private SessionController.Observer sessionObserver;
 	private SessionInteractions promptInteractions;
 	private SessionSnapshot sessionSnapshot;
+	private ForegroundRecoveryWindow foregroundRecoveryWindow;
 	private SessionActivityPresenter sessionPresenter;
 	private CredentialUi credentialUi;
 	private Toolbar toolbar;
@@ -651,6 +653,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	protected void onResume() {
 		super.onResume();
 		activityResumed = true;
+		foregroundRecoveryWindow = new ForegroundRecoveryWindow();
 		Log.d(TAG, "activity_resumed");
 		final boolean openedFromNotification = suppressLegacyAutoConnectOnResume;
 		suppressLegacyAutoConnectOnResume = false;
@@ -660,9 +663,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 
 		//Toast.makeText(getBaseContext(), "setting_autoconnect "+String.valueOf(setting_autoconnect), Toast.LENGTH_SHORT).show();
-		if (setting_autoconnect && !openedFromNotification) {
-			scheduleAutomaticForegroundSessionAfterVisibleFrame(activityGeneration, getWindow().getDecorView());
-		}
+		scheduleAutomaticForegroundSessionAfterVisibleFrame(activityGeneration, getWindow().getDecorView(),
+				!openedFromNotification);
 
 		if(mCoolDragAndDropGridView!=null){
 			mItemAdapter = new CustomKeyboardButtonAdapter(MainActivity.this, mItems);
@@ -676,26 +678,36 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		updateControlInputSurface();
 	}
 
-	private void requestAutomaticForegroundSession() {
+	private void requestAutomaticForegroundSession(boolean allowAutoConnect) {
 		if (pendingForegroundStartTicket != null) {
-			continueForegroundSessionRequest();
+			if (allowAutoConnect && setting_autoconnect) continueForegroundSessionRequest();
 			return;
 		}
-		String ticket = SessionForegroundService.reserveAutomaticConnectIfNeeded(this);
+		String ticket = foregroundRecoveryWindow == null ? null :
+				SessionForegroundService.reserveForegroundRecoveryIfNeeded(this, foregroundRecoveryWindow);
+		if (ticket != null) {
+			// Recovery never prompts for or bypasses missing network permission. The owner checks it
+			// again before creating an attempt; existing notification disclosure remains in force.
+			SessionForegroundService.startReservedConnect(this, ticket);
+			return;
+		}
+		if (!allowAutoConnect || !setting_autoconnect) return;
+		ticket = SessionForegroundService.reserveAutomaticConnectIfNeeded(this);
 		if (ticket == null) return; // Existing intent, explicit Disconnect, or a newer request wins.
 		pendingForegroundStartTicket = ticket;
 		continueForegroundSessionRequest();
 	}
 
 	/** Wait for a laid-out visible frame before requesting an FGS start from this Activity. */
-	private void scheduleAutomaticForegroundSessionAfterVisibleFrame(long resumedGeneration, View decor) {
+	private void scheduleAutomaticForegroundSessionAfterVisibleFrame(long resumedGeneration, View decor,
+			boolean allowAutoConnect) {
 		decor.postOnAnimation(new Runnable() {
 			private boolean observedVisibleFrame;
 
 			@Override public void run() {
 				if (resumedGeneration != activityGeneration || isFinishing() || isDestroyed() ||
-						!getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED) ||
-						!setting_autoconnect) return;
+						!activityResumed ||
+						!getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return;
 
 				boolean visibleFrame = decor.isAttachedToWindow() && decor.isShown() &&
 						decor.getWindowVisibility() == View.VISIBLE && decor.getWidth() > 0 && decor.getHeight() > 0;
@@ -710,7 +722,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 					decor.postOnAnimation(this);
 					return;
 				}
-				requestAutomaticForegroundSession();
+				requestAutomaticForegroundSession(allowAutoConnect);
 			}
 		});
 	}
@@ -740,6 +752,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 				closeSessionObservation();
 				sessionBinder = null;
 				promptInteractions = null;
+				sessionSnapshot = null;
+				showConnectionStat();
 			}
 		};
 		sessionServiceConnection = connection;
@@ -775,6 +789,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		}
 		sessionBinder = null;
 		promptInteractions = null;
+		sessionSnapshot = null;
 	}
 
 	private void clearShellPresentationTarget() {
@@ -949,6 +964,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		if (isFinishing() || isDestroyed()) return;
 		boolean active = hasActiveOrPendingSession() && !SessionForegroundService.hasPendingStart(this);
 		boolean pending = SessionForegroundService.hasPendingStart(this);
+		boolean retry = sessionSnapshot != null && sessionSnapshot.getDesiredHost() != null &&
+				sessionSnapshot.getConnection().getPhase() == ConnectionState.Phase.ERROR;
 		if (pending && !active) {
 			AlertDialog.Builder pendingDialog = new AlertDialog.Builder(this)
 					.setTitle(R.string.session_controls_title)
@@ -967,7 +984,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			return;
 		}
 		String message;
-		if (!active) {
+		if (retry) {
+			message = connectionFailureMessage(sessionSnapshot.getConnection().getFailure());
+		} else if (!active) {
 			message = getString(R.string.session_controls_idle_message);
 		} else if (SessionForegroundService.areSessionNotificationsVisible(this)) {
 			message = getString(R.string.session_controls_active_message);
@@ -979,10 +998,10 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		new AlertDialog.Builder(this)
 				.setTitle(R.string.session_controls_title)
 				.setMessage(message)
-				.setPositiveButton(active ? R.string.session_controls_open : R.string.session_controls_connect,
+				.setPositiveButton(retry ? R.string.session_controls_retry : active ? R.string.session_controls_open : R.string.session_controls_connect,
 						(dialog, which) -> { if (!active) requestForegroundSessionFromUi(); })
-				.setNegativeButton(active ? R.string.session_controls_disconnect : R.string.session_controls_close,
-						(dialog, which) -> { if (active) disconnectForegroundSessionFromUi(); })
+				.setNegativeButton(active || retry ? R.string.session_controls_disconnect : R.string.session_controls_close,
+						(dialog, which) -> { if (active || retry) disconnectForegroundSessionFromUi(); })
 				.show();
 	}
 
@@ -1209,6 +1228,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	@Override
 	protected void onPause() {
 		activityResumed = false;
+		if (foregroundRecoveryWindow != null) foregroundRecoveryWindow.close();
 		deactivateControlInputSurface();
 		KEYLOAYOUTFILENAME = "keyLayoutFile.csv";
 		saveKeyboardLayout();
@@ -1244,6 +1264,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 
 	public void showConnectionStat(){
+		// Never reuse an Activity's pre-background connected snapshot while the service rebinds.
+		if (sessionBinder != null) sessionSnapshot = sessionBinder.getSnapshot();
 		ConnectionState state = sessionSnapshot == null ? new ConnectionState.Disconnected() : sessionSnapshot.getConnection();
 		ConnectionState.Phase phase = state.getPhase();
 		boolean active = state.isReady() || phase == ConnectionState.Phase.PREPARING_CREDENTIALS ||
@@ -1266,8 +1288,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		if (toolbar != null) toolbar.setSubtitle(status);
 		if (conDiscButton != null) {
 			conDiscButton.setIcon(active ? R.drawable.state_conn : R.drawable.state_disc);
-			conDiscButton.setTitle(active ? "Disconnect" : "Connect");
-			conDiscButton.setContentDescription(status + (active ? ". Disconnect session" : ". Connect"));
+			String action = active ? "Disconnect" : phase == ConnectionState.Phase.ERROR ? getString(R.string.session_controls_retry) : "Connect";
+			conDiscButton.setTitle(action);
+			conDiscButton.setContentDescription(status + ". " + action);
 		}
 		if (state.getPhase() == ConnectionState.Phase.ERROR && sessionSnapshot != null &&
 				sessionSnapshot.getGeneration() != lastShownErrorGeneration) {

@@ -1,4 +1,5 @@
 <resources>
+    <string name="session_controls_retry">Retry</string>
     <string name="session_notification_channel_name">Remote session</string>
     <string name="session_notification_channel_description">Visibility for a requested XMouse network-device session.</string>
     <string name="session_notification_title">XMouse remote session</string>

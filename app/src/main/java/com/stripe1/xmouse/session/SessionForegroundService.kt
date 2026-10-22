@@ -82,8 +82,8 @@ class SessionForegroundService : Service() {
         }
 
         val ticket = intent?.getStringExtra(EXTRA_START_TICKET)
-        val mode = registry.consumeStart(intent?.action, ticket)
-        if (mode == null) {
+        val request = registry.consumeStart(intent?.action, ticket)
+        if (request == null) {
             // A null OS restart or an unissued/invalid request never creates an owner or starts SSH.
             if (!foregroundPromoted && pendingSelections == 0) stopSelfResult(startId)
             return START_NOT_STICKY
@@ -115,6 +115,14 @@ class SessionForegroundService : Service() {
             latestRequestNeedsIdleStop = true
             finishStart(requireNotNull(ticket))
             stopForegroundAndSelf(startId)
+            return START_NOT_STICKY
+        }
+        val mode = request.mode
+        if (mode == SessionStartMode.FOREGROUND_RECOVERY) {
+            owner.controller.recoverInForeground(requireNotNull(request.recovery),
+                { !destroyed && latestValidStartId == startId && request.foreground?.isActive == true }) {
+                mainHandler.post { finishStart(requireNotNull(ticket)) }
+            }
             return START_NOT_STICKY
         }
         // Capture the auto-connect permit before selectedHost performs asynchronous repository work.
@@ -247,6 +255,7 @@ class SessionForegroundService : Service() {
             SessionStartMode.FOREGROUND_AUTO_CONNECT -> owner.controller.connectAutomaticallyIfCurrent(
                 host, requireNotNull(permit), disconnectEpoch, isCurrentRequest, onDecision,
             )
+            SessionStartMode.FOREGROUND_RECOVERY -> error("Recovery never selects a different saved host")
         }
     }
 
@@ -282,7 +291,9 @@ class SessionForegroundService : Service() {
         // A service that accepted a real Connect/auto-connect request owns destruction cleanup.
         // A BIND_AUTO_CREATE-only observer does not: disconnecting here would suppress future
         // auto-connect and invalidate outstanding permission/start reservations just by observing.
-        if (acceptedStartedWork) registry.retainedOwnerOrNull()?.controller?.disconnect()
+        if (acceptedStartedWork) registry.retainedOwnerOrNull()?.controller?.let { controller ->
+            if (controller.current.desiredHost != null) controller.interrupted() else controller.disconnect()
+        }
         if (foregroundPromoted) {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
             foregroundPromoted = false
@@ -322,6 +333,7 @@ class SessionForegroundService : Service() {
     companion object {
         const val ACTION_CONNECT = "com.stripe1.xmouse.session.CONNECT"
         const val ACTION_AUTO_CONNECT = "com.stripe1.xmouse.session.AUTO_CONNECT"
+        const val ACTION_RECOVER = "com.stripe1.xmouse.session.RECOVER"
         const val ACTION_NOTIFICATION_DISCONNECT = "com.stripe1.xmouse.session.NOTIFICATION_DISCONNECT"
         internal const val EXTRA_START_TICKET = "com.stripe1.xmouse.session.extra.START_TICKET"
         const val NOTIFICATION_CHANNEL_ID = "xmouse_connected_session"
@@ -368,6 +380,16 @@ class SessionForegroundService : Service() {
                 return null
             }
             return registry.issueStart(SessionStartMode.FOREGROUND_AUTO_CONNECT)
+        }
+
+        /** Foreground-only recovery targets retained intent, never the newly selected preference. */
+        @JvmStatic
+        fun reserveForegroundRecoveryIfNeeded(activity: Activity, foreground: ForegroundRecoveryWindow): String? {
+            if (!foreground.isActive || !isVisible(activity)) return null
+            val registry = (activity.application as? XMouseApplication)?.sessionOwners ?: return null
+            if (registry.hasPendingStart()) return null
+            val permit = registry.retainedOwnerOrNull()?.controller?.foregroundRecoveryPermit() ?: return null
+            return registry.issueStart(SessionStartMode.FOREGROUND_RECOVERY, permit, foreground)
         }
 
         /** Per-ticket permission callback guard; broad pending state must not authorize stale results. */
