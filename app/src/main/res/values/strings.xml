@@ -33,6 +33,14 @@
     <string name="session_permission_open_settings">Open notification settings</string>
     <string name="session_permission_not_now">Not now</string>
     <string name="session_start_rejected">Android could not start the foreground session from this screen. Keep XMouse visible and try again.</string>
+    <string name="local_network_permission_title">Allow local network access?</string>
+    <string name="local_network_permission_message">Android 17 requires permission before XMouse can resolve a computer or connect to it on your local network. Grant access before continuing; host-key trust and SSH authentication checks still apply afterward.</string>
+    <string name="local_network_permission_request">Request access</string>
+    <string name="local_network_permission_denied_title">Local network access denied</string>
+    <string name="local_network_permission_denied_message">XMouse did not resolve the host or start SSH because local network access was denied. Grant Local network access in Android settings, then deliberately retry. Your saved host and authentication settings are unchanged.</string>
+    <string name="local_network_permission_retry">Try again</string>
+    <string name="local_network_permission_open_settings">Open app settings</string>
+    <string name="local_network_permission_not_now">Not now</string>
     <string name="app_name">XMouse</string>
     <string name="app_version">v2.0.26</string>
     <string name="navigation_drawer_open">Open navigation drawer</string>

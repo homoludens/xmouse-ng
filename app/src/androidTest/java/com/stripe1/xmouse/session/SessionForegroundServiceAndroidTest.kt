@@ -62,6 +62,7 @@ import com.stripe1.xmouse.trust.HostTrustException
 import com.stripe1.xmouse.trust.HostTrustRequests
 import com.stripe1.xmouse.session.SessionForegroundService.Companion.NOTIFICATION_CHANNEL_ID
 import com.stripe1.xmouse.session.SessionForegroundService.Companion.NOTIFICATION_ID
+import com.stripe1.xmouse.permissions.LocalNetworkPermissionCoordinator
 import org.junit.After
 import org.junit.Before
 import org.junit.Assert.*
@@ -791,6 +792,8 @@ class SessionForegroundServiceAndroidTest {
             .requestedPermissions.orEmpty().toSet()
         assertTrue(Manifest.permission.INTERNET in requested)
         assertTrue(Manifest.permission.ACCESS_NETWORK_STATE in requested)
+        assertTrue("API 37 local-network permission must be declared for direct LAN access",
+            LocalNetworkPermissionCoordinator.PERMISSION in requested)
         assertTrue(Manifest.permission.CHANGE_WIFI_MULTICAST_STATE in requested)
         assertTrue("android.permission.FOREGROUND_SERVICE" in requested)
         assertTrue("connected-device FGS permission missing",

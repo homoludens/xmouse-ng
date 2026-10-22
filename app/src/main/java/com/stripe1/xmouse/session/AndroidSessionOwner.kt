@@ -2,7 +2,6 @@ package com.stripe1.xmouse.session
 
 import android.content.Context
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import com.stripe1.xmouse.connection.Endpoint
@@ -10,6 +9,7 @@ import com.stripe1.xmouse.connection.ConnectionFailure
 import com.stripe1.xmouse.secrets.AndroidCredentials
 import com.stripe1.xmouse.secrets.CredentialRepository
 import com.stripe1.xmouse.trust.AndroidHostTrust
+import com.stripe1.xmouse.permissions.LocalNetworkPermissionCoordinator
 import java.util.concurrent.Executor
 
 /** Composition root for the next started/bound service, NOT an Activity singleton or lifecycle hook. */
@@ -36,6 +36,7 @@ class AndroidSessionOwner private constructor(
         @JvmStatic fun create(context: Context): AndroidSessionOwner {
             val app = context.applicationContext
             val repository = AndroidCredentials.get(app)
+            val localNetworkPermission = LocalNetworkPermissionCoordinator.forContext(app)
             val main = Handler(Looper.getMainLooper())
             val interactions = SessionInteractions(Executor { main.post(it) })
             val provider = SessionCredentialProvider { selection, prompts, current, completion ->
@@ -48,9 +49,8 @@ class AndroidSessionOwner private constructor(
             val factory = SshSessionAttemptFactory(provider, AndroidHostTrust.open(app), interactions,
                 permissionFailure = {
                     val internet = app.checkSelfPermission(android.Manifest.permission.INTERNET) == PackageManager.PERMISSION_GRANTED
-                    val local = Build.VERSION.SDK_INT < 37 ||
-                        app.checkSelfPermission("android.permission.ACCESS_LOCAL_NETWORK") == PackageManager.PERMISSION_GRANTED
-                    if (internet && local) null else ConnectionFailure.Permission(ConnectionFailure.PermissionReason.DENIED)
+                    if (!internet) ConnectionFailure.Permission(ConnectionFailure.PermissionReason.DENIED)
+                    else localNetworkPermission.accessFailure()
                 })
             return AndroidSessionOwner(repository, interactions, SessionController(factory))
         }

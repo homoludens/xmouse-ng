@@ -65,6 +65,7 @@ import com.stripe1.xmouse.session.InputGestureToken;
 import com.stripe1.xmouse.session.InputSurfaceToken;
 import com.stripe1.xmouse.session.SessionInteractions;
 import com.stripe1.xmouse.session.SessionSnapshot;
+import com.stripe1.xmouse.permissions.LocalNetworkPermissionCoordinator;
 
 import java.io.BufferedReader;
 import java.io.FileInputStream;
@@ -86,6 +87,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	private static final String TAG = "MainActivity";
 	public static final String ACTION_OPEN_SESSION_CONTROLS = "com.stripe1.xmouse.action.OPEN_SESSION_CONTROLS";
 	private static final String PREF_NOTIFICATION_PERMISSION_REQUESTED = "session_notification_permission_requested";
+	private static final String PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED = "local_network_auto_connect_blocked";
 	private static final String PREF_GYRO_ENABLED = "control_gyro_enabled";
 	private static final String POST_NOTIFICATIONS_PERMISSION = "android.permission.POST_NOTIFICATIONS";
 
@@ -98,9 +100,12 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	/** This screen's proxy carries only its opaque presentation token across the service boundary. */
 	public SessionCommandTransport commandTransport;
 	private ActivityResultLauncher<String> notificationPermissionLauncher;
+	private ActivityResultLauncher<String> localNetworkPermissionLauncher;
+	private LocalNetworkPermissionCoordinator localNetworkPermissionCoordinator;
 	private boolean suppressLegacyAutoConnectOnResume;
 	private String pendingForegroundStartTicket;
 	private String pendingNotificationPermissionTicket;
+	private String pendingLocalNetworkPermissionTicket;
 	private boolean pendingHostSelectionRequest;
 	private SessionForegroundService.SessionBinder sessionBinder;
 	private ServiceConnection sessionServiceConnection;
@@ -283,10 +288,13 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	protected void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
 		suppressLegacyAutoConnectOnResume = isNotificationOpenIntent(getIntent());
+		localNetworkPermissionCoordinator = LocalNetworkPermissionCoordinator.forContext(getApplicationContext());
 		notificationPermissionLauncher = registerForActivityResult(
 				new ActivityResultContracts.RequestPermission(), granted -> {
 					onNotificationPermissionResult(granted);
 				});
+		localNetworkPermissionLauncher = registerForActivityResult(
+				new ActivityResultContracts.RequestPermission(), granted -> onLocalNetworkPermissionResult(granted));
 		setContentView(R.layout.activity_main);
 		toolbar = (Toolbar) findViewById(R.id.toolbar);
 		setSupportActionBar(toolbar);
@@ -692,6 +700,12 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			return;
 		}
 		if (!allowAutoConnect || !setting_autoconnect) return;
+		SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
+		if (localNetworkPermissionCoordinator.requiresRuntimePermission() &&
+				preferences.getBoolean(PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED, false)) return;
+		if (!localNetworkPermissionCoordinator.requiresRuntimePermission()) {
+			preferences.edit().remove(PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED).apply();
+		}
 		ticket = SessionForegroundService.reserveAutomaticConnectIfNeeded(this);
 		if (ticket == null) return; // Existing intent, explicit Disconnect, or a newer request wins.
 		pendingForegroundStartTicket = ticket;
@@ -1028,6 +1042,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			showSessionControls();
 			return;
 		}
+		PreferenceManager.getDefaultSharedPreferences(this).edit()
+				.remove(PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED).apply();
 		pendingForegroundStartTicket = SessionForegroundService.reserveConnectRequest(this, false);
 		if (pendingForegroundStartTicket == null) {
 			android.widget.Toast.makeText(this, R.string.session_start_rejected, android.widget.Toast.LENGTH_LONG).show();
@@ -1045,6 +1061,12 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 				return;
 			}
 		}
+		if (localNetworkPermissionCoordinator.requiresRuntimePermission()) {
+			showLocalNetworkPermissionRationale();
+			return;
+		}
+		PreferenceManager.getDefaultSharedPreferences(this).edit()
+				.remove(PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED).apply();
 		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
 				checkSelfPermission(POST_NOTIFICATIONS_PERMISSION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
 			SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
@@ -1062,6 +1084,110 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			return;
 		}
 		startForegroundSession();
+	}
+
+	/** LAN access is requested only from this visible, ticket-owning Activity; services never prompt. */
+	private void showLocalNetworkPermissionRationale() {
+		String ticket = pendingForegroundStartTicket;
+		if (ticket == null || pendingLocalNetworkPermissionTicket != null) return;
+		if (!SessionForegroundService.hasReservedStart(this, ticket)) {
+			pendingForegroundStartTicket = null;
+			return;
+		}
+		pendingLocalNetworkPermissionTicket = ticket;
+		new AlertDialog.Builder(this)
+				.setTitle(R.string.local_network_permission_title)
+				.setMessage(R.string.local_network_permission_message)
+				.setPositiveButton(R.string.local_network_permission_request, (dialog, which) -> {
+					if (!ticket.equals(pendingLocalNetworkPermissionTicket) ||
+							!ticket.equals(pendingForegroundStartTicket) ||
+							!SessionForegroundService.hasReservedStart(this, ticket)) {
+						if (ticket.equals(pendingLocalNetworkPermissionTicket)) pendingLocalNetworkPermissionTicket = null;
+						return;
+					}
+					try {
+						localNetworkPermissionLauncher.launch(LocalNetworkPermissionCoordinator.PERMISSION);
+					} catch (RuntimeException rejected) {
+						pendingLocalNetworkPermissionTicket = null;
+						cancelPendingForegroundSessionRequest();
+						android.widget.Toast.makeText(this, R.string.session_start_rejected,
+								android.widget.Toast.LENGTH_LONG).show();
+					}
+				})
+				.setNeutralButton(R.string.local_network_permission_open_settings,
+						(dialog, which) -> openLocalNetworkSettings(ticket))
+				.setNegativeButton(R.string.local_network_permission_not_now,
+						(dialog, which) -> cancelLocalNetworkPermissionRequest(ticket))
+				.setOnCancelListener(dialog -> cancelLocalNetworkPermissionRequest(ticket))
+				.show();
+	}
+
+	private void cancelLocalNetworkPermissionRequest(String ticket) {
+		if (!ticket.equals(pendingLocalNetworkPermissionTicket)) return;
+		pendingLocalNetworkPermissionTicket = null;
+		PreferenceManager.getDefaultSharedPreferences(this).edit()
+				.putBoolean(PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED, true).apply();
+		cancelPendingForegroundSessionRequest();
+	}
+
+	private void openLocalNetworkSettings(String ticket) {
+		if (ticket.equals(pendingLocalNetworkPermissionTicket)) {
+			pendingLocalNetworkPermissionTicket = null;
+			PreferenceManager.getDefaultSharedPreferences(this).edit()
+					.putBoolean(PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED, true).apply();
+			cancelPendingForegroundSessionRequest();
+		}
+		openApplicationSettings();
+	}
+
+	private void openApplicationSettings() {
+		Intent settings = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+				Uri.fromParts("package", getPackageName(), null));
+		try {
+			startActivity(settings);
+		} catch (RuntimeException ignored) {
+			startActivity(new Intent(Settings.ACTION_SETTINGS));
+		}
+	}
+
+	private void onLocalNetworkPermissionResult(boolean granted) {
+		String ticket = pendingLocalNetworkPermissionTicket;
+		if (ticket == null) return;
+		boolean reservationPending = SessionForegroundService.hasReservedStart(this, ticket);
+		if (!ticket.equals(pendingForegroundStartTicket) || !reservationPending) {
+			if (ticket.equals(pendingLocalNetworkPermissionTicket)) pendingLocalNetworkPermissionTicket = null;
+			if (ticket.equals(pendingForegroundStartTicket) && !reservationPending) {
+				pendingForegroundStartTicket = null;
+			}
+			return;
+		}
+		pendingLocalNetworkPermissionTicket = null;
+		if (isFinishing() || isDestroyed()) {
+			cancelPendingForegroundSessionRequest();
+			return;
+		}
+		if (granted && !localNetworkPermissionCoordinator.requiresRuntimePermission()) {
+			PreferenceManager.getDefaultSharedPreferences(this).edit()
+					.remove(PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED).apply();
+			continueForegroundSessionRequest();
+		} else {
+			PreferenceManager.getDefaultSharedPreferences(this).edit()
+					.putBoolean(PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED, true).apply();
+			cancelPendingForegroundSessionRequest();
+			showLocalNetworkPermissionDenied();
+		}
+	}
+
+	private void showLocalNetworkPermissionDenied() {
+		new AlertDialog.Builder(this)
+				.setTitle(R.string.local_network_permission_denied_title)
+				.setMessage(R.string.local_network_permission_denied_message)
+				.setPositiveButton(R.string.local_network_permission_retry,
+						(dialog, which) -> requestForegroundSessionFromUi())
+				.setNeutralButton(R.string.local_network_permission_open_settings,
+						(dialog, which) -> openApplicationSettings())
+				.setNegativeButton(R.string.local_network_permission_not_now, null)
+				.show();
 	}
 
 	private void showNotificationPermissionRationale() {
@@ -1197,6 +1323,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		String ticket = pendingForegroundStartTicket;
 		ForegroundConnectRequestResult result = SessionForegroundService.startReservedConnect(this, ticket);
 		pendingForegroundStartTicket = null;
+		pendingLocalNetworkPermissionTicket = null;
 		pendingHostSelectionRequest = false;
 		if (result != ForegroundConnectRequestResult.ACCEPTED) {
 			SessionForegroundService.cancelReservedConnect(this, ticket);
@@ -1215,6 +1342,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		String ticket = pendingForegroundStartTicket;
 		pendingForegroundStartTicket = null;
 		pendingNotificationPermissionTicket = null;
+		pendingLocalNetworkPermissionTicket = null;
 		pendingHostSelectionRequest = false;
 		if (ticket != null) SessionForegroundService.cancelReservedConnect(this, ticket);
 	}
@@ -1301,7 +1429,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 	private String connectionFailureMessage(ConnectionFailure failure) {
 		if (failure instanceof ConnectionFailure.Permission) {
-			return "Local network access is unavailable. Allow it in system settings and retry.";
+			return "Local network access was denied or revoked. SSH stopped without treating this as an authentication failure. Allow access in Android settings, then use Retry.";
 		}
 		if (failure instanceof ConnectionFailure.Resolution) {
 			ConnectionFailure.ResolutionReason reason = ((ConnectionFailure.Resolution) failure).getReason();
