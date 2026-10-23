@@ -17,6 +17,33 @@ class ControlInputTest {
         override fun unregister(listener: GyroscopeSamplingGate.Listener) { unregistered += listener }
     }
 
+    @Test fun gyroRegistrationIsOptionalAndScopedToAnActiveInputLease() {
+        val surface = InputSurfaceToken()
+        val unsupported = Sensors(available = false)
+        val unsupportedGate = GyroscopeSamplingGate(
+            unsupported,
+            GyroscopeSamplingGate.MotionCallback { _, _, _ -> fail("unsupported gyro must not emit motion") },
+        )
+        unsupportedGate.update(resumed = true, controlSurface = surface, userEnabled = true)
+        assertFalse(unsupportedGate.isSampling)
+        assertTrue("unsupported hardware is never registered", unsupported.registered.isEmpty())
+
+        val supported = Sensors()
+        val gate = GyroscopeSamplingGate(supported, GyroscopeSamplingGate.MotionCallback { _, _, _ -> })
+        gate.update(resumed = true, controlSurface = null, userEnabled = true)
+        gate.update(resumed = false, controlSurface = surface, userEnabled = true)
+        assertTrue("inactive surfaces do not register", supported.registered.isEmpty())
+
+        gate.update(resumed = true, controlSurface = surface, userEnabled = true)
+        val listener = supported.registered.single()
+        gate.update(resumed = true, controlSurface = surface, userEnabled = true)
+        assertEquals("an active surface holds only one sensor registration", 1, supported.registered.size)
+
+        gate.update(resumed = true, controlSurface = null, userEnabled = true)
+        assertFalse(gate.isSampling)
+        assertEquals(listOf(listener), supported.unregistered)
+    }
+
     @Test fun gyroRegistersOnlyForResumedEnabledSurfaceAndRejectsLateCallbacks() {
         val sensors = Sensors()
         val delivered = mutableListOf<Pair<InputSurfaceToken, Pair<Float, Float>>>()
