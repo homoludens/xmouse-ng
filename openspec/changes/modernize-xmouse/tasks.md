@@ -79,7 +79,8 @@ Complexity amendment (2026-10-21): the user approved promoting 4.1 to `[high]` a
 
 ## 8. Introduce safe layout persistence and migration
 
-- [ ] 8.1 [low] Add versioned Kotlin profile/button models with stable IDs, ten-column widths, validated properties, and raw command strings; verify serialization round trips preserve Unicode, quotes, commas, spaces, and multiline commands exactly.
+- [x] 8.1 [low] Add versioned Kotlin profile/button models with stable IDs, ten-column widths, validated properties, and raw command strings; verify serialization round trips preserve Unicode, quotes, commas, spaces, and multiline commands exactly.
+<!-- 8.1 evidence: 1 focused JVM test passed via :app:testDebugUnitTest --tests 'com.stripe1.xmouse.layout.LayoutProfileJsonTest'; lintDebug, strict OpenSpec validation, git diff --check, and added-source whitespace checks passed. Persistence, migration, and UI remain for later tasks. -->
 - [ ] 8.2 [low] Implement atomic profile persistence with explicit read/write failures and recoverable draft handling; verify interrupted/truncated writes retain the last valid saved profile and never report a failed save as successful.
 - [ ] 8.3 [low] Migrate active/preset legacy files using deterministic source identities and the approved comma/separator readers; verify all four fixtures become distinct named profiles with correct order, command, width, color, and missing-color defaults.
 - [ ] 8.4 [high] Add migration checkpoints and malformed-source recovery without overwriting retained legacy files; verify interrupted/repeated migration does not duplicate profiles or silently restore defaults over damaged content.
