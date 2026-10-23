@@ -3,8 +3,11 @@ package com.stripe1.xmouse;
 import android.app.AlertDialog;
 import android.view.LayoutInflater;
 import android.view.View;
+import android.text.Editable;
 import android.widget.EditText;
 import android.widget.Button;
+import com.stripe1.xmouse.connection.EndpointLocator;
+import com.stripe1.xmouse.discovery.SshServiceDiscovery;
 import com.stripe1.xmouse.secrets.CredentialRepository;
 
 import com.tngtech.java.junit.dataprovider.DataProvider;
@@ -14,14 +17,18 @@ import com.tngtech.java.junit.dataprovider.UseDataProvider;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.MockedConstruction;
+import org.mockito.ArgumentCaptor;
 
 import java.lang.reflect.Field;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.net.InetAddress;
 
 import static org.junit.Assert.assertEquals;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockConstruction;
 import static org.mockito.Mockito.verify;
@@ -31,6 +38,9 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 import static org.mockito.Mockito.RETURNS_SELF;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.eq;
+import static org.mockito.Mockito.isNull;
 
 @RunWith(DataProviderRunner.class)
 public class ListEditActivityDialogTest {
@@ -130,6 +140,85 @@ public class ListEditActivityDialogTest {
             }
             if (!script && !editing) verifyNoInteractions(repository);
         }
+    }
+
+    @Test
+    public void discoveredProfileIsNotPersistedUntilExplicitSaveAndSaveRetainsItsLocator() throws Exception {
+        ListEditActivity activity = mock(ListEditActivity.class, CALLS_REAL_METHODS);
+        LayoutInflater inflater = mock(LayoutInflater.class);
+        View layout = mock(View.class);
+        AlertDialog dialog = mock(AlertDialog.class);
+        EditText alias = mock(EditText.class);
+        EditText endpoint = mock(EditText.class);
+        EditText username = mock(EditText.class);
+        EditText port = mock(EditText.class);
+        EditText password = mock(EditText.class);
+        Button positive = mock(Button.class);
+        Button negative = mock(Button.class);
+        when(dialog.getButton(AlertDialog.BUTTON_POSITIVE)).thenReturn(positive);
+        when(dialog.getButton(AlertDialog.BUTTON_NEGATIVE)).thenReturn(negative);
+        when(dialog.isShowing()).thenReturn(false);
+        when(inflater.inflate(R.layout.manage_host_item, null)).thenReturn(layout);
+        when(layout.findViewById(R.id.new_host_alias)).thenReturn(alias);
+        when(layout.findViewById(R.id.new_host_ip)).thenReturn(endpoint);
+        when(layout.findViewById(R.id.new_host_username)).thenReturn(username);
+        when(layout.findViewById(R.id.new_host_port)).thenReturn(port);
+        when(layout.findViewById(R.id.new_host_password)).thenReturn(password);
+        Editable aliasText = editable("Office workstation");
+        Editable endpointText = editable("192.0.2.60");
+        Editable usernameText = editable("fixture-user");
+        Editable portText = editable("2222");
+        Editable passwordText = editable("NOT_REAL_fixture");
+        when(alias.getText()).thenReturn(aliasText);
+        when(endpoint.getText()).thenReturn(endpointText);
+        when(username.getText()).thenReturn(usernameText);
+        when(port.getText()).thenReturn(portText);
+        when(password.getText()).thenReturn(passwordText);
+
+        CredentialRepository repository = mock(CredentialRepository.class);
+        doReturn(true).when(repository).isWritable();
+        doAnswer(call -> { ((Runnable) call.getArgument(0)).run(); return null; })
+                .when(repository).execute(any(Runnable.class));
+        doAnswer(call -> { ((Runnable) call.getArgument(0)).run(); return null; })
+                .when(activity).runOnUiThread(any(Runnable.class));
+        doReturn(false).when(activity).isFinishing();
+        doReturn(false).when(activity).isDestroyed();
+
+        EndpointLocator.DiscoveredService locator = new EndpointLocator.DiscoveredService(
+                "Office workstation", "_ssh._tcp", "local");
+        SshServiceDiscovery.Candidate candidate = new SshServiceDiscovery.Candidate(
+                new SshServiceDiscovery.Identity("wifi-1", "office workstation", "_ssh._tcp", "local"),
+                locator, 2222, Collections.singletonList(InetAddress.getByName("192.0.2.60")));
+        accessibleField("type").set(activity, ListEditActivity.ActivityType.type_host);
+        accessibleField("layoutInflater").set(activity, inflater);
+        accessibleField("credentials").set(activity, repository);
+
+        try (MockedConstruction<AlertDialog.Builder> builders = mockConstruction(
+                AlertDialog.Builder.class,
+                withSettings().defaultAnswer(RETURNS_SELF),
+                (builder, context) -> when(builder.create()).thenReturn(dialog))) {
+            java.lang.reflect.Method manage = ListEditActivity.class.getDeclaredMethod(
+                    "xMouseManage", Integer.class, SshServiceDiscovery.Candidate.class);
+            manage.setAccessible(true);
+            manage.invoke(activity, null, candidate);
+
+            // Selecting a result and opening the form are transient; only the Save listener writes.
+            verifyNoInteractions(repository);
+            ArgumentCaptor<View.OnClickListener> save = ArgumentCaptor.forClass(View.OnClickListener.class);
+            verify(positive).setOnClickListener(save.capture());
+            save.getValue().onClick(mock(View.class));
+
+            verify(repository).saveDiscoveredHost(isNull(), eq("Office workstation"), eq(locator),
+                    eq("fixture-user"), eq("2222"), any(byte[].class));
+            verify(repository, never()).saveHost(any(), any(String.class), any(String.class), any(String.class),
+                    any(String.class), any(byte[].class));
+        }
+    }
+
+    private static Editable editable(String value) {
+        Editable editable = mock(Editable.class);
+        when(editable.toString()).thenReturn(value);
+        return editable;
     }
 
     private static Field accessibleField(String name) throws NoSuchFieldException {

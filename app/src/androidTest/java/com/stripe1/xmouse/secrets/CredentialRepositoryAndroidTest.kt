@@ -38,6 +38,7 @@ import com.stripe1.xmouse.session.SessionInteractions
 import com.stripe1.xmouse.session.SessionServiceOwner
 import com.stripe1.xmouse.connection.ConnectionState
 import com.stripe1.xmouse.connection.ConnectionFailure
+import com.stripe1.xmouse.connection.Endpoint
 import com.stripe1.xmouse.connection.EndpointLocator
 import com.stripe1.xmouse.discovery.SshServiceDiscovery
 import org.junit.Assert.*
@@ -157,6 +158,30 @@ class CredentialRepositoryAndroidTest {
         assertArrayEquals(originalBytes, f.repository.readPassword(original))
         f.reopen(); assertTrue(f.repository.prepare())
         assertArrayEquals("NOT_REAL_reused".toByteArray(), f.repository.readPassword(f.repository.hosts().single { it.id == reused }))
+        f.assertNoPlaintext()
+    }
+
+    @Test fun explicitlySavedDiscoveredProfileReopensWithItsServiceLocatorRatherThanObservedAddress() = fixture { f ->
+        assertTrue(f.repository.prepare())
+        val locator = EndpointLocator.DiscoveredService("Office workstation", "_ssh._tcp", "local")
+        val expectedIdentity = Endpoint(locator, 2222).identity
+
+        // This repository API is the explicit Save boundary: no observed address or network handle is accepted.
+        val id = f.repository.saveDiscoveredHost(null, "Office workstation", locator,
+            "fixture-user", "2222", byteArrayOf())
+        val saved = f.repository.hosts().single { it.id == id }
+        assertNull(saved.host)
+        assertEquals(locator, saved.serviceLocator)
+        assertEquals(expectedIdentity, saved.endpoint().identity)
+
+        f.reopen()
+        assertTrue(f.repository.prepare())
+        val reopened = f.repository.hosts().single { it.id == id }
+        assertNull(reopened.host)
+        assertEquals(locator, reopened.serviceLocator)
+        assertEquals(2222, reopened.endpoint().port)
+        assertEquals(expectedIdentity, reopened.endpoint().identity)
+        assertEquals("Office workstation (_ssh._tcp.local)", reopened.displayEndpoint())
         f.assertNoPlaintext()
     }
 

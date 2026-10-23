@@ -1,11 +1,15 @@
 package com.stripe1.xmouse.discovery
 
 import com.stripe1.xmouse.connection.ConnectionFailure
+import com.stripe1.xmouse.connection.Endpoint
 import com.stripe1.xmouse.connection.EndpointLocator
 import com.stripe1.xmouse.permissions.LocalNetworkPermissionCoordinator
+import com.stripe1.xmouse.secrets.CredentialHost
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.Inet6Address
@@ -143,6 +147,40 @@ class SshServiceDiscoveryTest {
             platform.update(secondKey, firstInfo.copy(advertisement = sameServiceOnAnotherNetwork))
             assertEquals(2, listener.found.size)
         }
+    }
+
+    @Test
+    fun reopenedServiceLocatorUsesFreshAddressesWithoutChangingSavedPortOrTrustIdentity() {
+        val locator = EndpointLocator.DiscoveredService("Office workstation", "_ssh._tcp", "local")
+        val profile = CredentialHost(12, "Office workstation", null, "user", "2222", "opaque", false,
+            serviceLocator = locator)
+        val savedEndpoint = profile.endpoint()
+        val platform = FakeNsd(supportsServiceInfoCallbacks = false)
+        val listener = RecordingListener()
+        val discovery = SshServiceDiscovery(platform, listener)
+        discovery.start()
+
+        val ad = advertisement("Office workstation", "network-after-reopen")
+        val key = serviceIdentity(ad)
+        platform.found(ad)
+        platform.update(key, SshServiceInfo(ad, 2222, listOf(InetAddress.getByName("192.0.2.20"))))
+        val initial = listener.found.single()
+        platform.update(key, SshServiceInfo(ad, 2222, listOf(InetAddress.getByName("192.0.2.99"))))
+        val refreshed = listener.updated.single()
+        val reopenedCandidate = discovery.matchingCandidates(
+            profile.endpoint().locator as EndpointLocator.DiscoveredService,
+        ).single()
+
+        assertEquals(listOf("192.0.2.20"), initial.addresses.map { it.hostAddress })
+        assertEquals(listOf("192.0.2.99"), refreshed.addresses.map { it.hostAddress })
+        assertEquals(refreshed, reopenedCandidate)
+        assertNotEquals(initial.addresses, refreshed.addresses)
+        assertEquals(locator, profile.serviceLocator)
+        assertEquals(locator, profile.endpoint().locator)
+        assertEquals(2222, profile.endpoint().port)
+        assertEquals(savedEndpoint.identity, Endpoint(refreshed.locator, refreshed.port).identity)
+        assertNull(profile.host)
+        discovery.close()
     }
 
     @Test

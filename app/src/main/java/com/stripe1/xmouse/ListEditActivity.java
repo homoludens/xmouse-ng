@@ -20,6 +20,7 @@ import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.stripe1.xmouse.connection.ConnectionFailure;
 import com.stripe1.xmouse.connection.Endpoint;
 import com.stripe1.xmouse.connection.EndpointHost;
+import com.stripe1.xmouse.connection.EndpointLocator;
 import com.stripe1.xmouse.discovery.SshServiceDiscovery;
 import com.stripe1.xmouse.permissions.LocalNetworkPermissionCoordinator;
 import com.stripe1.xmouse.secrets.AndroidCredentials;
@@ -324,7 +325,7 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
                 try {
                     for (CredentialHost host : credentials.hosts()) {
                         HostItem item = new HostItem();
-                        item.setCredentialHost(host); item.setAlias(host.getAlias()); item.setIP(host.getHost());
+                        item.setCredentialHost(host); item.setAlias(host.getAlias()); item.setIP(host.displayEndpoint());
                         item.setUsername(host.getUser()); item.setPort(host.getPort()); item.setDbId((int) host.getId());
                         items.add(item);
                     }
@@ -367,8 +368,17 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
             if (android.os.Build.VERSION.SDK_INT >= 26) passwordBox.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
         }
         if (existing != null) {
-            nameBox.setText(existing.getAlias()); hostBox.setText(existing.getIP());
-            if (!script) { userBox.setText(existing.getUsername()); portBox.setText(existing.getPort()); }
+            nameBox.setText(existing.getAlias());
+            if (script) hostBox.setText(existing.getIP());
+            else {
+                CredentialHost credentialHost = existing.getCredentialHost();
+                hostBox.setText(credentialHost == null ? existing.getIP() : credentialHost.editableEndpoint());
+                if (credentialHost != null && credentialHost.getServiceLocator() != null &&
+                        credentialHost.getServiceLocator().getStableTargetHostname() == null) {
+                    hostBox.setHint(credentialHost.displayEndpoint());
+                }
+                userBox.setText(existing.getUsername()); portBox.setText(existing.getPort());
+            }
         } else if (!script && candidate != null) {
             nameBox.setText(candidate.getLocator().getInstanceName());
             hostBox.setText(candidateEndpoint(candidate));
@@ -423,16 +433,17 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
                 dialog.dismiss(); loadCurrentHostList();
             } else {
                 String user = userBox.getText().toString(); String port = portBox.getText().toString();
-                if (!validHostInput(hostBox, portBox)) return;
+                EndpointLocator.DiscoveredService serviceLocator = serviceLocatorForSave(existing, candidate, endpoint);
+                if (serviceLocator == null ? !validHostInput(hostBox, portBox) : !validPortInput(portBox)) return;
                 if (existing != null && existing.getCredentialHost().getCredentialReentryRequired()
                         && passwordBox.getText().length() == 0) {
                     AlertDialog confirmation = new AlertDialog.Builder(this)
                             .setTitle("Save an empty password?")
                             .setMessage("This host's saved password was not included in the backup. Confirm to replace it with an empty password.")
                             .setPositiveButton("Save empty password", (confirmationDialog, which) -> {
-                                if (current(token) && dialog.isShowing()) {
-                                    saveHost(dialog, token, existing, alias, endpoint, user, port, new byte[0]);
-                                }
+                                 if (current(token) && dialog.isShowing()) {
+                                     saveHost(dialog, token, existing, alias, endpoint, user, port, new byte[0], serviceLocator);
+                                 }
                             })
                             .setNegativeButton("Keep editing", null)
                             .create();
@@ -444,7 +455,7 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
                     return;
                 }
                 byte[] password = passwordBox.getText().toString().getBytes(StandardCharsets.UTF_8);
-                saveHost(dialog, token, existing, alias, endpoint, user, port, password);
+                saveHost(dialog, token, existing, alias, endpoint, user, port, password, serviceLocator);
             }
         });
         dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(view -> {
@@ -459,29 +470,48 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
 
     private boolean validHostInput(EditText hostBox, EditText portBox) {
         hostBox.setError(null);
-        portBox.setError(null);
         boolean valid = true;
         try { new EndpointHost(hostBox.getText().toString()); }
         catch (IllegalArgumentException ignored) {
             hostBox.setError("Enter a valid hostname or IP address");
             valid = false;
         }
+        return validPortInput(portBox) && valid;
+    }
+
+    private boolean validPortInput(EditText portBox) {
+        portBox.setError(null);
         try { Endpoint.parsePort(portBox.getText().toString()); }
         catch (IllegalArgumentException ignored) {
             portBox.setError("Port must be between 1 and 65535");
-            valid = false;
+            return false;
         }
-        return valid;
+        return true;
+    }
+
+    private EndpointLocator.DiscoveredService serviceLocatorForSave(
+            HostItem existing, SshServiceDiscovery.Candidate candidate, String enteredEndpoint) {
+        if (candidate != null && enteredEndpoint.equals(candidateEndpoint(candidate))) return candidate.getLocator();
+        if (existing == null || existing.getCredentialHost() == null) return null;
+        CredentialHost host = existing.getCredentialHost();
+        EndpointLocator.DiscoveredService saved = host.getServiceLocator();
+        return saved != null && enteredEndpoint.equals(host.editableEndpoint()) ? saved : null;
     }
 
     private void saveHost(AlertDialog dialog, int token, HostItem existing, String alias,
-                          String endpoint, String user, String port, byte[] password) {
+                          String endpoint, String user, String port, byte[] password,
+                          EndpointLocator.DiscoveredService serviceLocator) {
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
         credentials.execute(() -> {
             boolean saved;
             try {
                 if (!credentials.isWritable() && !credentials.prepare()) throw new com.stripe1.xmouse.secrets.CredentialRepositoryException();
-                credentials.saveHost(existing == null ? null : existing.getCredentialHost(), alias, endpoint, user, port, password);
+                if (serviceLocator == null) {
+                    credentials.saveHost(existing == null ? null : existing.getCredentialHost(), alias, endpoint, user, port, password);
+                } else {
+                    credentials.saveDiscoveredHost(existing == null ? null : existing.getCredentialHost(),
+                            alias, serviceLocator, user, port, password);
+                }
                 saved = true;
             }
             catch (Exception ignored) { saved = false; }

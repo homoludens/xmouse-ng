@@ -187,6 +187,19 @@ class SshServiceDiscovery internal constructor(
         if (closeImmediately) closeHandle(handle, Operation.STOP)
     }
 
+    /**
+     * Fresh results for a saved logical service locator. Matching deliberately ignores the network
+     * identity and advertised address; callers retain the profile's saved port and trust identity.
+     */
+    fun matchingCandidates(locator: EndpointLocator.DiscoveredService): List<Candidate> = synchronized(lock) {
+        if (!isDiscovering()) return@synchronized emptyList()
+        services.values.mapNotNull { it.candidate }.filter { candidate ->
+            candidate.locator.normalizedInstanceName == locator.normalizedInstanceName &&
+                candidate.locator.normalizedServiceType == locator.normalizedServiceType &&
+                candidate.locator.normalizedDomain == locator.normalizedDomain
+        }
+    }
+
     override fun close() {
         val handles = synchronized(lock) {
             if (lifecycle == Lifecycle.CLOSED) return

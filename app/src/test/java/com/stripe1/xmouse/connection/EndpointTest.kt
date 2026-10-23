@@ -1,5 +1,6 @@
 package com.stripe1.xmouse.connection
 
+import com.stripe1.xmouse.secrets.CredentialHost
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
@@ -83,6 +84,27 @@ class EndpointTest {
         assertEquals("local", identity.domain)
         assertEquals(2222, identity.port)
         assertNotEquals(Endpoint.manual("192.0.2.1", 2222).identity, identity)
+    }
+
+    @Test
+    fun reopenedServiceProfileReconstructsItsLogicalLocatorAndTrustIdentity() {
+        val locator = service("Office workstation", "_ssh._tcp", "local")
+        val reopened = CredentialHost(
+            12, "Office workstation", null, "user", "2222", "opaque-reference", false,
+            serviceLocator = locator,
+        )
+
+        assertNull("a DHCP address is not profile metadata", reopened.host)
+        assertEquals(locator, reopened.endpoint().locator)
+        assertEquals(2222, reopened.endpoint().port)
+        assertEquals(Endpoint(locator, 2222).identity, reopened.endpoint().identity)
+        assertEquals("Office workstation (_ssh._tcp.local)", reopened.displayEndpoint())
+        assertEquals("", reopened.editableEndpoint())
+
+        val stableLocator = service("Office workstation", "_ssh._tcp", "local", "DESKTOP.Local.")
+        val stableProfile = reopened.copy(host = "DESKTOP.Local.", serviceLocator = stableLocator)
+        assertEquals("DESKTOP.Local.", stableProfile.editableEndpoint())
+        assertEquals(Endpoint.manual("desktop.local", 2222).identity, stableProfile.endpoint().identity)
     }
 
     @Test

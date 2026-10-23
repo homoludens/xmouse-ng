@@ -9,6 +9,8 @@ import android.preference.PreferenceManager
 import androidx.core.database.sqlite.transaction
 import com.stripe1.xmouse.DatabaseHandler
 import com.stripe1.xmouse.connection.Endpoint
+import com.stripe1.xmouse.connection.EndpointHost
+import com.stripe1.xmouse.connection.EndpointLocator
 import java.io.Closeable
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -31,7 +33,24 @@ data class CredentialHost(
     val id: Long, val alias: String?, val host: String?, val user: String?, val port: String?,
     val passwordReference: String?, val legacyPasswordPresent: Boolean,
     val credentialReentryRequired: Boolean = false,
-)
+    /** Stable saved service locator, if this profile was explicitly saved from discovery. */
+    val serviceLocator: EndpointLocator.DiscoveredService? = null,
+) {
+    /** Reconstructs logical intent; observed addresses and network handles are never stored here. */
+    fun endpoint(): Endpoint {
+        val savedPort = Endpoint.parsePort(requireNotNull(port))
+        return serviceLocator?.let { Endpoint(it, savedPort) }
+            ?: Endpoint.manual(requireNotNull(host), savedPort)
+    }
+
+    fun displayEndpoint(): String = serviceLocator?.let { locator ->
+        locator.stableTargetHostname?.original ?: "${locator.instanceName} (${locator.serviceType}.${locator.domain})"
+    } ?: host.orEmpty()
+
+    /** Never prefill the editable host field with a service's last DHCP address. */
+    fun editableEndpoint(): String = serviceLocator?.stableTargetHostname?.original
+        ?: if (serviceLocator == null) host.orEmpty() else ""
+}
 
 enum class CredentialKind { PASSWORD, PASSPHRASE, PRIVATE_KEY }
 fun interface CredentialPrompts { fun request(kind: CredentialKind, request: CredentialReentryRequest) }
@@ -83,14 +102,17 @@ class CredentialRepository internal constructor(
         offMain()
         val reentryIds = preferences.getStringSet(CredentialMetadataBackup.HOST_REENTRY_IDS, emptySet())?.toSet().orEmpty()
         return database.readableDatabase.rawQuery(
-            "SELECT id, Alias, Host, Username, Port, PasswordCredentialRef, Password IS NOT NULL FROM contacts ORDER BY id", null,
+            "SELECT id, Alias, Host, Username, Port, PasswordCredentialRef, Password IS NOT NULL, " +
+                "LocatorType, ServiceInstanceName, ServiceType, ServiceDomain, StableTargetHostname " +
+                "FROM contacts ORDER BY id", null,
         ).use { c -> buildList {
             while (c.moveToNext()) {
                 val id = c.getLong(0)
                 val reference = c.getString(5)
                 val restoredReentry = reference == null && c.getInt(6) == 0 && id.toString() in reentryIds
                 add(CredentialHost(id, c.getString(1), c.getString(2), c.getString(3), c.getString(4), reference,
-                    c.getInt(6) != 0 || restoredReentry, restoredReentry))
+                    c.getInt(6) != 0 || restoredReentry, restoredReentry,
+                    readServiceLocator(c.getString(7), c.getString(8), c.getString(9), c.getString(10), c.getString(11))))
             }
         } }
     }
@@ -144,15 +166,55 @@ class CredentialRepository internal constructor(
     /** Fresh records per edit/add avoid clobbering old credentials, even after SQLite ID reuse. */
     fun saveHost(expected: CredentialHost?, alias: String, host: String, user: String, port: String, password: ByteArray): Long {
         // Validate before reading or writing secrets so a malformed edit cannot replace a good profile.
-        Endpoint.manual(host, port)
+        val endpoint = Endpoint.manual(host, port)
+        return saveHost(expected, alias, host, user, port, password, endpoint)
+    }
+
+    /** Save only the logical discovery locator; its current IPs and Android network are attempt-local. */
+    fun saveDiscoveredHost(
+        expected: CredentialHost?,
+        alias: String,
+        locator: EndpointLocator.DiscoveredService,
+        user: String,
+        port: String,
+        password: ByteArray,
+    ): Long {
+        val endpoint = Endpoint(locator, Endpoint.parsePort(port))
+        val savedHost = locator.stableTargetHostname?.original
+        return saveHost(expected, alias, savedHost, user, port, password, endpoint)
+    }
+
+    private fun saveHost(
+        expected: CredentialHost?, alias: String, host: String?, user: String, port: String,
+        password: ByteArray, endpoint: Endpoint,
+    ): Long {
         requireWritable()
         expected?.takeUnless { it.credentialReentryRequired }?.let { readPassword(it).fill(0) }
         val reference = verifiedReplacement(password)
         val db = database.writableDatabase
         val savedId = db.transaction {
             val values = ContentValues().apply {
-                put("Alias", alias); put("Host", host); put("Username", user); put("Port", port)
+                put("Alias", alias)
+                if (host == null) putNull("Host") else put("Host", host)
+                put("Username", user); put("Port", port)
                 putNull("Password"); put(DatabaseHandler.PASSWORD_CREDENTIAL_REF, reference.value)
+                when (val locator = endpoint.locator) {
+                    is EndpointLocator.Manual -> {
+                        put(DatabaseHandler.LOCATOR_TYPE, DatabaseHandler.LOCATOR_MANUAL)
+                        putNull(DatabaseHandler.SERVICE_INSTANCE_NAME)
+                        putNull(DatabaseHandler.SERVICE_TYPE)
+                        putNull(DatabaseHandler.SERVICE_DOMAIN)
+                        putNull(DatabaseHandler.STABLE_TARGET_HOSTNAME)
+                    }
+                    is EndpointLocator.DiscoveredService -> {
+                        put(DatabaseHandler.LOCATOR_TYPE, DatabaseHandler.LOCATOR_DISCOVERED_SERVICE)
+                        put(DatabaseHandler.SERVICE_INSTANCE_NAME, locator.instanceName)
+                        put(DatabaseHandler.SERVICE_TYPE, locator.serviceType)
+                        put(DatabaseHandler.SERVICE_DOMAIN, locator.domain)
+                        locator.stableTargetHostname?.original?.let { put(DatabaseHandler.STABLE_TARGET_HOSTNAME, it) }
+                            ?: putNull(DatabaseHandler.STABLE_TARGET_HOSTNAME)
+                    }
+                }
             }
             if (expected == null) {
                 putTimestamp(values)
@@ -165,6 +227,23 @@ class CredentialRepository internal constructor(
         }
         clearHostReentryMarker(savedId)
         return savedId
+    }
+
+    private fun readServiceLocator(
+        locatorType: String?, instanceName: String?, serviceType: String?, domain: String?, stableTarget: String?,
+    ): EndpointLocator.DiscoveredService? = when (locatorType ?: DatabaseHandler.LOCATOR_MANUAL) {
+        DatabaseHandler.LOCATOR_MANUAL -> null
+        DatabaseHandler.LOCATOR_DISCOVERED_SERVICE -> try {
+            EndpointLocator.DiscoveredService(
+                requireNotNull(instanceName), requireNotNull(serviceType), requireNotNull(domain),
+                stableTarget?.let(::EndpointHost),
+            )
+        } catch (_: IllegalArgumentException) {
+            throw CredentialRepositoryException()
+        } catch (_: IllegalStateException) {
+            throw CredentialRepositoryException()
+        }
+        else -> throw CredentialRepositoryException()
     }
 
     fun deleteHost(expected: CredentialHost) {
