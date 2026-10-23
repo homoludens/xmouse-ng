@@ -69,6 +69,7 @@ import com.stripe1.xmouse.permissions.LocalNetworkPermissionCoordinator;
 import com.stripe1.xmouse.layout.LegacyLayoutReader;
 import com.stripe1.xmouse.layout.LegacyLayoutProfileMigrator;
 import com.stripe1.xmouse.layout.LayoutButton;
+import com.stripe1.xmouse.layout.LayoutEditorActivity;
 import com.stripe1.xmouse.layout.LayoutProfile;
 import com.stripe1.xmouse.layout.LayoutProfileActivation;
 import com.stripe1.xmouse.layout.LayoutProfileRepository;
@@ -201,7 +202,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	private List<CustomKeyboardButton> mItems = new LinkedList<CustomKeyboardButton>();
 	private String KEYLOAYOUTFILENAME = "keyLayoutFile.csv";
 	private LayoutProfileRuntime layoutProfileRuntime;
+	private LayoutProfileRepository layoutProfileRepository;
 	private boolean legacyLayoutFallbackReadOnly = true;
+	private boolean returningFromLayoutEditor;
 	private final IdentityHashMap<CustomKeyboardButton, String> layoutButtonIds = new IdentityHashMap<>();
 	//static ImageView DeleteView;
 	private RelativeLayout EditKeyboardButtonsLayout;
@@ -683,6 +686,10 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	protected void onResume() {
 		super.onResume();
 		activityResumed = true;
+		if (returningFromLayoutEditor) {
+			returningFromLayoutEditor = false;
+			reloadSelectedSavedLayout();
+		}
 		foregroundRecoveryWindow = new ForegroundRecoveryWindow();
 		Log.d(TAG, "activity_resumed");
 		final boolean openedFromNotification = suppressLegacyAutoConnectOnResume;
@@ -1380,11 +1387,13 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		activityResumed = false;
 		if (foregroundRecoveryWindow != null) foregroundRecoveryWindow.close();
 		deactivateControlInputSurface();
-		if (isRepositoryLayoutActive()) {
-			saveCurrentRepositoryLayout();
-		} else if (!legacyLayoutFallbackReadOnly) {
-			KEYLOAYOUTFILENAME = "keyLayoutFile.csv";
-			saveKeyboardLayout();
+		if (!returningFromLayoutEditor) {
+			if (isRepositoryLayoutActive()) {
+				saveCurrentRepositoryLayout();
+			} else if (!legacyLayoutFallbackReadOnly) {
+				KEYLOAYOUTFILENAME = "keyLayoutFile.csv";
+				saveKeyboardLayout();
+			}
 		}
 		super.onPause();
 		// Another activity is taking focus (this activity is about to be "paused").
@@ -1724,7 +1733,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			editor2.putBoolean("mouse_invert_scroll", setting_invert_scroll);
 			editor2.commit();
 		} else if (id == R.id.action_edit_layout) {
-			showNoticeDialog(getBaseContext());
+			openLayoutEditor();
 		} else if (id == R.id.action_exit) {
 			// Exit is an explicit session dismissal, unlike ordinary Activity pause/destruction.
 			disconnectForegroundSessionFromUi();
@@ -1946,12 +1955,13 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 	private LayoutProfileActivation activateLayoutProfiles() {
 		try {
-			LayoutProfileRepository repository = new LayoutProfileRepository(new File(getFilesDir(), "layout-profiles"));
+			layoutProfileRepository = new LayoutProfileRepository(new File(getFilesDir(), "layout-profiles"));
 			layoutProfileRuntime = new LayoutProfileRuntime(
-					repository,
-					new LegacyLayoutProfileMigrator(getFilesDir(), repository));
+					layoutProfileRepository,
+					new LegacyLayoutProfileMigrator(getFilesDir(), layoutProfileRepository));
 			return layoutProfileRuntime.activate();
 		} catch (Exception ignored) {
+			layoutProfileRepository = null;
 			Log.w(TAG, "layout_profile_activation_failed");
 			return new LayoutProfileActivation(null,
 					"Layout profiles could not be activated. Check retained layout files and storage, then restart; legacy layouts remain available read-only.");
@@ -1960,6 +1970,46 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 	private boolean isRepositoryLayoutActive() {
 		return layoutProfileRuntime != null && layoutProfileRuntime.isRepositoryActive();
+	}
+
+	private void openLayoutEditor() {
+		if (!isRepositoryLayoutActive() || layoutProfileRepository == null) {
+			Toast.makeText(this, "The layout editor is unavailable until saved profiles are safely activated.",
+					Toast.LENGTH_LONG).show();
+			return;
+		}
+		try {
+			LayoutProfile selected = layoutProfileRepository.loadSelectedProfile();
+			if (selected == null) {
+				Toast.makeText(this, "No saved layout is selected.", Toast.LENGTH_LONG).show();
+				return;
+			}
+			Intent intent = new Intent(this, LayoutEditorActivity.class);
+			intent.putExtra(LayoutEditorActivity.EXTRA_PROFILE_ID, selected.getId());
+			returningFromLayoutEditor = true;
+			startActivity(intent);
+		} catch (Exception ignored) {
+			returningFromLayoutEditor = false;
+			Toast.makeText(this, "The selected layout could not be opened.", Toast.LENGTH_LONG).show();
+		}
+	}
+
+	/** Rebind normal controls only from the repository's saved selected profile after editor return. */
+	private void reloadSelectedSavedLayout() {
+		if (!isRepositoryLayoutActive() || layoutProfileRepository == null) return;
+		try {
+			LayoutProfile selected = layoutProfileRepository.loadSelectedProfile();
+			if (selected == null) return;
+			mItems = customButtonsFromProfile(selected);
+			if (mCoolDragAndDropGridView != null) {
+				mItemAdapter = new CustomKeyboardButtonAdapter(this, mItems);
+				mCoolDragAndDropGridView.setAdapter(mItemAdapter);
+				mItemAdapter.notifyDataSetChanged();
+			}
+		} catch (Exception ignored) {
+			Log.w(TAG, "layout_profile_reload_failed");
+			Toast.makeText(this, "The saved layout could not be reloaded.", Toast.LENGTH_LONG).show();
+		}
 	}
 
 	private LinkedList<CustomKeyboardButton> customButtonsFromProfile(LayoutProfile profile) {

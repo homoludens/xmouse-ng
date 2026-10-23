@@ -97,6 +97,7 @@ Complexity amendment (2026-10-21): the user approved promoting 4.1 to `[high]` a
 ## 9. Build the Kotlin grid editor
 
 - [ ] 9.1 [low] Add an explicit editor entry point with saved/draft ViewModel state, Save/Discard/Cancel, and draft restoration across screen recreation; verify dirty Back navigation and recreation preserve or discard changes only as requested.
+<!-- 9.1 evidence: 3 focused LayoutEditorViewModelTest cases passed for dirty Back Save/Discard/Cancel behavior, failed-save draft retry, and persisted draft restoration in a recreated ViewModel. :app:assembleDebug and :app:assembleDebugAndroidTest, strict OpenSpec validation, and git diff --check passed. No full suite, lint, device/UI instrumentation, or ADB; task remains unchecked pending interactive Back/recreation verification. -->
 - [ ] 9.2 [low] Render the ten-column flow preview with stable button selection and valid-property feedback; verify logical order/wrapping and fixed-height behavior across phone/tablet widths without storing pixel positions.
 - [ ] 9.3 [high] Implement drag reordering with placement previews and width resizing through visible controls; verify pointer tests produce the expected order/width and invalid spans keep the draft open.
 - [ ] 9.4 [low] Add button create/edit/duplicate/delete, color selection, and required-field validation without converting custom commands to a new action format; verify invalid properties do not dismiss the draft or alter saved data.
