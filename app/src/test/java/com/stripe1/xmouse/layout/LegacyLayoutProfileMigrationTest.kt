@@ -259,6 +259,8 @@ class LegacyLayoutProfileMigrationTest {
         var profileWrites = 0
             private set
 
+        override fun listFileNames(): List<String> = committed.keys.toList()
+
         override fun readAtomically(fileName: String): ByteArray? = committed[fileName]?.copyOf()
 
         override fun writeAtomically(fileName: String, bytes: ByteArray) {
