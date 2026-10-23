@@ -312,6 +312,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		localNetworkPermissionLauncher = registerForActivityResult(
 				new ActivityResultContracts.RequestPermission(), granted -> onLocalNetworkPermissionResult(granted));
 		setContentView(R.layout.activity_main);
+		SystemWindowInsets.applyTo(getWindow(), findViewById(R.id.drawer_layout));
 		toolbar = (Toolbar) findViewById(R.id.toolbar);
 		setSupportActionBar(toolbar);
 		commandTransport = new SessionCommandTransport(getApplicationContext());
@@ -2327,6 +2328,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		});
 		AlertDialog dialog = builder.create();
 		dialog.show();
+		if (dialog.getWindow() != null) {
+			dialog.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+		}
 
 
 	}

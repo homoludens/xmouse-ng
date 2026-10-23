@@ -9,6 +9,7 @@ import android.content.DialogInterface.OnShowListener;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
 
@@ -54,6 +55,9 @@ public class myDialogFragment extends DialogFragment {
                    });  
         
         AlertDialog ad = builder.create();
+        if (ad.getWindow() != null) {
+            ad.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        }
         
         ad.setOnShowListener(new OnShowListener(){
 

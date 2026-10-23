@@ -92,6 +92,7 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
         localNetworkPermissionLauncher = registerForActivityResult(
                 new ActivityResultContracts.RequestPermission(), this::onLocalNetworkPermissionResult);
         setContentView(R.layout.activity_list_edit);
+        SystemWindowInsets.applyTo(getWindow(), findViewById(R.id.list_edit_root));
         setSupportActionBar((Toolbar) findViewById(R.id.toolbar));
         getSupportActionBar().setDisplayHomeAsUpEnabled(true);
         layoutInflater = getLayoutInflater();
@@ -391,6 +392,9 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
         AlertDialog dialog = builder.create();
         editing = dialog;
         dialog.show();
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        }
         final int token = generation;
         dialog.setOnDismissListener(ignored -> {
             if (passwordBox != null) passwordBox.getText().clear();
