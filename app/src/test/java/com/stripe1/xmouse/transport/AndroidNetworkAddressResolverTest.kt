@@ -6,6 +6,7 @@ import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import com.stripe1.xmouse.connection.Endpoint
+import com.stripe1.xmouse.connection.EndpointLocator
 import com.stripe1.xmouse.permissions.LocalNetworkPermissionCoordinator
 import org.junit.Assert.*
 import org.junit.Test
@@ -89,6 +90,64 @@ class AndroidNetworkAddressResolverTest {
         `when`(f.connectivity.activeNetwork).thenReturn(mock(Network::class.java))
         assertFalse(resolution.isCurrent)
         assertThrows(SshAddressResolver.NetworkChangedException::class.java) { resolution.checkCurrent() }
+    }
+
+    @Test fun savedServiceLocatorUsesFreshCurrentNetworkCandidatesAndRejectsStaleRoutes() {
+        val f = Fixture()
+        `when`(f.network.networkHandle).thenReturn(73L)
+        val locator = EndpointLocator.DiscoveredService("Office SSH", "_ssh._tcp", "local")
+        val endpoint = Endpoint(locator, 2222)
+        val snapshots = ArrayDeque(listOf(
+            listOf(InetAddress.getByName("192.0.2.20")),
+            listOf(InetAddress.getByName("192.0.2.99"), InetAddress.getByName("2001:db8::9")),
+        ))
+        var lookups = 0
+        val serviceLookup = SshServiceCandidateLookup { requested, networkIdentity, current, checkCurrent ->
+            assertEquals(locator, requested)
+            assertEquals("73", networkIdentity)
+            assertTrue(current.asBoolean)
+            checkCurrent()
+            lookups++
+            snapshots.removeFirst()
+        }
+        val resolver = AndroidNetworkAddressResolver(f.connectivity, f.permission, serviceLookup = serviceLookup)
+
+        val first = resolver.resolve(endpoint, locator.instanceName, f.active)
+        assertEquals(listOf("192.0.2.20"), first.candidates().map { it.hostAddress })
+        val second = resolver.resolve(endpoint, locator.instanceName, f.active)
+        assertEquals(listOf("192.0.2.99", "2001:db8:0:0:0:0:0:9"), second.candidates().map { it.hostAddress })
+        assertEquals(2, lookups)
+        assertEquals(2222, endpoint.port) // The advertisement's changing port never replaces saved trust identity.
+
+        `when`(f.connectivity.activeNetwork).thenReturn(mock(Network::class.java))
+        assertFalse(second.isCurrent)
+        assertThrows(SshAddressResolver.NetworkChangedException::class.java) { second.checkCurrent() }
+    }
+
+    @Test fun serviceLookupPermissionAndCancellationAreCheckedBeforeCandidatesAreAccepted() {
+        val f = Fixture()
+        val locator = EndpointLocator.DiscoveredService("Office SSH", "_ssh._tcp", "local")
+        val endpoint = Endpoint(locator, 22)
+        var lookups = 0
+        val resolver = AndroidNetworkAddressResolver(f.connectivity, f.permission,
+            serviceLookup = SshServiceCandidateLookup { _, _, current, _ ->
+                lookups++
+                if (!current.asBoolean) throw CancellationException()
+                listOf(InetAddress.getByName("192.0.2.20"))
+            })
+
+        f.granted = false
+        assertThrows(SshAddressResolver.AccessDeniedException::class.java) {
+            resolver.resolve(endpoint, locator.instanceName, f.active)
+        }
+        assertEquals(0, lookups)
+
+        f.granted = true
+        f.current = false
+        assertThrows(CancellationException::class.java) {
+            resolver.resolve(endpoint, locator.instanceName, f.active)
+        }
+        assertEquals(0, lookups)
     }
 
     @Test fun nativeLocalFailureUsesOnlyAAndAaaaWithoutAnSshAdvertisementAndPreservesTrustName() {

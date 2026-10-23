@@ -1,8 +1,11 @@
 package com.stripe1.xmouse.trust
 
+import android.net.ConnectivityManager
+import android.net.Network
 import com.stripe1.xmouse.connection.Endpoint
 import com.stripe1.xmouse.connection.EndpointHost
 import com.stripe1.xmouse.connection.EndpointLocator
+import com.stripe1.xmouse.permissions.LocalNetworkPermissionCoordinator
 import com.stripe1.xmouse.transport.*
 import org.apache.sshd.common.config.keys.PublicKeyEntry
 import org.apache.sshd.common.channel.Channel
@@ -22,6 +25,8 @@ import org.apache.sshd.server.channel.ChannelSession
 import org.apache.sshd.server.command.Command
 import org.junit.Assert.*
 import org.junit.Test
+import org.mockito.Mockito.mock
+import org.mockito.Mockito.`when`
 import java.io.*
 import java.net.Inet6Address
 import java.net.InetAddress
@@ -142,6 +147,27 @@ class JschHostTrustIntegrationTest {
             }
         }
 
+    private fun directServiceCandidates(): SshAddressResolver = object : SshAddressResolver {
+        override fun resolve(host: String, current: BooleanSupplier): SshAddressResolver.Resolution =
+            SshAddressResolver.system().resolve(host, current)
+
+        override fun resolve(
+            endpoint: Endpoint,
+            host: String,
+            current: BooleanSupplier,
+        ): SshAddressResolver.Resolution {
+            if (endpoint.locator is EndpointLocator.DiscoveredService &&
+                endpoint.locator.stableTargetHostname == null
+            ) {
+                if (!current.asBoolean) throw java.util.concurrent.CancellationException()
+                return object : SshAddressResolver.Resolution {
+                    override fun candidates(): List<InetAddress> = listOf(InetAddress.getByName(host))
+                }
+            }
+            return resolve(host, current)
+        }
+    }
+
     @Test fun actualJschWaitsForDurableExplicitApprovalBeforePasswordAuthenticationAndInitialCommand() {
         Server().use { server -> Fixture().use { f ->
             val durableBeforeAuthentication = CountDownLatch(1)
@@ -195,6 +221,88 @@ class JschHostTrustIntegrationTest {
                 noAuthenticationOrCommands(changedKey); assertTrue(f.prompts.isEmpty())
             }
         } }
+    }
+
+    @Test fun actualJschConnectsManualLocalDnsAndIpEndpointsWithoutAnSshAdvertisement() {
+        for (host in listOf("desktop.local", "linux.example.test", "192.0.2.42", "2001:db8::42")) {
+            Server().use { server ->
+                val endpoint = Endpoint.manual(host, server.ssh.port)
+                val manualLocator = endpoint.locator as EndpointLocator.Manual
+                val lookups = AtomicInteger()
+                val resolver = SshAddressResolver { resolvedHost, current ->
+                    assertTrue(current.asBoolean)
+                    assertEquals(manualLocator.host.lookupHost, resolvedHost)
+                    lookups.incrementAndGet()
+                    object : SshAddressResolver.Resolution {
+                        override fun candidates(): List<InetAddress> = listOf(InetAddress.getByName("127.0.0.1"))
+                    }
+                }
+                Fixture(resolver = resolver).use { f ->
+                    val result = f.connect(server, address = manualLocator.host.lookupHost, endpoint = endpoint)
+                    val prompt = f.prompt()
+                    assertEquals(endpoint.identity, prompt.endpoint.identity)
+                    prompt.accept()
+                    result.await()
+                    assertNull("manual endpoint $host", result.failure)
+                    assertEquals(1, lookups.get())
+                    assertEquals(1, server.credentialAuth.get())
+                    val disconnected = Result(); f.transport.disconnect(disconnected); disconnected.await()
+                }
+            }
+        }
+    }
+
+    @Test fun actualJschUsesFreshServiceCandidatesAndTreatsChangedServiceKeyAsTerminal() {
+        val trustedKey = Server.newKey()
+        val changedKey = Server.newKey()
+        Server("127.0.0.2", 0, trustedKey).use { trustedServer ->
+            val locator = EndpointLocator.DiscoveredService("Office SSH", "_ssh._tcp", "local")
+            val endpoint = Endpoint(locator, trustedServer.ssh.port)
+            val candidates = AtomicReference(listOf(
+                InetAddress.getByName("127.0.0.1"),
+                InetAddress.getByName("127.0.0.2"),
+            ))
+            val lookups = AtomicInteger()
+            val connectivity = mock(ConnectivityManager::class.java)
+            val network = mock(Network::class.java)
+            `when`(connectivity.activeNetwork).thenReturn(network)
+            val serviceLookup = SshServiceCandidateLookup { requested, networkIdentity, current, checkCurrent ->
+                assertEquals(locator, requested)
+                assertEquals(network.networkHandle.toString(), networkIdentity)
+                assertTrue(current.asBoolean)
+                checkCurrent()
+                lookups.incrementAndGet()
+                candidates.get()
+            }
+            val resolver = AndroidNetworkAddressResolver(
+                connectivity,
+                LocalNetworkPermissionCoordinator({ 36 }, { false }),
+                serviceLookup = serviceLookup,
+            )
+
+            Fixture(resolver = resolver).use { f ->
+                f.repo.approve(endpoint.identity, approvedKey(trustedKey), BooleanSupplier { true })
+                Server("127.0.0.1", trustedServer.ssh.port, changedKey).use { changedServer ->
+                    val mismatch = f.connect(changedServer, address = locator.instanceName, endpoint = endpoint)
+                    mismatch.await()
+                    assertEquals(SshTransport.Failure.HOST_MISMATCH, mismatch.failure)
+                    noAuthenticationOrCommands(changedServer)
+                    assertEquals("a service-key mismatch never falls back to another advertised address", 0,
+                        trustedServer.credentialAuth.get())
+                    assertEquals(1, lookups.get())
+                }
+
+                // A new attempt does a new lookup and connects through the still-trusted candidate.
+                candidates.set(listOf(InetAddress.getByName("127.0.0.2")))
+                val accepted = f.connect(trustedServer, address = locator.instanceName, endpoint = endpoint)
+                accepted.await()
+                assertNull(accepted.failure)
+                assertEquals(2, lookups.get())
+                assertTrue(f.prompts.isEmpty())
+                assertEquals(1, trustedServer.credentialAuth.get())
+                val disconnected = Result(); f.transport.disconnect(disconnected); disconnected.await()
+            }
+        }
     }
 
     @Test fun actualJschFallsBackAfterTcpFailureAndResolvesAgainAfterNetworkChange() {
@@ -349,7 +457,7 @@ class JschHostTrustIntegrationTest {
 
         val serviceIdentity = Endpoint(EndpointLocator.DiscoveredService("Office SSH", "_ssh._tcp", "local"), port)
         val serviceKey = Server.newKey()
-        Server("127.0.0.1", port, serviceKey).use { serviceFirst -> Fixture().use { f ->
+        Server("127.0.0.1", port, serviceKey).use { serviceFirst -> Fixture(resolver = directServiceCandidates()).use { f ->
             val first = f.connect(serviceFirst, endpoint = serviceIdentity); f.prompt().accept(); first.await(); assertNull(first.failure)
             val stopped = Result(); f.transport.disconnect(stopped); stopped.await()
             Server("127.0.0.2", port).use { serviceChangedKey ->

@@ -45,7 +45,7 @@ public final class JschSshBackend implements SshBackend {
 
     @Override public SshConnectionRequest resolve(SshConnectionRequest request, BooleanSupplier current) throws Exception {
         if (!current.getAsBoolean()) throw new CancellationException();
-        SshAddressResolver.Resolution result = resolver.resolve(request.address, current);
+        SshAddressResolver.Resolution result = resolver.resolve(request.endpoint, request.address, current);
         if (!current.getAsBoolean()) throw new CancellationException();
         result.checkCurrent();
         return request.resolved(result);

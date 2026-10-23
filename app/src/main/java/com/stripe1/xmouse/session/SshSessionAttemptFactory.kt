@@ -108,12 +108,9 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
                 }
                 val address = when (val locator = host.endpoint.locator) {
                     is EndpointLocator.Manual -> locator.host.lookupHost
-                    is EndpointLocator.DiscoveredService -> locator.stableTargetHostname?.lookupHost
-                }
-                if (address == null) {
-                    material.close()
-                    fail(ConnectionFailure.Resolution(ConnectionFailure.ResolutionReason.UNAVAILABLE))
-                    return // Service-only resolution is task 6.3/7.x, never dial a fabricated hostname.
+                    // The endpoint-aware Android resolver handles service-only locators through a
+                    // fresh NSD lookup. This display spelling is never sent to DNS for that case.
+                    is EndpointLocator.DiscoveredService -> locator.stableTargetHostname?.lookupHost ?: locator.instanceName
                 }
                 handedMaterial = material
                 transport.connect(SshConnectionRequest(host.endpoint, address, host.shell, host.initialCommand), material,

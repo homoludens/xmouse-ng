@@ -25,6 +25,7 @@ class SshSessionAttemptFactoryTest {
         val credentials = SessionFixtures.Credentials()
         val backends = CopyOnWriteArrayList<RecordingSshBackend>()
         val identities = CopyOnWriteArrayList<Pair<EndpointIdentity, CredentialHost>>()
+        val requests = CopyOnWriteArrayList<SshConnectionRequest>()
         val runtime = SshRuntime()
         val limits = SshLimits(800, 800, 800, 1200, 800, 500, 500, 500, 400, 300, 3, 50, 200, 4096)
         val interactions = SessionInteractions(Executor { it.run() })
@@ -36,7 +37,11 @@ class SshSessionAttemptFactoryTest {
                 }
                 backends.add(backend)
                 object : SshBackend by backend {
-                    override fun resolve(request: SshConnectionRequest): SshConnectionRequest { backend.record("resolve"); return request }
+                    override fun resolve(request: SshConnectionRequest): SshConnectionRequest {
+                        requests.add(request)
+                        backend.record("resolve")
+                        return request
+                    }
                     override fun create(request: SshConnectionRequest, authentication: AuthenticationMaterial): SshBackend.Session {
                         identities.add(request.endpoint.identity to authentication.host)
                         return backend.create(request, authentication)
@@ -190,6 +195,27 @@ class SshSessionAttemptFactoryTest {
             eventually(f.queue) { f.controller.current.connection.isReady }
             assertEquals(2, f.backends.sumOf { backend -> backend.events.count { it.name == "resolve" } })
             assertEquals(2, f.identities.size)
+        }
+    }
+
+    @Test fun serviceOnlyProfileKeepsItsLocatorAndUsesItsExistingUserAuthentication() {
+        Fixture().use { f ->
+            val locator = EndpointLocator.DiscoveredService("Office SSH", "_ssh._tcp", "local")
+            val endpoint = Endpoint(locator, 2222)
+            val baseHost = a.authentication.host.copy(alias = "Office SSH", host = null, port = "2222")
+            val selected = SessionHost(endpoint, a.authentication.copy(host = baseHost), a.shell, a.initialCommand)
+
+            f.connect(selected)
+            val material = f.credentials.succeed(0, selected)
+            eventually(f.queue) { f.controller.current.connection.isReady }
+
+            assertEquals(endpoint.identity, f.requests.single().endpoint.identity)
+            assertEquals("service instance is not replaced with a fabricated hostname", locator.instanceName,
+                f.requests.single().address)
+            assertNull((f.requests.single().endpoint.locator as EndpointLocator.DiscoveredService).stableTargetHostname)
+            assertEquals(endpoint.identity to baseHost, f.identities.single())
+            assertEquals("NOT_REAL_user", baseHost.user)
+            assertTrue(material.password.all { it == 0.toByte() })
         }
     }
 

@@ -3,6 +3,8 @@ package com.stripe1.xmouse.transport
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
+import com.stripe1.xmouse.connection.Endpoint
+import com.stripe1.xmouse.connection.EndpointLocator
 import com.stripe1.xmouse.permissions.LocalNetworkPermissionCoordinator
 import java.io.IOException
 import java.net.Inet6Address
@@ -12,25 +14,59 @@ import java.util.LinkedHashMap
 import java.util.concurrent.CancellationException
 import java.util.function.BooleanSupplier
 
+internal fun interface SshServiceCandidateLookup {
+    fun lookup(
+        locator: EndpointLocator.DiscoveredService,
+        networkIdentity: String,
+        current: BooleanSupplier,
+        checkCurrent: () -> Unit,
+    ): List<InetAddress>
+}
+
 /** Fresh hostname lookup and socket routing on the active, permission-checked Android network. */
 class AndroidNetworkAddressResolver internal constructor(
     private val connectivity: ConnectivityManager,
     private val localNetworkPermission: LocalNetworkPermissionCoordinator,
     private val fallback: ((Network, String, () -> Unit) -> Array<InetAddress>)? = null,
+    private val serviceLookup: SshServiceCandidateLookup? = null,
 ) : SshAddressResolver {
-    constructor(context: Context, localNetworkPermission: LocalNetworkPermissionCoordinator) : this(
+    internal constructor(
+        context: Context,
+        localNetworkPermission: LocalNetworkPermissionCoordinator,
+        serviceLookup: SshServiceCandidateLookup,
+    ) : this(
         requireNotNull(context.applicationContext.getSystemService(ConnectivityManager::class.java)),
         localNetworkPermission,
+        serviceLookup = serviceLookup,
     )
+
+    override fun resolve(endpoint: Endpoint, host: String, current: BooleanSupplier): SshAddressResolver.Resolution {
+        val locator = endpoint.locator as? EndpointLocator.DiscoveredService
+        if (locator == null || locator.stableTargetHostname != null) return resolve(host, current)
+
+        checkAttempt(current)
+        checkAccess()
+        val network = connectivity.activeNetwork ?: throw UnknownHostException()
+        val checkCurrent = { checkCurrent(network, current) }
+        checkCurrent()
+        val addresses = serviceLookup?.lookup(
+            locator,
+            network.networkHandle.toString(),
+            current,
+            checkCurrent,
+        ) ?: throw UnknownHostException()
+        checkCurrent()
+        val candidates = boundedUnique(addresses.toTypedArray())
+        if (candidates.isEmpty()) throw UnknownHostException()
+        return route(network, candidates, checkCurrent)
+    }
 
     override fun resolve(host: String, current: BooleanSupplier): SshAddressResolver.Resolution {
         checkAttempt(current)
         checkAccess()
         val network = connectivity.activeNetwork ?: throw UnknownHostException()
         val checkCurrent = {
-            checkAttempt(current)
-            checkAccess()
-            if (connectivity.activeNetwork != network) throw SshAddressResolver.NetworkChangedException()
+            checkCurrent(network, current)
         }
         val resolved = try {
             network.getAllByName(host).also { if (it.isEmpty()) throw UnknownHostException() }
@@ -54,28 +90,42 @@ class AndroidNetworkAddressResolver internal constructor(
 
         val candidates = boundedUnique(resolved)
         if (candidates.isEmpty()) throw UnknownHostException()
+        return route(network, candidates, checkCurrent)
+    }
+
+    private fun route(
+        network: Network,
+        candidates: List<InetAddress>,
+        checkCurrent: () -> Unit,
+    ): SshAddressResolver.Resolution {
         return object : SshAddressResolver.Resolution {
             override fun candidates(): List<InetAddress> = candidates
 
             override fun isCurrent(): Boolean = try {
-                current.asBoolean && localNetworkPermission.accessFailure() == null &&
-                    connectivity.activeNetwork == network
+                checkCurrent()
+                true
             } catch (_: RuntimeException) {
+                false
+            } catch (_: IOException) {
                 false
             }
 
             override fun checkCurrent() {
-                checkAttempt(current)
-                checkAccess()
-                if (connectivity.activeNetwork != network) throw SshAddressResolver.NetworkChangedException()
+                checkCurrent.invoke()
             }
 
             override fun bind(socket: java.net.Socket) {
-                checkCurrent()
+                checkCurrent.invoke()
                 network.bindSocket(socket)
-                checkCurrent()
+                checkCurrent.invoke()
             }
         }
+    }
+
+    private fun checkCurrent(network: Network, current: BooleanSupplier) {
+        checkAttempt(current)
+        checkAccess()
+        if (connectivity.activeNetwork != network) throw SshAddressResolver.NetworkChangedException()
     }
 
     private fun checkAccess() {

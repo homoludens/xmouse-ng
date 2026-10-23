@@ -14,6 +14,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.Inet6Address
 import java.net.InetAddress
+import java.util.concurrent.CancellationException
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.function.BooleanSupplier
 
 private fun serviceIdentity(advertisement: SshServiceAdvertisement): SshServiceDiscovery.Identity {
     val locator = EndpointLocator.DiscoveredService(
@@ -184,6 +189,72 @@ class SshServiceDiscoveryTest {
     }
 
     @Test
+    fun oneShotLookupUsesOnlyTheCurrentNetworkCandidateAndClosesDiscovery() {
+        val locator = EndpointLocator.DiscoveredService("Office workstation", "_ssh._tcp", "local")
+        val platform = FakeNsd(supportsServiceInfoCallbacks = false)
+        val lookup = AndroidSshServiceAddressLookup(
+            discoveryFor = { listener -> SshServiceDiscovery(platform, listener) },
+            pollMillis = 10,
+        )
+        val current = AtomicBoolean(true)
+        val future = FutureTask {
+            lookup.lookup(locator, "network-current", BooleanSupplier { current.get() }) {
+                if (!current.get()) throw CancellationException()
+            }
+        }
+        Thread(future, "test-service-lookup").apply { isDaemon = true; start() }
+        await { platform.discoveryCallbacks != null }
+
+        val stale = advertisement(locator.instanceName, "network-stale")
+        val staleIdentity = serviceIdentity(stale)
+        platform.found(stale)
+        platform.update(staleIdentity, SshServiceInfo(stale, 2222, listOf(InetAddress.getByName("192.0.2.1"))))
+        assertFalse(future.isDone)
+
+        val fresh = advertisement(locator.instanceName, "network-current")
+        val freshIdentity = serviceIdentity(fresh)
+        platform.found(fresh)
+        val addresses = listOf(InetAddress.getByName("192.0.2.20"), InetAddress.getByName("2001:db8::20"))
+        platform.update(freshIdentity, SshServiceInfo(fresh, 2200, addresses))
+
+        assertEquals(addresses, future.get(2, TimeUnit.SECONDS))
+        assertEquals("one-shot discovery closes after receiving a current candidate", 1, platform.discoveryHandle!!.closeCount)
+    }
+
+    @Test
+    fun cancelledOneShotLookupStopsDiscoveryAndCannotReturnALateCandidate() {
+        val locator = EndpointLocator.DiscoveredService("Office workstation", "_ssh._tcp", "local")
+        val platform = FakeNsd(supportsServiceInfoCallbacks = false)
+        val lookup = AndroidSshServiceAddressLookup(
+            discoveryFor = { listener -> SshServiceDiscovery(platform, listener) },
+            pollMillis = 10,
+        )
+        val current = AtomicBoolean(true)
+        val future = FutureTask {
+            lookup.lookup(locator, "network-current", BooleanSupplier { current.get() }) {
+                if (!current.get()) throw CancellationException()
+            }
+        }
+        Thread(future, "test-cancelled-service-lookup").apply { isDaemon = true; start() }
+        await { platform.discoveryCallbacks != null }
+        current.set(false)
+
+        val failure = try {
+            future.get(2, TimeUnit.SECONDS)
+            null
+        } catch (expected: java.util.concurrent.ExecutionException) {
+            expected.cause
+        }
+        assertTrue(failure is CancellationException)
+        assertEquals(1, platform.discoveryHandle!!.closeCount)
+
+        val late = advertisement(locator.instanceName, "network-current")
+        platform.found(late)
+        assertTrue(future.isDone)
+        assertTrue(platform.serviceCallbacks.isEmpty())
+    }
+
+    @Test
     fun startAndStopFailuresAreReportedAndCloseRemainsIdempotent() {
         val startPlatform = FakeNsd(supportsServiceInfoCallbacks = false).apply {
             startFailure = IllegalStateException("start rejected")
@@ -284,4 +355,10 @@ class SshServiceDiscoveryTest {
 
     private fun advertisement(name: String, network: String) =
         SshServiceAdvertisement(name, "_ssh._tcp.", "local.", network)
+
+    private fun await(condition: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        while (!condition() && System.nanoTime() < deadline) Thread.sleep(5)
+        assertTrue(condition())
+    }
 }

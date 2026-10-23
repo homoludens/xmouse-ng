@@ -1,5 +1,7 @@
 package com.stripe1.xmouse.transport;
 
+import com.stripe1.xmouse.connection.Endpoint;
+import com.stripe1.xmouse.connection.EndpointLocator;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.Socket;
@@ -15,6 +17,15 @@ public interface SshAddressResolver {
     int MAX_CANDIDATES = 8;
 
     Resolution resolve(String host, BooleanSupplier current) throws Exception;
+
+    /** Locator-aware entry point; only Android NSD adapters can resolve service-only profiles. */
+    default Resolution resolve(Endpoint endpoint, String host, BooleanSupplier current) throws Exception {
+        if (endpoint.getLocator() instanceof EndpointLocator.DiscoveredService &&
+                ((EndpointLocator.DiscoveredService) endpoint.getLocator()).getStableTargetHostname() == null) {
+            throw new UnknownHostException();
+        }
+        return resolve(host, current);
+    }
 
     /** Attempt-local route information. Android implementations bind sockets and reject stale networks. */
     interface Resolution {
