@@ -22,6 +22,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.widget.EditText
+import android.widget.ListView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -37,6 +38,7 @@ import androidx.drawerlayout.widget.DrawerLayout
 import com.stripe1.xmouse.MainActivity
 import com.stripe1.xmouse.DatabaseHandler
 import com.stripe1.xmouse.CustomKeyboardButtonAdapter
+import com.stripe1.xmouse.ListEditActivity
 import com.stripe1.xmouse.MyJSView
 import com.stripe1.xmouse.MyMouseView
 import com.stripe1.xmouse.R
@@ -45,6 +47,7 @@ import com.stripe1.xmouse.XMouseApplication
 import com.stripe1.xmouse.connection.ConnectionFailure
 import com.stripe1.xmouse.connection.ConnectionState
 import com.stripe1.xmouse.connection.Endpoint
+import com.stripe1.xmouse.connection.EndpointLocator
 import com.stripe1.xmouse.secrets.AuthenticationMaterial
 import com.stripe1.xmouse.secrets.CredentialKind
 import com.stripe1.xmouse.secrets.CredentialReadResult
@@ -56,6 +59,7 @@ import com.stripe1.xmouse.transport.SshBackend
 import com.stripe1.xmouse.transport.SshConnectionRequest
 import com.stripe1.xmouse.transport.SshLimits
 import com.stripe1.xmouse.transport.SshRuntime
+import com.stripe1.xmouse.discovery.SshServiceDiscovery
 import com.stripe1.xmouse.trust.HostKeyRepository
 import com.stripe1.xmouse.trust.ApprovedHostKey
 import com.stripe1.xmouse.trust.HostTrustException
@@ -69,6 +73,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.net.InetAddress
 import java.util.ArrayDeque
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
@@ -364,6 +369,20 @@ class SessionForegroundServiceAndroidTest {
 
     private class BoundService(val binder: SessionForegroundService.SessionBinder, val connection: ServiceConnection)
 
+    private class RecordingDiscoveryFactory : ListEditActivity.DiscoveryFactory {
+        class Handle(val listener: SshServiceDiscovery.Listener) : ListEditActivity.DiscoveryHandle {
+            val starts = AtomicInteger()
+            val closes = AtomicInteger()
+            override fun start() { starts.incrementAndGet() }
+            override fun close() { closes.incrementAndGet() }
+        }
+
+        val handles = CopyOnWriteArrayList<Handle>()
+
+        override fun create(context: Context, listener: SshServiceDiscovery.Listener): ListEditActivity.DiscoveryHandle =
+            Handle(listener).also(handles::add)
+    }
+
     private fun install(owner: RecordingOwner) {
         this.owner = owner
         ownerLease = (context.applicationContext as XMouseApplication).sessionOwners.installOwnerForTests(owner)
@@ -524,6 +543,19 @@ class SessionForegroundServiceAndroidTest {
         return presenter.javaClass.getDeclaredField("outputDialog").apply { isAccessible = true }
             .get(presenter) as AlertDialog?
     }
+
+    private fun discoveryDialog(activity: ListEditActivity): AlertDialog? =
+        ListEditActivity::class.java.getDeclaredField("discoveryDialog").apply { isAccessible = true }
+            .get(activity) as AlertDialog?
+
+    @Suppress("UNCHECKED_CAST")
+    private fun discoveryCandidates(activity: ListEditActivity): Map<Any, Any> =
+        ListEditActivity::class.java.getDeclaredField("discoveredCandidates").apply { isAccessible = true }
+            .get(activity) as Map<Any, Any>
+
+    private fun discoveryError(activity: ListEditActivity): String? =
+        ListEditActivity::class.java.getDeclaredField("discoveryError").apply { isAccessible = true }
+            .get(activity) as String?
 
     private fun waitForActivitySessionBinding(scenario: ActivityScenario<MainActivity>) {
         eventually {
@@ -1066,6 +1098,94 @@ class SessionForegroundServiceAndroidTest {
         SessionForegroundService.requestDisconnect(context)
         eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
         assertEquals(3, recordingOwner.backend.events.count { it.name == "session.close" })
+    }
+
+    @Test
+    fun leavingHostDiscoveryStopsLateCallbacksWithoutClosingForegroundSession() {
+        grantNotificationPermissionForDisclosureTest()
+        grantLocalNetworkPermissionForConnectionTest()
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val mainScenario = launchVisibleActivity(autoConnect = true)
+        eventually { recordingOwner.controller.current.connection.isReady }
+        val sessionBinding = bind(mainScenario)
+        val sessionBefore = recordingOwner.controller.current
+        assertTrue("the SSH session must be owned by the started foreground service", sessionBinding.binder.isForeground)
+        assertTrue(sessionBinding.binder.snapshot.connection.isReady)
+        assertTrue(sessionBefore.connection.isReady)
+        assertTrue(SessionForegroundService.hasRetainedSession(context))
+
+        val factory = RecordingDiscoveryFactory()
+        ListEditActivity.setDiscoveryFactoryForTests(factory)
+        ListEditActivity.setPermissionRequiredForTests(false)
+        var discoveryHandle: RecordingDiscoveryFactory.Handle? = null
+        try {
+            ActivityScenario.launch<ListEditActivity>(Intent(context, ListEditActivity::class.java)).use { discoveryScenario ->
+                discoveryScenario.onActivity { activity ->
+                    activity.findViewById<View>(R.id.find_computers).performClick()
+                }
+                assertEquals(1, factory.handles.size)
+                discoveryHandle = factory.handles.single()
+                assertEquals(1, discoveryHandle!!.starts.get())
+                val candidate = SshServiceDiscovery.Candidate(
+                    SshServiceDiscovery.Identity("test-network", "office", "_ssh._tcp", "local"),
+                    EndpointLocator.DiscoveredService("Office", "_ssh._tcp", "local"),
+                    2222,
+                    listOf(InetAddress.getByName("192.0.2.23")),
+                )
+                discoveryHandle!!.listener.onServiceFound(candidate)
+                instrumentation.waitForIdleSync()
+                discoveryScenario.onActivity { activity ->
+                    val dialog = requireNotNull(discoveryDialog(activity))
+                    assertTrue(dialog.isShowing)
+                    assertEquals(1, dialog.findViewById<ListView>(R.id.find_computers_results).adapter.count)
+                }
+
+                // Move the real host-management Activity to CREATED so onStop dismisses its dialog.
+                discoveryScenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+                discoveryScenario.onActivity { activity ->
+                    assertNull("stopping host management dismisses discovery", discoveryDialog(activity))
+                    assertTrue(discoveryCandidates(activity).isEmpty())
+                }
+                assertEquals("onStop closes the active NSD handle once", 1, discoveryHandle!!.closes.get())
+
+                // A callback already queued by NSD after dismissal must not repopulate or update UI state.
+                discoveryHandle!!.listener.onServiceFound(candidate)
+                discoveryHandle!!.listener.onServiceUpdated(candidate)
+                discoveryHandle!!.listener.onServiceLost(candidate.identity)
+                discoveryHandle!!.listener.onFailure(
+                    SshServiceDiscovery.Failure(SshServiceDiscovery.Operation.START, 3, null, null),
+                )
+                instrumentation.waitForIdleSync()
+                discoveryScenario.onActivity { activity ->
+                    assertNull(discoveryDialog(activity))
+                    assertTrue("late results are ignored after the lifecycle token is invalidated",
+                        discoveryCandidates(activity).isEmpty())
+                    assertNull("late failures are ignored after the lifecycle token is invalidated",
+                        discoveryError(activity))
+                }
+                assertEquals("late callbacks must not close the handle again", 1, discoveryHandle!!.closes.get())
+            }
+
+            assertEquals("destroying the stopped Activity must not close discovery twice", 1,
+                requireNotNull(discoveryHandle).closes.get())
+            val sessionAfter = recordingOwner.controller.current
+            assertEquals("discovery lifecycle must not replace the active session generation",
+                sessionBefore.generation, sessionAfter.generation)
+            assertSame("the existing connection state must remain attached", sessionBefore.connection,
+                sessionAfter.connection)
+            assertTrue("the service-backed SSH connection remains ready", sessionAfter.connection.isReady)
+            assertEquals(sessionBefore.generation, sessionBinding.binder.snapshot.generation)
+            assertTrue(sessionBinding.binder.snapshot.connection.isReady)
+            assertTrue(SessionForegroundService.hasRetainedSession(context))
+            assertEquals("leaving discovery must not create another SSH attempt", 1, recordingOwner.attemptsCreated)
+            assertEquals("leaving discovery must not close the SSH transport", 0,
+                recordingOwner.backend.events.count { it.name == "session.close" })
+        } finally {
+            ListEditActivity.setDiscoveryFactoryForTests(null)
+            ListEditActivity.setPermissionRequiredForTests(null)
+            unbind(mainScenario, sessionBinding)
+        }
     }
 
     @Test
