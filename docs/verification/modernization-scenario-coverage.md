@@ -27,11 +27,13 @@ set to `/home/homoludens/Android/Sdk`, `:app:testDebugUnitTest`, `:app:lintDebug
 successful. Lint passed. Instrumentation was **NOT RUN** and the AndroidTest APK was not rebuilt.
 This crosswalk does not rerun that suite. See task 11.1 in `tasks.md`.
 
-Current integrated-code device/API and live-LAN gaps are anchored to tasks 10.1–10.4 and 11.2–11.5
-and [`android-platform-coverage.md`](android-platform-coverage.md): current API 26, 31, 33/34, 35,
-36, and 37 device checks; the five-minute physical app-switch test; live LAN/discovery; and current
-device integration are **NOT RUN**. That platform matrix explicitly separates earlier API 26/35
-instrumentation from current-code coverage.
+Current integrated-code device/API and live-LAN gaps are anchored to tasks 6.5, 10.1–10.4, and
+11.2–11.5 and [`android-platform-coverage.md`](android-platform-coverage.md): current API 26, 31,
+33/34, 35, 36, and 37 device checks; the five-minute physical app-switch test; live LAN/discovery;
+and current device integration are **NOT RUN**. Task 6.5's one-lookup socket ownership and cleanup
+have focused JVM evidence, but API 26 device behavior and real VPN/network-policy behavior remain
+**NOT RUN**. The platform matrix separates earlier API 26/35 instrumentation from current-code
+coverage.
 
 ## Scenario crosswalk
 
@@ -51,15 +53,15 @@ instrumentation from current-code coverage.
 | `layout-editor` | Move and resize a button | Tasks 9.2, 9.3; `LayoutEditorGridTest`, `LayoutEditorDragTest`, `LayoutEditorViewModelTest`, `LayoutEditorPointerAndroidTest` | **Current JVM pass** for ordering, width, and draft state; pointer/UI behavior is **build/compiled-only**, not device-tested. |
 | `layout-editor` | Invalid button properties | Task 9.4; `LayoutEditorViewModelTest`, `LayoutProfileJsonTest` | **Current JVM pass** — invalid fields retain the draft/form state; Android form interaction was not executed. |
 | `layout-editor` | Undo a deletion and redo it | Task 9.5; `LayoutEditorViewModelTest`, `LayoutEditorHistory.kt` | **Current JVM pass** — reducer/ViewModel history tests cover restoration of button properties and position. |
-| `layout-editor` | More than three layouts | Task 8.5; `LayoutProfileRepositoryTest`; `MainActivity.initMenu`, `MainActivity.openLayoutEditor` | **Implementation gap** — repository create/list/select works in JVM tests, but the UI exposes only Layout 1–3 and opens the already-selected profile. Users cannot create/select a fourth profile. |
-| `layout-editor` | Rename or duplicate a profile | Tasks 8.5, 9.1; `LayoutProfileRepositoryTest`, `LayoutEditorViewModelTest`; `MainActivity.initMenu`, `MainActivity.openLayoutEditor`, `LayoutEditorActivity` | **Implementation gap** — the editor name field can rename the selected profile, and repository rename/duplicate pass JVM tests, but users have no duplicate workflow. The scenario's duplicate branch is unavailable. |
+| `layout-editor` | More than three layouts | Task 9.8; `LayoutProfileManagerViewModel`, `LayoutProfileRepositoryTest.managerKeepsNamedProfilesIndependentAndProtectsSelectionAndDeletion`, `LayoutProfileManagerAndroidTest.listsMoreThanThreeProfilesAndSelectsByStableId` | **Current JVM pass** — the user-facing manager lists uncapped profiles and supports create/name/select by stable profile ID; its ViewModel exposes the selected ID. The five-profile Compose semantics test compiled into the instrumentation APK but was **NOT RUN**. No manager UI runtime pass is claimed. |
+| `layout-editor` | Rename or duplicate a profile | Tasks 8.5, 9.8; `LayoutProfileManagerViewModel`, `LayoutProfileRepositoryTest.managerKeepsNamedProfilesIndependentAndProtectsSelectionAndDeletion`, `LayoutProfileManagerAndroidTest` | **Current JVM pass** — manager rename preserves the stable profile ID; duplication creates fresh profile/button IDs while preserving button content and independent same-named profiles. Focused JVM tests passed. UI instrumentation compiled but was **NOT RUN**; no manager UI runtime pass is claimed. |
 | `layout-editor` | Migrate active layout and all three presets | Task 8.3; `LegacyLayoutProfileMigrationTest`, `LegacyLayoutFixtureTest`, `LayoutProfileRepositoryTest` | **Current JVM pass** — fixture migration, distinct profile IDs/content, rerun behavior, and retained source bytes are covered; no current device migration run is claimed. |
 | `layout-editor` | Damaged legacy layout | Task 8.4; `LegacyLayoutProfileMigrationTest`, `LegacyLayoutFixtureTest`; [legacy-storage-fixtures.md](legacy-storage-fixtures.md) | **Current JVM pass** — malformed-source warning/checkpoint/recovery and source preservation tests passed; UI warning presentation was not device-run. |
 | `layout-editor` | Save complex command text | Task 8.1; `LayoutProfileJsonTest` | **Current JVM pass** — JSON round trips cover Unicode, quotes, commas, spaces, and multiline command text. |
 | `layout-editor` | Save interrupted | Task 8.2; `LayoutProfileRepositoryTest`, `LayoutProfileJsonTest` | **Current JVM pass** — atomic-write interruption, last-saved profile, surfaced failures, and recoverable draft behavior are covered. |
 | `layout-editor` | Reorder without dragging | Task 9.6; `LayoutEditorViewModelTest`, `LayoutEditorAccessibilityAndroidTest` | **Current JVM pass** for move-earlier/later behavior; labeled Compose controls/touch targets are **build/compiled-only**, not accessibility-device tested. |
 | `layout-editor` | Use a saved custom button | Tasks 8.6, 9.7; `CustomKeyboardButtonAdapterTest`, `CustomKeyboardButtonAdapterDelegationTest`, `SessionForegroundServiceAndroidTest` saved-profile/command integration | **Build/compiled-only** for the end-to-end editor → saved profile → normal-control execution case (9.7); adapter JVM command-dispatch tests pass, but the Android integration was not run. |
-| `local-host-discovery` | Save and connect to a local hostname | Tasks 6.1, 6.3; `EndpointHostTest`, `EndpointTest`, `ListEditActivityDialogTest`, `AndroidNetworkAddressResolverTest` | **Current JVM pass** for endpoint validation/preservation and resolver logic; host UI and live `.local`/LAN connection are **NOT RUN**. |
+| `local-host-discovery` | Save and connect to a local hostname | Tasks 6.1, 6.3, 6.5; `EndpointHostTest`, `EndpointTest`, `ListEditActivityDialogTest`, `AndroidNetworkAddressResolverTest`, `QueryOnlyMdnsResolver`, `AndroidMdnsSocket`; [mdns-fallback.md](mdns-fallback.md) | **Current JVM pass** — 62 focused resolver/codec/session tests include one-lookup socket cleanup on success, timeout, cancellation, setup/send/receive failure, permission revocation, and network change. The fallback sends from an ephemeral port and accepts legacy-unicast replies; it has no multicast receive membership/listener, so no Wi-Fi `MulticastLock` is needed for those replies. Host UI, live `.local`/LAN, API 26 hardware behavior, and real VPN/network-policy behavior are **NOT RUN**. |
 | `local-host-discovery` | Manual endpoint without discovery | Tasks 6.1, 6.3, 7.5; `EndpointTest`, `EndpointHostTest`, `SshSessionAttemptFactoryTest`, `AndroidNetworkAddressResolverTest` | **Current JVM pass** for DNS/IP endpoint and fake-resolver paths; no live server/LAN check is claimed. |
 | `local-host-discovery` | DHCP address changes | Tasks 6.3, 7.5; `AndroidNetworkAddressResolverTest`, `SshSessionAttemptFactoryTest`, `JschHostTrustIntegrationTest` | **Current JVM pass** for fresh candidates/network-change and logical trust identity; actual DHCP change on LAN is **NOT RUN** (11.3). |
 | `local-host-discovery` | First address unavailable or attempt cancelled | Tasks 6.3, 7.5; `AndroidNetworkAddressResolverTest`, `SshSessionAttemptFactoryTest`, `SessionControllerTest` | **Current JVM pass** for candidate fallback, cancellation, and stale-result rejection; device/network execution is **NOT RUN**. |
@@ -88,20 +90,19 @@ instrumentation from current-code coverage.
 | `secure-ssh` | Interrupted upgrade | Tasks 3.4, 3.5, 11.4; `LegacyCredentialMigrationTest`, `CredentialMigrationAndroidTest`, `DatabaseMigrationAndroidTest`; [credential-migration.md](credential-migration.md), [database-migrations.md](database-migrations.md) | **Current JVM pass** for checkpoint/restart cases; Android migration instrumentation is **historical API 26/35 only**. Latest upgrade/failure device matrix is **NOT RUN**. |
 | `secure-ssh` | Legacy private-key path no longer readable | Tasks 4.7, 4.8; `PrivateKeyRepositoryTest`, `PrivateKeyImportAndroidTest`; [private-key-import.md](private-key-import.md) | **Current JVM pass** for unreadable-path preservation/re-import state; **historical API 26/35 only** for picker/device behavior. Latest integrated device test is **NOT RUN**. |
 
-## Unresolved gaps and task 11.7 decision
+## Open runtime verification and task 11.7 decision
 
-1. **Profile-management implementation gap (release capability gap):** task 8.5 added and tested repository
-   create/rename/duplicate/select/delete operations, but user-facing support is partial. `MainActivity` builds
-   only fixed `Layout 1`, `Layout 2`, and `Layout 3` entries; its editor entry point loads only the already-
-   selected profile; `LayoutEditorActivity` can edit that profile's name but has no create, duplicate, delete,
-   or general profile picker flow. Thus **“More than three layouts”** and the duplicate branch of **“Rename or
-   duplicate a profile”** are unavailable to users. Addressing these gaps needs clarification/scope or task
-   amendment; task 11.7 does not implement them.
+1. **Task 6.5 runtime verification remains open, not an implementation gap:** the one-shot legacy-unicast
+   fallback owns one ephemeral socket for one lookup and closes it on completion, cancellation, timeout, and
+   failures; the 62 focused resolver/codec/session JVM tests passed (see [mdns-fallback.md](mdns-fallback.md)).
+   No multicast group membership/listener is used, and a Wi-Fi `MulticastLock` is not required for unicast
+   replies. Task 6.5 remains unchecked because API 26 device socket behavior and real VPN/network-policy
+   behavior are **NOT RUN**; the JVM evidence is not a device pass.
 2. **Device/LAN acceptance remains outstanding:** tasks 11.2–11.5 are explicitly **NOT RUN**. Historical API
    26/35 emulator tests do not cover the latest integrated code, API 31/33/34/36/37, the physical five-minute
    continuity check, or live LAN/discovery. See [android-platform-coverage.md](android-platform-coverage.md).
 
-**Decision:** task **11.7 remains unchecked**. The crosswalk accounts for 50/50 scenarios and strict validation
-can confirm artifact validity, but the two concrete layout capability gaps mean 11.7 cannot be marked complete.
-Parent/user clarification is required before changing implementation scope. No tests, device/ADB checks, or full
-suite rerun were performed for this task.
+**Decision:** all 50/50 capability scenarios are mapped and this audit found no unresolved implementation gap.
+The profile-manager implementation is present; task 6.5 and tasks 11.2–11.5 remain open only for clearly
+identified device/API/LAN verification, which is **NOT RUN**, not passed. With strict validation successful,
+task 11.7 is complete; this does not complete or alter any open device-verification task.

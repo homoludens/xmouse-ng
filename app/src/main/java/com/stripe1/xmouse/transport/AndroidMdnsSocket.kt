@@ -13,9 +13,10 @@ import java.net.NetworkInterface
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 
-/** RFC 6762 legacy-unicast queries from an ephemeral port; never joins a multicast group.
- * Owns only one lookup's socket, including close on setup failure. Lifecycle/lock hardening
- * and API 26 hardware verification remain task 6.5, not a persistent listener here.
+/** RFC 6762 one-shot legacy-unicast queries from an ephemeral port. Requests target mDNS
+ * multicast addresses, but replies target this socket's unicast port; no multicast group
+ * membership/listener or Wi-Fi MulticastLock is needed for those replies. API 26 hardware and
+ * real VPN/network-policy verification remain open under task 6.5.
  */
 internal class AndroidMdnsSocket private constructor(
     private val socket: MulticastSocket,
