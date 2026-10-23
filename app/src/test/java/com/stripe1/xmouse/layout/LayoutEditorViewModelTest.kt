@@ -437,6 +437,65 @@ class LayoutEditorViewModelTest {
         assertFalse(viewModel.redo())
     }
 
+    @Test
+    fun accessibleMoveActionsResizeAndSaveByStableIdWithoutChangingButtonProperties() {
+        val files = FakeLayoutProfileFileOps()
+        val repository = LayoutProfileRepository(files)
+        val first = LayoutButton("first", "First", "first raw", 3, "#123456")
+        val target = LayoutButton("target", "Target", "  printf '雪, \"raw\"'\nnext\t  ", 2, "#a1B2c3")
+        val third = LayoutButton("third", "Third", "third raw", 1, "#654321")
+        val fourth = LayoutButton("fourth", "Fourth", "fourth raw", 2, "#ABCDEF")
+        val saved = profile().copy(buttons = listOf(first, target, third, fourth))
+        repository.createProfile(saved)
+        val viewModel = LayoutEditorViewModel(saved.id, repository)
+
+        viewModel.selectButton(target.id)
+        viewModel.moveSelectedButtonEarlier()
+        val movedEarlier = saved.copy(buttons = listOf(target, first, third, fourth))
+        assertEquals(movedEarlier, viewModel.state.value.draftProfile)
+        assertEquals(movedEarlier, repository.loadDraft(saved.id))
+        assertEquals(target.id, viewModel.state.value.selectedButtonId)
+        assertTrue(viewModel.state.value.canUndo)
+
+        assertTrue(viewModel.undo()) // A non-drag move is one history entry.
+        assertEquals(saved, viewModel.state.value.draftProfile)
+        assertNull(repository.loadDraft(saved.id))
+        assertEquals(target.id, viewModel.state.value.selectedButtonId)
+        assertTrue(viewModel.redo())
+        assertEquals(movedEarlier, repository.loadDraft(saved.id))
+
+        viewModel.moveSelectedButtonLater()
+        assertEquals(saved, viewModel.state.value.draftProfile)
+        assertNull(repository.loadDraft(saved.id))
+        viewModel.moveSelectedButtonLater()
+        val movedLater = saved.copy(buttons = listOf(first, third, target, fourth))
+        assertEquals(movedLater, viewModel.state.value.draftProfile)
+        assertEquals(target.id, viewModel.state.value.selectedButtonId)
+
+        val writesAtBoundary = files.draftWrites
+        viewModel.selectButton(first.id)
+        viewModel.moveSelectedButtonEarlier()
+        assertEquals(writesAtBoundary, files.draftWrites)
+        assertEquals(movedLater, repository.loadDraft(saved.id))
+        assertTrue(viewModel.state.value.moveValidationMessage!!.contains("already the first"))
+        assertTrue(viewModel.state.value.canUndo)
+
+        viewModel.selectButton(target.id)
+        viewModel.updateButtonWidth(target.id, 4)
+        val resized = movedLater.copy(buttons = listOf(first, third, target.copy(width = 4), fourth))
+        assertEquals(resized, repository.loadDraft(saved.id))
+        assertEquals(target.copy(width = 4), viewModel.state.value.selectedButton)
+        assertEquals(saved, repository.loadProfile(saved.id))
+
+        assertTrue(viewModel.save())
+        assertEquals(resized, repository.loadProfile(saved.id))
+        assertEquals(target.id, repository.loadProfile(saved.id).buttons[2].id)
+        assertEquals(target.command, repository.loadProfile(saved.id).buttons[2].command)
+        assertEquals(target.title, repository.loadProfile(saved.id).buttons[2].title)
+        assertEquals(target.color, repository.loadProfile(saved.id).buttons[2].color)
+        assertNull(repository.loadDraft(saved.id))
+    }
+
     private fun profile() = LayoutProfile(
         id = "editor-profile",
         name = "Saved profile",

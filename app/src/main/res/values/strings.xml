@@ -63,6 +63,13 @@
     <string name="layout_editor_drag_no_target">Drag onto another button to choose a placement. Releasing here leaves the draft unchanged.</string>
     <string name="layout_editor_decrease_width">Decrease width</string>
     <string name="layout_editor_increase_width">Increase width</string>
+    <string name="layout_editor_move_earlier">Move earlier</string>
+    <string name="layout_editor_move_later">Move later</string>
+    <string name="layout_editor_move_earlier_accessibility">%1$s, button %2$d of %3$d. Move earlier</string>
+    <string name="layout_editor_move_later_accessibility">%1$s, button %2$d of %3$d. Move later</string>
+    <string name="layout_editor_decrease_width_accessibility">%1$s, width %2$d columns. Decrease width</string>
+    <string name="layout_editor_increase_width_accessibility">%1$s, width %2$d columns. Increase width</string>
+    <string name="layout_editor_preview_button_accessibility">%1$s, button %2$d of %3$d, width %4$d columns</string>
     <string name="layout_editor_preview_empty">This layout has no buttons yet.</string>
     <string name="layout_editor_preview_select_hint">Select a button to inspect its properties and validation.</string>
     <string name="layout_editor_preview_selected">Selected button</string>

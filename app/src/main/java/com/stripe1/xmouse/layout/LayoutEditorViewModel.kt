@@ -43,6 +43,7 @@ data class LayoutEditorState(
     val isShowingBackConfirmation: Boolean = false,
     val errorMessage: String? = null,
     val widthValidationMessage: String? = null,
+    val moveValidationMessage: String? = null,
     val buttonEditInput: ButtonEditInput? = null,
     val buttonEditValidation: ButtonEditValidation? = null,
     val buttonEditSaveError: String? = null,
@@ -111,7 +112,11 @@ class LayoutEditorViewModel(
         val current = mutableState.value
         val buttons = current.draftProfile?.buttons ?: return
         if (buttonId != null && buttons.none { it.id == buttonId }) return
-        mutableState.value = current.copy(selectedButtonId = buttonId, widthValidationMessage = null)
+        mutableState.value = current.copy(
+            selectedButtonId = buttonId,
+            widthValidationMessage = null,
+            moveValidationMessage = null,
+        )
     }
 
     fun startNewButtonEdit() {
@@ -274,12 +279,52 @@ class LayoutEditorViewModel(
         persistButtonChange(current, LayoutEditorDragReducer.commit(draft, drag))
     }
 
+    /** Reorder the selected button by its stable ID without requiring a pointer gesture. */
+    fun moveSelectedButtonEarlier() = moveSelectedButton(direction = -1)
+
+    /** Reorder the selected button by its stable ID without requiring a pointer gesture. */
+    fun moveSelectedButtonLater() = moveSelectedButton(direction = 1)
+
+    private fun moveSelectedButton(direction: Int) {
+        val current = mutableState.value
+        val draft = current.draftProfile ?: return
+        val selectedId = current.selectedButtonId
+        if (selectedId == null) {
+            mutableState.value = current.copy(moveValidationMessage = "Select a button before moving it.")
+            return
+        }
+
+        val index = draft.buttons.indexOfFirst { it.id == selectedId }
+        if (index < 0) {
+            mutableState.value = current.copy(
+                selectedButtonId = null,
+                moveValidationMessage = "The selected button is no longer in this draft. Select it again.",
+            )
+            return
+        }
+
+        val targetIndex = index + direction
+        if (targetIndex !in draft.buttons.indices) {
+            val boundary = if (direction < 0) "first" else "last"
+            val action = if (direction < 0) "move it later" else "move it earlier"
+            mutableState.value = current.copy(
+                moveValidationMessage = "This is already the $boundary button. Select another button or $action.",
+            )
+            return
+        }
+
+        val movedButtons = draft.buttons.toMutableList().apply {
+            add(targetIndex, removeAt(index))
+        }
+        persistButtonChange(current, draft.copy(buttons = movedButtons), selectedButtonId = selectedId)
+    }
+
     fun updateButtonWidth(buttonId: String, width: Int) {
         val current = mutableState.value
         val draft = current.draftProfile ?: return
         if (draft.buttons.none { it.id == buttonId }) return
         if (width !in 1..LAYOUT_COLUMN_COUNT) {
-            mutableState.value = current.copy(widthValidationMessage = WIDTH_ERROR)
+            mutableState.value = current.copy(widthValidationMessage = WIDTH_ERROR, moveValidationMessage = null)
             return
         }
         val changed = draft.copy(buttons = draft.buttons.map { button ->
@@ -307,7 +352,11 @@ class LayoutEditorViewModel(
                 mutableState.value = if (finishButtonEdit) {
                     current.copy(buttonEditSaveError = DRAFT_SAVE_ERROR)
                 } else {
-                    current.copy(errorMessage = DRAFT_SAVE_ERROR, widthValidationMessage = null)
+                    current.copy(
+                        errorMessage = DRAFT_SAVE_ERROR,
+                        widthValidationMessage = null,
+                        moveValidationMessage = null,
+                    )
                 }
                 return false
             }
@@ -319,6 +368,7 @@ class LayoutEditorViewModel(
             canUndo = history.canUndo,
             canRedo = history.canRedo,
             widthValidationMessage = null,
+            moveValidationMessage = null,
             errorMessage = null,
             buttonEditInput = if (finishButtonEdit) null else current.buttonEditInput,
             buttonEditValidation = if (finishButtonEdit) null else current.buttonEditValidation,
@@ -349,6 +399,7 @@ class LayoutEditorViewModel(
             canUndo = history.canUndo,
             canRedo = history.canRedo,
             widthValidationMessage = null,
+            moveValidationMessage = null,
             errorMessage = null,
         )
         return true
@@ -402,6 +453,7 @@ class LayoutEditorViewModel(
                 isShowingBackConfirmation = false,
                 errorMessage = null,
                 widthValidationMessage = null,
+                moveValidationMessage = null,
                 buttonEditInput = null,
                 buttonEditValidation = null,
                 buttonEditSaveError = null,
@@ -433,6 +485,7 @@ class LayoutEditorViewModel(
                 isShowingBackConfirmation = false,
                 errorMessage = null,
                 widthValidationMessage = null,
+                moveValidationMessage = null,
                 buttonEditInput = null,
                 buttonEditValidation = null,
                 buttonEditSaveError = null,

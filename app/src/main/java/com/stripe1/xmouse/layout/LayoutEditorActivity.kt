@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -59,6 +60,12 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.isTraversalGroup
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -95,6 +102,8 @@ class LayoutEditorActivity : ComponentActivity() {
                     onButtonSelected = editorViewModel::selectButton,
                     onDragCommitted = editorViewModel::commitDrag,
                     onWidthChanged = editorViewModel::updateButtonWidth,
+                    onMoveEarlier = editorViewModel::moveSelectedButtonEarlier,
+                    onMoveLater = editorViewModel::moveSelectedButtonLater,
                     onNewButton = editorViewModel::startNewButtonEdit,
                     onEditButton = editorViewModel::startSelectedButtonEdit,
                     onDuplicateButton = editorViewModel::startSelectedButtonDuplicate,
@@ -141,6 +150,8 @@ private fun LayoutEditorScreen(
     onButtonSelected: (String?) -> Unit,
     onDragCommitted: (LayoutEditorDrag) -> Unit,
     onWidthChanged: (String, Int) -> Unit,
+    onMoveEarlier: () -> Unit,
+    onMoveLater: () -> Unit,
     onNewButton: () -> Unit,
     onEditButton: () -> Unit,
     onDuplicateButton: () -> Unit,
@@ -171,7 +182,9 @@ private fun LayoutEditorScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                TextButton(onClick = onBack) { Text(stringResource(R.string.layout_editor_back)) }
+                TextButton(onClick = onBack, modifier = Modifier.editorTouchTarget()) {
+                    Text(stringResource(R.string.layout_editor_back))
+                }
                 Text(stringResource(R.string.layout_editor_title), style = MaterialTheme.typography.headlineSmall)
             }
 
@@ -192,12 +205,12 @@ private fun LayoutEditorScreen(
                         TextButton(
                             onClick = onUndo,
                             enabled = state.canUndo && state.buttonEditInput == null,
-                            modifier = Modifier.testTag("layout-editor-undo"),
+                            modifier = Modifier.editorTouchTarget().testTag("layout-editor-undo"),
                         ) { Text(stringResource(R.string.layout_editor_undo)) }
                         TextButton(
                             onClick = onRedo,
                             enabled = state.canRedo && state.buttonEditInput == null,
-                            modifier = Modifier.testTag("layout-editor-redo"),
+                            modifier = Modifier.editorTouchTarget().testTag("layout-editor-redo"),
                         ) { Text(stringResource(R.string.layout_editor_redo)) }
                     }
                     ButtonEditActions(
@@ -214,7 +227,10 @@ private fun LayoutEditorScreen(
                         onButtonSelected = onButtonSelected,
                         onDragCommitted = onDragCommitted,
                         onWidthChanged = onWidthChanged,
+                        onMoveEarlier = onMoveEarlier,
+                        onMoveLater = onMoveLater,
                         widthValidationMessage = state.widthValidationMessage,
+                        moveValidationMessage = state.moveValidationMessage,
                     )
                     OutlinedTextField(
                         value = state.profileNameInput,
@@ -228,10 +244,18 @@ private fun LayoutEditorScreen(
                         Text(message, color = MaterialTheme.colorScheme.error)
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(onClick = onSave, enabled = state.isDirty) {
+                        Button(
+                            onClick = onSave,
+                            enabled = state.isDirty,
+                            modifier = Modifier.editorTouchTarget().testTag("layout-editor-save"),
+                        ) {
                             Text(stringResource(R.string.layout_editor_save))
                         }
-                        TextButton(onClick = onDiscard, enabled = state.isDirty) {
+                        TextButton(
+                            onClick = onDiscard,
+                            enabled = state.isDirty,
+                            modifier = Modifier.editorTouchTarget().testTag("layout-editor-discard"),
+                        ) {
                             Text(stringResource(R.string.layout_editor_discard))
                         }
                     }
@@ -248,16 +272,25 @@ private fun LayoutEditorScreen(
                 Text(state.errorMessage ?: stringResource(R.string.layout_editor_back_confirmation_message))
             },
             confirmButton = {
-                TextButton(onClick = { onBackChoice(LayoutEditorBackChoice.SAVE) }) {
+                TextButton(
+                    onClick = { onBackChoice(LayoutEditorBackChoice.SAVE) },
+                    modifier = Modifier.editorTouchTarget(),
+                ) {
                     Text(stringResource(R.string.layout_editor_save))
                 }
             },
             dismissButton = {
                 Row {
-                    TextButton(onClick = { onBackChoice(LayoutEditorBackChoice.DISCARD) }) {
+                    TextButton(
+                        onClick = { onBackChoice(LayoutEditorBackChoice.DISCARD) },
+                        modifier = Modifier.editorTouchTarget(),
+                    ) {
                         Text(stringResource(R.string.layout_editor_discard))
                     }
-                    TextButton(onClick = { onBackChoice(LayoutEditorBackChoice.CANCEL) }) {
+                    TextButton(
+                        onClick = { onBackChoice(LayoutEditorBackChoice.CANCEL) },
+                        modifier = Modifier.editorTouchTarget(),
+                    ) {
                         Text(stringResource(R.string.layout_editor_cancel))
                     }
                 }
@@ -291,25 +324,28 @@ private fun ButtonEditActions(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onNewButton, modifier = Modifier.weight(1f).testTag("layout-editor-add-button")) {
+            Button(
+                onClick = onNewButton,
+                modifier = Modifier.weight(1f).editorTouchTarget().testTag("layout-editor-add-button"),
+            ) {
                 Text("Add button")
             }
             TextButton(
                 onClick = onEditButton,
                 enabled = hasSelection,
-                modifier = Modifier.weight(1f).testTag("layout-editor-edit-button"),
+                modifier = Modifier.weight(1f).editorTouchTarget().testTag("layout-editor-edit-button"),
             ) { Text("Edit selected") }
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(
                 onClick = onDuplicateButton,
                 enabled = hasSelection,
-                modifier = Modifier.weight(1f).testTag("layout-editor-duplicate-button"),
+                modifier = Modifier.weight(1f).editorTouchTarget().testTag("layout-editor-duplicate-button"),
             ) { Text("Duplicate selected") }
             TextButton(
                 onClick = onDeleteButton,
                 enabled = hasSelection,
-                modifier = Modifier.weight(1f).testTag("layout-editor-delete-button"),
+                modifier = Modifier.weight(1f).editorTouchTarget().testTag("layout-editor-delete-button"),
             ) { Text("Delete selected") }
         }
     }
@@ -398,7 +434,11 @@ private fun ButtonEditDialog(
                                         shape = CircleShape,
                                     )
                                     .clickable { onColorChanged(preset) }
-                                    .semantics { contentDescription = "Select color $preset" }
+                                    .semantics {
+                                        contentDescription = "Select color $preset"
+                                        role = Role.Button
+                                        this.selected = selected
+                                    }
                                     .testTag("layout-editor-color-$preset"),
                             )
                         }
@@ -408,12 +448,18 @@ private fun ButtonEditDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSave() }, modifier = Modifier.testTag("layout-editor-button-save")) {
+            TextButton(
+                onClick = { onSave() },
+                modifier = Modifier.editorTouchTarget().testTag("layout-editor-button-save"),
+            ) {
                 Text("Apply to draft")
             }
         },
         dismissButton = {
-            TextButton(onClick = onCancel, modifier = Modifier.testTag("layout-editor-button-cancel")) {
+            TextButton(
+                onClick = onCancel,
+                modifier = Modifier.editorTouchTarget().testTag("layout-editor-button-cancel"),
+            ) {
                 Text("Cancel")
             }
         },
@@ -428,7 +474,10 @@ private fun ButtonGridPreview(
     onButtonSelected: (String?) -> Unit,
     onDragCommitted: (LayoutEditorDrag) -> Unit,
     onWidthChanged: (String, Int) -> Unit,
+    onMoveEarlier: () -> Unit,
+    onMoveLater: () -> Unit,
     widthValidationMessage: String?,
+    moveValidationMessage: String?,
 ) {
     val placements = remember(profile) { LayoutEditorGrid.placements(profile) }
     val buttonsById = remember(profile.buttons) { profile.buttons.associateBy(LayoutButton::id) }
@@ -459,7 +508,10 @@ private fun ButtonGridPreview(
         )
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(
+        modifier = Modifier.semantics { isTraversalGroup = true },
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         Text(
             stringResource(R.string.layout_editor_preview_heading),
             style = MaterialTheme.typography.titleMedium,
@@ -485,6 +537,8 @@ private fun ButtonGridPreview(
                                     PreviewButton(
                                         button = button,
                                         selected = button.id == selectedButtonId,
+                                        position = profile.buttons.indexOfFirst { it.id == button.id } + 1,
+                                        total = profile.buttons.size,
                                         onClick = { onButtonSelected(button.id) },
                                         modifier = Modifier
                                             .weight(placement.widthColumns.toFloat())
@@ -559,7 +613,15 @@ private fun ButtonGridPreview(
         } else if (drag != null) {
             Text(stringResource(R.string.layout_editor_drag_no_target))
         }
-        SelectedButtonProperties(selectedButton, onWidthChanged, widthValidationMessage)
+        SelectedButtonProperties(
+            profile = profile,
+            button = selectedButton,
+            onWidthChanged = onWidthChanged,
+            onMoveEarlier = onMoveEarlier,
+            onMoveLater = onMoveLater,
+            widthValidationMessage = widthValidationMessage,
+            moveValidationMessage = moveValidationMessage,
+        )
     }
 }
 
@@ -567,6 +629,8 @@ private fun ButtonGridPreview(
 private fun PreviewButton(
     button: LayoutButton,
     selected: Boolean,
+    position: Int,
+    total: Int,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -574,12 +638,24 @@ private fun PreviewButton(
         Color(android.graphics.Color.parseColor(button.color))
     }
     val textColor = if (backgroundColor.luminance() > 0.5f) Color.Black else Color.White
+    val accessibleLabel = stringResource(
+        R.string.layout_editor_preview_button_accessibility,
+        button.title,
+        position,
+        total,
+        button.width,
+    )
 
     Surface(
         modifier = modifier
             .padding(horizontal = 2.dp)
             .height(LAYOUT_EDITOR_PREVIEW_BUTTON_HEIGHT_DP.dp)
-            .clickable(onClick = onClick),
+            .clickable(onClick = onClick)
+            .semantics(mergeDescendants = true) {
+                contentDescription = accessibleLabel
+                this.selected = selected
+                role = Role.Button
+            },
         shape = RoundedCornerShape(8.dp),
         color = backgroundColor,
         contentColor = textColor,
@@ -605,9 +681,13 @@ private fun PreviewButton(
 
 @Composable
 private fun SelectedButtonProperties(
+    profile: LayoutProfile,
     button: LayoutButton?,
     onWidthChanged: (String, Int) -> Unit,
+    onMoveEarlier: () -> Unit,
+    onMoveLater: () -> Unit,
     widthValidationMessage: String?,
+    moveValidationMessage: String?,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -621,6 +701,30 @@ private fun SelectedButtonProperties(
                 style = MaterialTheme.typography.bodySmall,
             )
         } else {
+            val buttonPosition = profile.buttons.indexOfFirst { it.id == button.id }
+            val spokenPosition = (buttonPosition + 1).coerceAtLeast(1)
+            val earlierLabel = stringResource(
+                R.string.layout_editor_move_earlier_accessibility,
+                button.title,
+                spokenPosition,
+                profile.buttons.size,
+            )
+            val laterLabel = stringResource(
+                R.string.layout_editor_move_later_accessibility,
+                button.title,
+                spokenPosition,
+                profile.buttons.size,
+            )
+            val decreaseLabel = stringResource(
+                R.string.layout_editor_decrease_width_accessibility,
+                button.title,
+                button.width,
+            )
+            val increaseLabel = stringResource(
+                R.string.layout_editor_increase_width_accessibility,
+                button.title,
+                button.width,
+            )
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -647,12 +751,47 @@ private fun SelectedButtonProperties(
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(
+                        onClick = onMoveEarlier,
+                        modifier = Modifier
+                            .weight(1f)
+                            .editorTouchTarget()
+                            .semantics { contentDescription = earlierLabel }
+                            .testTag("layout-editor-move-earlier"),
+                    ) { Text(stringResource(R.string.layout_editor_move_earlier)) }
+                    TextButton(
+                        onClick = onMoveLater,
+                        modifier = Modifier
+                            .weight(1f)
+                            .editorTouchTarget()
+                            .semantics { contentDescription = laterLabel }
+                            .testTag("layout-editor-move-later"),
+                    ) { Text(stringResource(R.string.layout_editor_move_later)) }
+                }
+                moveValidationMessage?.let { message ->
+                    Text(
+                        message,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier
+                            .testTag("layout-editor-move-message")
+                            .semantics { liveRegion = LiveRegionMode.Polite },
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
                         onClick = { onWidthChanged(button.id, button.width - 1) },
-                        modifier = Modifier.testTag("layout-editor-decrease-width"),
+                        modifier = Modifier
+                            .weight(1f)
+                            .editorTouchTarget()
+                            .semantics { contentDescription = decreaseLabel }
+                            .testTag("layout-editor-decrease-width"),
                     ) { Text(stringResource(R.string.layout_editor_decrease_width)) }
                     TextButton(
                         onClick = { onWidthChanged(button.id, button.width + 1) },
-                        modifier = Modifier.testTag("layout-editor-increase-width"),
+                        modifier = Modifier
+                            .weight(1f)
+                            .editorTouchTarget()
+                            .semantics { contentDescription = increaseLabel }
+                            .testTag("layout-editor-increase-width"),
                     ) { Text(stringResource(R.string.layout_editor_increase_width)) }
                 }
                 widthValidationMessage?.let { message ->
@@ -685,3 +824,6 @@ private fun SelectedButtonProperties(
         }
     }
 }
+
+private fun Modifier.editorTouchTarget(): Modifier =
+    heightIn(min = 48.dp).widthIn(min = 48.dp)
