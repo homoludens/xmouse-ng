@@ -42,16 +42,19 @@ class LayoutProfileJsonTest {
         }
         assertThrows(IllegalArgumentException::class.java) { LayoutProfile(name = "  ") }
         assertThrows(IllegalArgumentException::class.java) {
-            LayoutButton(title = "Blank width", command = "", width = 0)
+            LayoutButton(title = "Blank width", command = "valid command", width = 0)
         }
         assertThrows(IllegalArgumentException::class.java) {
-            LayoutButton(title = "Too wide", command = "", width = 11)
+            LayoutButton(title = "Too wide", command = "valid command", width = 11)
         }
         assertThrows(IllegalArgumentException::class.java) {
-            LayoutButton(title = "   ", command = "", width = 1)
+            LayoutButton(title = "   ", command = "valid command", width = 1)
         }
         assertThrows(IllegalArgumentException::class.java) {
-            LayoutButton(title = "Bad color", command = "", width = 1, color = "not-a-color")
+            LayoutButton(title = "Blank command", command = "  ", width = 1)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            LayoutButton(title = "Bad color", command = "valid command", width = 1, color = "not-a-color")
         }
         assertThrows(IllegalArgumentException::class.java) {
             LayoutProfile(name = "Wrong grid", columnCount = 9)

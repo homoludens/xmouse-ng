@@ -21,6 +21,7 @@ data class LayoutButton(
     init {
         require(isStableLayoutId(id)) { "Button ID must be a stable identifier" }
         require(title.isNotBlank()) { "Button title must not be blank" }
+        require(command.isNotBlank()) { "Button command must not be blank" }
         require(width in 1..LAYOUT_COLUMN_COUNT) { "Button width must be between 1 and 10 columns" }
         require(colorPattern.matches(color)) { "Button color must be a #RRGGBB or #AARRGGBB value" }
     }

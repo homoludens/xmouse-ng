@@ -4,6 +4,34 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.UUID
+
+enum class ButtonEditMode {
+    CREATE,
+    EDIT,
+    DUPLICATE,
+}
+
+/** Transient form values stay separate from the validated profile model. */
+data class ButtonEditInput(
+    val id: String,
+    val sourceButtonId: String?,
+    val mode: ButtonEditMode,
+    val title: String,
+    val command: String,
+    val width: String,
+    val color: String,
+)
+
+data class ButtonEditValidation(
+    val title: String? = null,
+    val command: String? = null,
+    val width: String? = null,
+    val color: String? = null,
+) {
+    val hasErrors: Boolean
+        get() = title != null || command != null || width != null || color != null
+}
 
 /** Immutable UI snapshot for one stable profile identity. */
 data class LayoutEditorState(
@@ -15,6 +43,9 @@ data class LayoutEditorState(
     val isShowingBackConfirmation: Boolean = false,
     val errorMessage: String? = null,
     val widthValidationMessage: String? = null,
+    val buttonEditInput: ButtonEditInput? = null,
+    val buttonEditValidation: ButtonEditValidation? = null,
+    val buttonEditSaveError: String? = null,
 ) {
     val selectedButton: LayoutButton?
         get() = LayoutEditorGrid.selectedButton(draftProfile?.buttons.orEmpty(), selectedButtonId)
@@ -80,6 +111,187 @@ class LayoutEditorViewModel(
         mutableState.value = current.copy(selectedButtonId = buttonId, widthValidationMessage = null)
     }
 
+    fun startNewButtonEdit() {
+        val current = mutableState.value
+        val draft = current.draftProfile ?: return
+        mutableState.value = current.copy(
+            buttonEditInput = ButtonEditInput(
+                id = newButtonId(draft),
+                sourceButtonId = null,
+                mode = ButtonEditMode.CREATE,
+                title = "",
+                command = "",
+                width = "1",
+                color = DEFAULT_LAYOUT_BUTTON_COLOR,
+            ),
+            buttonEditValidation = null,
+            buttonEditSaveError = null,
+        )
+    }
+
+    fun startSelectedButtonEdit() {
+        val current = mutableState.value
+        val button = current.selectedButton ?: return
+        mutableState.value = current.copy(
+            buttonEditInput = button.toEditInput(ButtonEditMode.EDIT, button.id),
+            buttonEditValidation = null,
+            buttonEditSaveError = null,
+        )
+    }
+
+    fun startSelectedButtonDuplicate() {
+        val current = mutableState.value
+        val draft = current.draftProfile ?: return
+        val button = current.selectedButton ?: return
+        mutableState.value = current.copy(
+            buttonEditInput = button.toEditInput(
+                mode = ButtonEditMode.DUPLICATE,
+                sourceButtonId = button.id,
+                id = newButtonId(draft),
+            ),
+            buttonEditValidation = null,
+            buttonEditSaveError = null,
+        )
+    }
+
+    fun updateButtonTitleInput(value: String) = updateButtonEditInput { copy(title = value) }
+
+    fun updateButtonCommandInput(value: String) = updateButtonEditInput { copy(command = value) }
+
+    fun updateButtonWidthInput(value: String) = updateButtonEditInput { copy(width = value) }
+
+    fun updateButtonColorInput(value: String) = updateButtonEditInput { copy(color = value) }
+
+    fun cancelButtonEdit() {
+        mutableState.value = mutableState.value.copy(
+            buttonEditInput = null,
+            buttonEditValidation = null,
+            buttonEditSaveError = null,
+        )
+    }
+
+    /** Invalid form text remains in state; only a fully validated button is written to the draft. */
+    fun saveButtonEdit(): Boolean {
+        val current = mutableState.value
+        val input = current.buttonEditInput ?: return false
+        val validation = validate(input)
+        if (validation.hasErrors) {
+            mutableState.value = current.copy(buttonEditValidation = validation, buttonEditSaveError = null)
+            return false
+        }
+
+        val button = LayoutButton(
+            id = if (input.mode == ButtonEditMode.EDIT) input.sourceButtonId!! else input.id,
+            title = input.title,
+            command = input.command,
+            width = input.width.toInt(),
+            color = input.color,
+        )
+        val draft = current.draftProfile ?: return false
+        val buttons = draft.buttons.toMutableList()
+        when (input.mode) {
+            ButtonEditMode.CREATE -> buttons += button
+            ButtonEditMode.EDIT -> {
+                val index = buttons.indexOfFirst { it.id == input.sourceButtonId }
+                if (index < 0) {
+                    mutableState.value = current.copy(buttonEditSaveError = BUTTON_EDIT_TARGET_ERROR)
+                    return false
+                }
+                buttons[index] = button
+            }
+            ButtonEditMode.DUPLICATE -> {
+                val index = buttons.indexOfFirst { it.id == input.sourceButtonId }
+                if (index < 0) {
+                    mutableState.value = current.copy(buttonEditSaveError = BUTTON_EDIT_TARGET_ERROR)
+                    return false
+                }
+                buttons.add(index + 1, button)
+            }
+        }
+
+        val changed = draft.copy(buttons = buttons)
+        return try {
+            repository.saveDraft(changed)
+            mutableState.value = current.copy(
+                draftProfile = immutableSnapshot(changed),
+                selectedButtonId = button.id,
+                buttonEditInput = null,
+                buttonEditValidation = null,
+                buttonEditSaveError = null,
+                errorMessage = null,
+                widthValidationMessage = null,
+            )
+            true
+        } catch (_: Exception) {
+            mutableState.value = current.copy(buttonEditSaveError = DRAFT_SAVE_ERROR)
+            false
+        }
+    }
+
+    /** Removes only the selected button from the recoverable draft, never the saved profile. */
+    fun deleteSelectedButton(): Boolean {
+        val current = mutableState.value
+        val draft = current.draftProfile ?: return false
+        val selectedId = current.selectedButtonId ?: return false
+        if (draft.buttons.none { it.id == selectedId }) return false
+        val changed = draft.copy(buttons = draft.buttons.filterNot { it.id == selectedId })
+        return try {
+            repository.saveDraft(changed)
+            mutableState.value = current.copy(
+                draftProfile = immutableSnapshot(changed),
+                selectedButtonId = null,
+                widthValidationMessage = null,
+                errorMessage = null,
+            )
+            true
+        } catch (_: Exception) {
+            mutableState.value = current.copy(errorMessage = DRAFT_SAVE_ERROR)
+            false
+        }
+    }
+
+    private inline fun updateButtonEditInput(transform: ButtonEditInput.() -> ButtonEditInput) {
+        val current = mutableState.value
+        val input = current.buttonEditInput ?: return
+        val changed = input.transform()
+        val validation = current.buttonEditValidation?.let {
+            validate(changed).takeIf { errors -> errors.hasErrors }
+        }
+        mutableState.value = current.copy(
+            buttonEditInput = changed,
+            buttonEditValidation = validation,
+            buttonEditSaveError = null,
+        )
+    }
+
+    private fun LayoutButton.toEditInput(
+        mode: ButtonEditMode,
+        sourceButtonId: String,
+        id: String = this.id,
+    ) = ButtonEditInput(
+        id = id,
+        sourceButtonId = sourceButtonId,
+        mode = mode,
+        title = title,
+        command = command,
+        width = width.toString(),
+        color = color,
+    )
+
+    private fun newButtonId(profile: LayoutProfile): String {
+        val existing = profile.buttons.mapTo(mutableSetOf(), LayoutButton::id)
+        return generateSequence { UUID.randomUUID().toString() }.first { it !in existing }
+    }
+
+    private fun validate(input: ButtonEditInput): ButtonEditValidation = ButtonEditValidation(
+        title = "Title is required.".takeIf { input.title.isBlank() },
+        command = "Command is required.".takeIf { input.command.isBlank() },
+        width = "Width must be between 1 and 10 columns.".takeIf {
+            input.width.toIntOrNull()?.let { width -> width in 1..LAYOUT_COLUMN_COUNT } != true
+        },
+        color = "Use #RRGGBB or #AARRGGBB color notation.".takeIf { !BUTTON_COLOR_PATTERN.matches(input.color) },
+    )
+
     /** One completed gesture is one durable draft edit; cancelled/stale/no-target drags do nothing. */
     internal fun commitDrag(drag: LayoutEditorDrag) {
         val current = mutableState.value
@@ -139,6 +351,7 @@ class LayoutEditorViewModel(
 
     fun save(): Boolean {
         val current = mutableState.value
+        if (current.buttonEditInput != null) return false
         val saved = current.savedProfile ?: return false
         var draft = current.draftProfile ?: return false
         if (current.profileNameInput.isBlank()) {
@@ -165,6 +378,9 @@ class LayoutEditorViewModel(
                 isShowingBackConfirmation = false,
                 errorMessage = null,
                 widthValidationMessage = null,
+                buttonEditInput = null,
+                buttonEditValidation = null,
+                buttonEditSaveError = null,
             )
             true
         } catch (_: Exception) {
@@ -189,6 +405,9 @@ class LayoutEditorViewModel(
                 isShowingBackConfirmation = false,
                 errorMessage = null,
                 widthValidationMessage = null,
+                buttonEditInput = null,
+                buttonEditValidation = null,
+                buttonEditSaveError = null,
             )
             true
         } catch (_: Exception) {
@@ -232,5 +451,7 @@ class LayoutEditorViewModel(
         const val SAVE_ERROR = "The layout could not be saved. Your draft is still available to retry."
         const val DISCARD_ERROR = "The draft could not be discarded. The saved layout is unchanged."
         const val WIDTH_ERROR = "Button width must be between 1 and 10 columns. Your draft is still open."
+        const val BUTTON_EDIT_TARGET_ERROR = "This button is no longer in the draft. Close the form and try again."
+        val BUTTON_COLOR_PATTERN = Regex("#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?")
     }
 }

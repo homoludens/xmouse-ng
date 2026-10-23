@@ -1,5 +1,6 @@
 package com.stripe1.xmouse.layout
 
+import android.annotation.SuppressLint
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -43,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -56,6 +58,8 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
@@ -91,6 +95,16 @@ class LayoutEditorActivity : ComponentActivity() {
                     onButtonSelected = editorViewModel::selectButton,
                     onDragCommitted = editorViewModel::commitDrag,
                     onWidthChanged = editorViewModel::updateButtonWidth,
+                    onNewButton = editorViewModel::startNewButtonEdit,
+                    onEditButton = editorViewModel::startSelectedButtonEdit,
+                    onDuplicateButton = editorViewModel::startSelectedButtonDuplicate,
+                    onDeleteButton = editorViewModel::deleteSelectedButton,
+                    onButtonTitleChanged = editorViewModel::updateButtonTitleInput,
+                    onButtonCommandChanged = editorViewModel::updateButtonCommandInput,
+                    onButtonWidthInputChanged = editorViewModel::updateButtonWidthInput,
+                    onButtonColorChanged = editorViewModel::updateButtonColorInput,
+                    onButtonEditSave = editorViewModel::saveButtonEdit,
+                    onButtonEditCancel = editorViewModel::cancelButtonEdit,
                     onBack = {
                         if (editorViewModel.state.value.isShowingBackConfirmation) {
                             editorViewModel.resolveBack(LayoutEditorBackChoice.CANCEL)
@@ -125,6 +139,16 @@ private fun LayoutEditorScreen(
     onButtonSelected: (String?) -> Unit,
     onDragCommitted: (LayoutEditorDrag) -> Unit,
     onWidthChanged: (String, Int) -> Unit,
+    onNewButton: () -> Unit,
+    onEditButton: () -> Unit,
+    onDuplicateButton: () -> Unit,
+    onDeleteButton: () -> Unit,
+    onButtonTitleChanged: (String) -> Unit,
+    onButtonCommandChanged: (String) -> Unit,
+    onButtonWidthInputChanged: (String) -> Unit,
+    onButtonColorChanged: (String) -> Unit,
+    onButtonEditSave: () -> Boolean,
+    onButtonEditCancel: () -> Unit,
     onBack: () -> Unit,
     onSave: () -> Unit,
     onDiscard: () -> Unit,
@@ -160,6 +184,13 @@ private fun LayoutEditorScreen(
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Text(stringResource(R.string.layout_editor_saved_buttons, draft.buttons.size))
+                    ButtonEditActions(
+                        hasSelection = state.selectedButton != null,
+                        onNewButton = onNewButton,
+                        onEditButton = onEditButton,
+                        onDuplicateButton = onDuplicateButton,
+                        onDeleteButton = onDeleteButton,
+                    )
                     ButtonGridPreview(
                         profile = draft,
                         selectedButton = state.selectedButton,
@@ -217,6 +248,160 @@ private fun LayoutEditorScreen(
             },
         )
     }
+
+    state.buttonEditInput?.let { input ->
+        ButtonEditDialog(
+            input = input,
+            validation = state.buttonEditValidation,
+            saveError = state.buttonEditSaveError,
+            onTitleChanged = onButtonTitleChanged,
+            onCommandChanged = onButtonCommandChanged,
+            onWidthChanged = onButtonWidthInputChanged,
+            onColorChanged = onButtonColorChanged,
+            onSave = onButtonEditSave,
+            onCancel = onButtonEditCancel,
+        )
+    }
+}
+
+@Composable
+@SuppressLint("HardcodedText")
+private fun ButtonEditActions(
+    hasSelection: Boolean,
+    onNewButton: () -> Unit,
+    onEditButton: () -> Unit,
+    onDuplicateButton: () -> Unit,
+    onDeleteButton: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onNewButton, modifier = Modifier.weight(1f).testTag("layout-editor-add-button")) {
+                Text("Add button")
+            }
+            TextButton(
+                onClick = onEditButton,
+                enabled = hasSelection,
+                modifier = Modifier.weight(1f).testTag("layout-editor-edit-button"),
+            ) { Text("Edit selected") }
+        }
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(
+                onClick = onDuplicateButton,
+                enabled = hasSelection,
+                modifier = Modifier.weight(1f).testTag("layout-editor-duplicate-button"),
+            ) { Text("Duplicate selected") }
+            TextButton(
+                onClick = onDeleteButton,
+                enabled = hasSelection,
+                modifier = Modifier.weight(1f).testTag("layout-editor-delete-button"),
+            ) { Text("Delete selected") }
+        }
+    }
+}
+
+private val BUTTON_COLOR_PRESETS = listOf(
+    "#FFFFFF", "#000000", "#F44336", "#FF9800",
+    "#FFEB3B", "#4CAF50", "#2196F3", "#9C27B0",
+)
+
+@Composable
+@SuppressLint("HardcodedText")
+private fun ButtonEditDialog(
+    input: ButtonEditInput,
+    validation: ButtonEditValidation?,
+    saveError: String?,
+    onTitleChanged: (String) -> Unit,
+    onCommandChanged: (String) -> Unit,
+    onWidthChanged: (String) -> Unit,
+    onColorChanged: (String) -> Unit,
+    onSave: () -> Boolean,
+    onCancel: () -> Unit,
+) {
+    val title = when (input.mode) {
+        ButtonEditMode.CREATE -> "Add button"
+        ButtonEditMode.EDIT -> "Edit button"
+        ButtonEditMode.DUPLICATE -> "Duplicate button"
+    }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text(title) },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = input.title,
+                    onValueChange = onTitleChanged,
+                    modifier = Modifier.fillMaxWidth().testTag("layout-editor-button-title"),
+                    label = { Text("Title") },
+                    singleLine = true,
+                    isError = validation?.title != null,
+                    supportingText = { validation?.title?.let { Text(it, color = MaterialTheme.colorScheme.error) } },
+                )
+                OutlinedTextField(
+                    value = input.command,
+                    onValueChange = onCommandChanged,
+                    modifier = Modifier.fillMaxWidth().testTag("layout-editor-button-command"),
+                    label = { Text("Raw command") },
+                    minLines = 3,
+                    isError = validation?.command != null,
+                    supportingText = { validation?.command?.let { Text(it, color = MaterialTheme.colorScheme.error) } },
+                )
+                OutlinedTextField(
+                    value = input.width,
+                    onValueChange = onWidthChanged,
+                    modifier = Modifier.fillMaxWidth().testTag("layout-editor-button-width"),
+                    label = { Text("Width (1–10 columns)") },
+                    singleLine = true,
+                    isError = validation?.width != null,
+                    supportingText = { validation?.width?.let { Text(it, color = MaterialTheme.colorScheme.error) } },
+                )
+                OutlinedTextField(
+                    value = input.color,
+                    onValueChange = onColorChanged,
+                    modifier = Modifier.fillMaxWidth().testTag("layout-editor-button-color"),
+                    label = { Text("Color (#RRGGBB or #AARRGGBB)") },
+                    singleLine = true,
+                    isError = validation?.color != null,
+                    supportingText = { validation?.color?.let { Text(it, color = MaterialTheme.colorScheme.error) } },
+                )
+                Text("Color palette")
+                BUTTON_COLOR_PRESETS.chunked(4).forEach { rowColors ->
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        rowColors.forEach { preset ->
+                            val selected = input.color.equals(preset, ignoreCase = true)
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(android.graphics.Color.parseColor(preset)))
+                                    .border(
+                                        width = if (selected) 3.dp else 1.dp,
+                                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                        shape = CircleShape,
+                                    )
+                                    .clickable { onColorChanged(preset) }
+                                    .semantics { contentDescription = "Select color $preset" }
+                                    .testTag("layout-editor-color-$preset"),
+                            )
+                        }
+                    }
+                }
+                saveError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave() }, modifier = Modifier.testTag("layout-editor-button-save")) {
+                Text("Apply to draft")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel, modifier = Modifier.testTag("layout-editor-button-cancel")) {
+                Text("Cancel")
+            }
+        },
+    )
 }
 
 @Composable
