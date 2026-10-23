@@ -35,6 +35,14 @@ import androidx.core.content.edit
 import androidx.core.view.GravityCompat
 import androidx.appcompat.widget.Toolbar
 import androidx.drawerlayout.widget.DrawerLayout
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
 import com.stripe1.xmouse.MainActivity
 import com.stripe1.xmouse.DatabaseHandler
 import com.stripe1.xmouse.CustomKeyboardButtonAdapter
@@ -44,6 +52,11 @@ import com.stripe1.xmouse.MyMouseView
 import com.stripe1.xmouse.R
 import com.stripe1.xmouse.SpanVariableGridView
 import com.stripe1.xmouse.XMouseApplication
+import com.stripe1.xmouse.layout.LayoutButton
+import com.stripe1.xmouse.layout.LayoutEditorActivity
+import com.stripe1.xmouse.layout.LayoutProfile
+import com.stripe1.xmouse.layout.LayoutProfileRepository
+import com.stripe1.xmouse.layout.LegacyLayoutProfileMigrator
 import com.stripe1.xmouse.connection.ConnectionFailure
 import com.stripe1.xmouse.connection.ConnectionState
 import com.stripe1.xmouse.connection.Endpoint
@@ -69,6 +82,7 @@ import com.stripe1.xmouse.session.SessionForegroundService.Companion.NOTIFICATIO
 import com.stripe1.xmouse.permissions.LocalNetworkPermissionCoordinator
 import org.junit.After
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -92,6 +106,8 @@ import org.bouncycastle.crypto.util.OpenSSHPublicKeyUtil
 @RunWith(AndroidJUnit4::class)
 class SessionForegroundServiceAndroidTest {
     private companion object { const val POST_NOTIFICATIONS_PERMISSION = "android.permission.POST_NOTIFICATIONS" }
+
+    @get:Rule val compose = createEmptyComposeRule()
 
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private val context get() = ApplicationProvider.getApplicationContext<Context>()
@@ -1268,6 +1284,174 @@ class SessionForegroundServiceAndroidTest {
         clickText("Ok")
         SessionForegroundService.requestDisconnect(context)
         eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+    }
+
+    @Test
+    fun layoutEditorNeverDispatchesAndNormalControlsUseOnlyTheSavedProfile() {
+        grantNotificationPermissionForDisclosureTest()
+        grantLocalNetworkPermissionForConnectionTest()
+
+        val repository = LayoutProfileRepository(
+            File(context.filesDir, LayoutEditorActivity.PROFILE_DIRECTORY),
+        )
+        val previousSelectedProfileId = repository.loadSelectedProfile()?.id
+        val migration = LegacyLayoutProfileMigrator(context.filesDir, repository).migrateWithReport()
+        assertTrue("the test's saved layout must activate without migration warnings", migration.warnings.isEmpty())
+        val activeProfileSeededForTest =
+            runCatching { repository.loadProfile(LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID) }.isFailure
+        if (activeProfileSeededForTest) {
+            repository.createProfile(LayoutProfile(
+                id = LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID,
+                name = "Active layout",
+                buttons = listOf(LayoutButton("active-button", "Active", "printf active", 2)),
+            ))
+        }
+        val original = LayoutProfile(
+            id = "editor-boundary-${java.util.UUID.randomUUID()}",
+            name = "Editor boundary",
+            buttons = listOf(
+                LayoutButton("source", "Source", "printf source", 3),
+                LayoutButton("target", "Target", "printf target", 4),
+            ),
+        )
+
+        try {
+            repository.createProfile(original)
+            repository.selectProfile(original.id)
+            val recordingOwner = RecordingTransportOwner()
+            install(recordingOwner)
+            val activityScenario = launchVisibleActivity(
+                autoConnect = true,
+                inputBackend = "xdotool",
+                initialCommand = "",
+            )
+            eventually { recordingOwner.controller.current.connection.isReady }
+            eventually {
+                var ready = false
+                activityScenario.onActivity { ready = activitySnapshot(it)?.connection?.isReady == true }
+                ready
+            }
+            // The same production service transport records editor-time and normal-mode commands.
+            recordingOwner.backend.writes.clear()
+            recordingOwner.backend.commandOrder.clear()
+
+            activityScenario.onActivity { activity ->
+                val toolbar = activity.findViewById<Toolbar>(R.id.toolbar)
+                if (toolbar.menu.findItem(R.id.action_edit_layout) == null) {
+                    activity.menuInflater.inflate(R.menu.main, toolbar.menu)
+                }
+                activity.onOptionsItemSelected(requireNotNull(toolbar.menu.findItem(R.id.action_edit_layout)))
+            }
+
+            val sourceNode = compose.onNodeWithTag("layout-editor-button-source").performScrollTo()
+            sourceNode.performClick()
+            sourceNode.assertIsSelected()
+            assertEquals("a preview tap only selects an editor button", original, repository.loadProfile(original.id))
+            assertNull(repository.loadDraft(original.id))
+
+            val sourceBounds = sourceNode.fetchSemanticsNode().boundsInRoot
+            val targetBounds = compose.onNodeWithTag("layout-editor-button-target")
+                .fetchSemanticsNode().boundsInRoot
+            val destination = Offset(
+                targetBounds.right - targetBounds.width / 4f,
+                targetBounds.center.y,
+            ) - sourceBounds.topLeft
+            sourceNode.performTouchInput {
+                down(center)
+                advanceEventTime(1_000)
+                moveTo(destination, delayMillis = 100)
+            }
+            compose.onNodeWithTag("layout-editor-placement-preview").assertExists()
+            sourceNode.performTouchInput { up() }
+            compose.waitForIdle()
+
+            val moved = original.copy(buttons = original.buttons.reversed())
+            assertEquals(moved, repository.loadDraft(original.id))
+            assertEquals("dragging cannot update the saved profile", original, repository.loadProfile(original.id))
+
+            compose.onNodeWithTag("layout-editor-increase-width").performScrollTo().performClick()
+            compose.waitForIdle()
+            val resized = moved.copy(buttons = listOf(moved.buttons[0], moved.buttons[1].copy(width = 4)))
+            assertEquals(resized, repository.loadDraft(original.id))
+            assertEquals("resizing cannot update the saved profile", original, repository.loadProfile(original.id))
+
+            val expectedCommand = "printf 'saved-layout-only'"
+            compose.onNodeWithTag("layout-editor-add-button").performScrollTo().performClick()
+            compose.onNodeWithTag("layout-editor-button-title").performScrollTo().performTextInput("Saved action")
+            compose.onNodeWithTag("layout-editor-button-command").performScrollTo().performTextInput(expectedCommand)
+            compose.onNodeWithTag("layout-editor-button-save").performClick()
+            compose.waitForIdle()
+
+            val draft = requireNotNull(repository.loadDraft(original.id))
+            val created = draft.buttons.last()
+            assertEquals("Saved action", created.title)
+            assertEquals(expectedCommand, created.command)
+            assertEquals(resized.copy(buttons = resized.buttons + created), draft)
+            assertEquals("create/edit stays draft-only until Save", original, repository.loadProfile(original.id))
+
+            // Let any incorrectly submitted editor command reach the recording provider before Save.
+            Thread.sleep(250)
+            assertTrue("editor taps, drag, resize, and create must send zero shell commands",
+                recordingOwner.backend.writes.isEmpty())
+            assertTrue(recordingOwner.backend.commandOrder.isEmpty())
+
+            compose.onNodeWithTag("layout-editor-save").performScrollTo().performClick()
+            eventually { repository.loadProfile(original.id) == draft && repository.loadDraft(original.id) == null }
+            assertTrue("saving and returning to normal mode must not itself execute a button",
+                recordingOwner.backend.writes.isEmpty())
+
+            eventually {
+                var reloaded = false
+                activityScenario.onActivity { activity ->
+                    val adapter = activity.findViewById<SpanVariableGridView>(R.id.key_drag_DragAndDropGridView)
+                        .adapter as? CustomKeyboardButtonAdapter
+                    val button = adapter?.let { current ->
+                        (0 until current.count).mapNotNull(current::getItem)
+                            .singleOrNull { it.getmTitle() == "Saved action" }
+                    }
+                    reloaded = button?.getmCommand() == expectedCommand && button.getmSpans() == created.width &&
+                        activity.activeControlInputToken() != null
+                }
+                reloaded
+            }
+
+            activityScenario.onActivity { activity ->
+                assertTrue("normal custom controls must be available after editor return",
+                    activity.findViewById<View>(R.id.fab).performClick())
+            }
+            eventually {
+                var active = false
+                activityScenario.onActivity { active = it.activeControlInputToken() != null }
+                active
+            }
+            assertTrue(recordingOwner.backend.writes.isEmpty())
+
+            activityScenario.onActivity { clickLegacyButton(it, "Saved action") }
+            val expectedWrite = "$expectedCommand\r\n"
+            eventually {
+                recordingOwner.backend.writes.toList() == listOf(expectedWrite) &&
+                    recordingOwner.backend.commandOrder.toList() == listOf("shell:$expectedCommand")
+            }
+            assertEquals("only the saved button command reaches the normal-mode sink",
+                listOf("shell:$expectedCommand"), recordingOwner.backend.commandOrder.toList())
+        } finally {
+            try {
+                scenario?.close()
+            } finally {
+                scenario = null
+                val restoreProfileId = previousSelectedProfileId ?: LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID
+                if (runCatching { repository.loadProfile(restoreProfileId) }.isSuccess) {
+                    repository.selectProfile(restoreProfileId)
+                }
+                if (runCatching { repository.loadProfile(original.id) }.isSuccess) {
+                    repository.deleteProfile(original.id, confirmed = true)
+                }
+                if (activeProfileSeededForTest &&
+                    runCatching { repository.loadProfile(LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID) }.isSuccess) {
+                    repository.deleteProfile(LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID, confirmed = true)
+                }
+            }
+        }
     }
 
     @Test
