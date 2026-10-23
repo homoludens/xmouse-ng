@@ -66,6 +66,7 @@ import com.stripe1.xmouse.session.InputSurfaceToken;
 import com.stripe1.xmouse.session.SessionInteractions;
 import com.stripe1.xmouse.session.SessionSnapshot;
 import com.stripe1.xmouse.permissions.LocalNetworkPermissionCoordinator;
+import com.stripe1.xmouse.layout.LegacyLayoutReader;
 
 import java.io.BufferedReader;
 import java.io.FileInputStream;
@@ -1893,28 +1894,13 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			for(int i=0;i<lines.length;i++){
 				line = lines[i];
 				//sb.append(line).append("\n");
-				if(line.contains("<xmousesep>")){
-					//parse line in to customItems
-					String[] temp =line.split("<xmousesep>");
-					//iconId,span int,title string, script
-
-					if(Integer.valueOf(temp[2])<1 || Integer.valueOf(temp[2])>10){
-						Toast.makeText(mCont, "You have included an invalid span integer, try again", Toast.LENGTH_SHORT).show();
-						return null;
-
-					}
-
-					if(temp.length>3){
-						views.add(new CustomKeyboardButton( 0,Integer.valueOf(temp[2]), temp[0], temp[1],temp[3]));
-					}else{
-						views.add(new CustomKeyboardButton( 0,Integer.valueOf(temp[2]), temp[0], temp[1],"#ffffff"));
-
-					}
-				}else{
-					String[] temp =line.split(",");
-					views.add(new CustomKeyboardButton( 0,Integer.valueOf(temp[2]), temp[0], temp[1],"#ffffff"));
-
+				LegacyLayoutReader.Record record = LegacyLayoutReader.parseRecord(line, "#ffffff");
+				if(record.isSeparatorFormat() && (record.getSpan()<1 || record.getSpan()>10)){
+					Toast.makeText(mCont, "You have included an invalid span integer, try again", Toast.LENGTH_SHORT).show();
+					return null;
 				}
+				views.add(new CustomKeyboardButton(
+						0, record.getSpan(), record.getTitle(), record.getCommand(), record.getColor()));
 			}
 			//fis.close();
 		} catch(OutOfMemoryError ignored){
@@ -1950,20 +1936,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 				String line = null;
 				while ((line = reader.readLine()) != null) {
 					//sb.append(line).append("\n");
-					if(line.contains("<xmousesep>")){
-						//parse line in to customItems
-						String[] temp =line.split("<xmousesep>");
-						if(temp.length>3){
-							views.add(new CustomKeyboardButton( 0,Integer.valueOf(temp[2]), temp[0], temp[1],temp[3]));
-						}else{
-							views.add(new CustomKeyboardButton( 0,Integer.valueOf(temp[2]), temp[0], temp[1],"#FFFFFF"));
-
-						}
-					}else{
-						String[] temp =line.split(",");
-						views.add(new CustomKeyboardButton( 0,Integer.valueOf(temp[2]), temp[0], temp[1],"#FFFFFF"));
-
-					}
+					LegacyLayoutReader.Record record = LegacyLayoutReader.parseRecord(line, "#FFFFFF");
+					views.add(new CustomKeyboardButton(
+							0, record.getSpan(), record.getTitle(), record.getCommand(), record.getColor()));
 				}
 				fis.close();
 			} catch(OutOfMemoryError ignored){
