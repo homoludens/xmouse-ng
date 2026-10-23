@@ -9,11 +9,15 @@ import kotlinx.coroutines.flow.asStateFlow
 data class LayoutEditorState(
     val savedProfile: LayoutProfile? = null,
     val draftProfile: LayoutProfile? = null,
+    val selectedButtonId: String? = null,
     val profileNameInput: String = "",
     val isLoading: Boolean = true,
     val isShowingBackConfirmation: Boolean = false,
     val errorMessage: String? = null,
 ) {
+    val selectedButton: LayoutButton?
+        get() = LayoutEditorGrid.selectedButton(draftProfile?.buttons.orEmpty(), selectedButtonId)
+
     val isDirty: Boolean
         get() = savedProfile != null && draftProfile != null &&
             (savedProfile != draftProfile || profileNameInput != draftProfile.name)
@@ -65,6 +69,14 @@ class LayoutEditorViewModel(
                 errorMessage = DRAFT_SAVE_ERROR,
             )
         }
+    }
+
+    /** Button selection is transient and keyed by the button's stable ID, never its list position. */
+    fun selectButton(buttonId: String?) {
+        val current = mutableState.value
+        val buttons = current.draftProfile?.buttons ?: return
+        if (buttonId != null && buttons.none { it.id == buttonId }) return
+        mutableState.value = current.copy(selectedButtonId = buttonId)
     }
 
     /** Returns true when Back may leave immediately; dirty state opens the explicit choice dialog. */

@@ -57,6 +57,17 @@
     <string name="layout_editor_back">Back</string>
     <string name="layout_editor_saved_layout">Saved layout: %1$s</string>
     <string name="layout_editor_saved_buttons">%1$d saved buttons</string>
+    <string name="layout_editor_preview_heading">Ten-column button preview</string>
+    <string name="layout_editor_preview_hint">Tap a button to inspect it. Preview taps do not run remote commands.</string>
+    <string name="layout_editor_preview_empty">This layout has no buttons yet.</string>
+    <string name="layout_editor_preview_select_hint">Select a button to inspect its properties and validation.</string>
+    <string name="layout_editor_preview_selected">Selected button</string>
+    <string name="layout_editor_preview_title">Title: %1$s</string>
+    <string name="layout_editor_preview_command">Command: %1$s</string>
+    <string name="layout_editor_preview_empty_command">(empty)</string>
+    <string name="layout_editor_preview_width">Width: %1$d of %2$d columns</string>
+    <string name="layout_editor_preview_color">Color: %1$s</string>
+    <string name="layout_editor_preview_valid">Required title, width, and color are valid.</string>
     <string name="layout_editor_profile_name">Profile name</string>
     <string name="layout_editor_saved_snapshot_note">Button arrangement and properties remain unchanged until saved.</string>
     <string name="layout_editor_loading">Loading layout…</string>
