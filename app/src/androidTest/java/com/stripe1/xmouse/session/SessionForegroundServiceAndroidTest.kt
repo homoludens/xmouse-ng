@@ -36,9 +36,11 @@ import androidx.core.view.GravityCompat
 import androidx.appcompat.widget.Toolbar
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
@@ -1450,6 +1452,127 @@ class SessionForegroundServiceAndroidTest {
                     runCatching { repository.loadProfile(LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID) }.isSuccess) {
                     repository.deleteProfile(LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID, confirmed = true)
                 }
+            }
+        }
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 36)
+    fun systemBackClosesDrawerAndDialogsBeforeDirtyEditorWithoutDisconnecting() {
+        grantNotificationPermissionForDisclosureTest()
+        grantLocalNetworkPermissionForConnectionTest()
+
+        val repository = LayoutProfileRepository(
+            File(context.filesDir, LayoutEditorActivity.PROFILE_DIRECTORY),
+        )
+        val migration = LegacyLayoutProfileMigrator(context.filesDir, repository).migrateWithReport()
+        assertTrue("the test's saved layout must activate without migration warnings", migration.warnings.isEmpty())
+        val previousSelectedProfileId = repository.loadSelectedProfile()?.id
+        val saved = LayoutProfile(
+            id = "back-${java.util.UUID.randomUUID()}",
+            name = "Back ordering",
+            buttons = listOf(LayoutButton("source", "Source", "printf source", 2)),
+        )
+        repository.createProfile(saved)
+        repository.selectProfile(saved.id)
+
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity(autoConnect = true, inputBackend = "xdotool", initialCommand = "")
+        try {
+            eventually { recordingOwner.controller.current.connection.isReady }
+            val readyConnection = recordingOwner.controller.current.connection
+
+            activityScenario.onActivity { activity ->
+                activity.findViewById<DrawerLayout>(R.id.drawer_layout).openDrawer(GravityCompat.START)
+            }
+            eventually {
+                var open = false
+                activityScenario.onActivity {
+                    open = it.findViewById<DrawerLayout>(R.id.drawer_layout)
+                        .isDrawerOpen(GravityCompat.START)
+                }
+                open
+            }
+            device.pressBack()
+            eventually {
+                var open = true
+                activityScenario.onActivity {
+                    open = it.findViewById<DrawerLayout>(R.id.drawer_layout)
+                        .isDrawerOpen(GravityCompat.START)
+                }
+                !open
+            }
+            assertTrue(recordingOwner.controller.current.connection.isReady)
+            assertSame(readyConnection, recordingOwner.controller.current.connection)
+
+            // This menu action presents a destructive layout-switch confirmation. Back must cancel it.
+            activityScenario.onActivity { activity ->
+                activity.findViewById<DrawerLayout>(R.id.drawer_layout).openDrawer(GravityCompat.START)
+                val navigation = activity.findViewById<com.google.android.material.navigation.NavigationView>(R.id.nav_view)
+                assertTrue(activity.onNavigationItemSelected(requireNotNull(navigation.menu.findItem(61))))
+            }
+            waitForText("Load Keyboard Layout 1")
+            device.pressBack()
+            assertTrue("Back should dismiss, not confirm, the layout switch",
+                device.wait(Until.gone(By.text("Load Keyboard Layout 1")), 5_000))
+            assertEquals(saved.id, repository.loadSelectedProfile()?.id)
+            assertEquals(saved, repository.loadProfile(saved.id))
+            assertSame(readyConnection, recordingOwner.controller.current.connection)
+
+            activityScenario.onActivity { activity ->
+                val toolbar = activity.findViewById<Toolbar>(R.id.toolbar)
+                if (toolbar.menu.findItem(R.id.action_edit_layout) == null) {
+                    activity.menuInflater.inflate(R.menu.main, toolbar.menu)
+                }
+                activity.onOptionsItemSelected(requireNotNull(toolbar.menu.findItem(R.id.action_edit_layout)))
+            }
+            val source = compose.onNodeWithTag("layout-editor-button-source").performScrollTo()
+            source.performClick()
+            compose.onNodeWithTag("layout-editor-increase-width").performScrollTo().performClick()
+            compose.waitForIdle()
+            val draft = requireNotNull(repository.loadDraft(saved.id))
+            assertEquals(saved, repository.loadProfile(saved.id))
+
+            // A Compose Dialog owns the first Back; the editor's dirty-state handler must not run yet.
+            compose.onNodeWithTag("layout-editor-add-button").performScrollTo().performClick()
+            compose.onNodeWithTag("layout-editor-button-title").assertExists()
+            device.pressBack()
+            compose.waitForIdle()
+            compose.onNodeWithTag("layout-editor-button-title").assertDoesNotExist()
+            compose.onNodeWithText("Save layout changes?").assertDoesNotExist()
+            assertEquals(saved, repository.loadProfile(saved.id))
+            assertEquals(draft, repository.loadDraft(saved.id))
+
+            device.pressBack()
+            compose.onNodeWithText("Save layout changes?").assertExists()
+            device.pressBack()
+            compose.waitForIdle()
+            compose.onNodeWithText("Save layout changes?").assertDoesNotExist()
+            compose.onNodeWithTag("layout-editor-save").assertIsEnabled()
+            assertEquals("Back/Cancel must retain the dirty draft", draft, repository.loadDraft(saved.id))
+            assertEquals("Back/Cancel must not save the draft", saved, repository.loadProfile(saved.id))
+
+            device.pressBack()
+            compose.onNodeWithText("Save layout changes?").assertExists()
+            clickText("Discard")
+            eventually { repository.loadDraft(saved.id) == null }
+            assertEquals(saved, repository.loadProfile(saved.id))
+            assertTrue("ordinary Back must leave the service session ready",
+                recordingOwner.controller.current.connection.isReady)
+            assertSame(readyConnection, recordingOwner.controller.current.connection)
+            assertEquals("Back handling must not start another SSH attempt", 1, recordingOwner.attemptsCreated)
+        } finally {
+            try {
+                activityScenario.close()
+            } finally {
+                scenario = null
+                if (runCatching { repository.loadProfile(saved.id) }.isSuccess) {
+                    repository.deleteProfile(saved.id, confirmed = true)
+                }
+                previousSelectedProfileId?.takeIf {
+                    runCatching { repository.loadProfile(it) }.isSuccess
+                }?.let(repository::selectProfile)
             }
         }
     }
