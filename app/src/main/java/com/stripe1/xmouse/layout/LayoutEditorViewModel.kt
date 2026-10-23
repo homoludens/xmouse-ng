@@ -46,6 +46,8 @@ data class LayoutEditorState(
     val buttonEditInput: ButtonEditInput? = null,
     val buttonEditValidation: ButtonEditValidation? = null,
     val buttonEditSaveError: String? = null,
+    val canUndo: Boolean = false,
+    val canRedo: Boolean = false,
 ) {
     val selectedButton: LayoutButton?
         get() = LayoutEditorGrid.selectedButton(draftProfile?.buttons.orEmpty(), selectedButtonId)
@@ -66,6 +68,7 @@ class LayoutEditorViewModel(
     private val profileId: String,
     private val repository: LayoutProfileRepository,
 ) : ViewModel() {
+    private var history = LayoutEditorHistory()
     private val mutableState = MutableStateFlow(loadInitialState())
     val state = mutableState.asStateFlow()
 
@@ -209,23 +212,7 @@ class LayoutEditorViewModel(
             }
         }
 
-        val changed = draft.copy(buttons = buttons)
-        return try {
-            repository.saveDraft(changed)
-            mutableState.value = current.copy(
-                draftProfile = immutableSnapshot(changed),
-                selectedButtonId = button.id,
-                buttonEditInput = null,
-                buttonEditValidation = null,
-                buttonEditSaveError = null,
-                errorMessage = null,
-                widthValidationMessage = null,
-            )
-            true
-        } catch (_: Exception) {
-            mutableState.value = current.copy(buttonEditSaveError = DRAFT_SAVE_ERROR)
-            false
-        }
+        return persistButtonChange(current, draft.copy(buttons = buttons), button.id, finishButtonEdit = true)
     }
 
     /** Removes only the selected button from the recoverable draft, never the saved profile. */
@@ -235,19 +222,7 @@ class LayoutEditorViewModel(
         val selectedId = current.selectedButtonId ?: return false
         if (draft.buttons.none { it.id == selectedId }) return false
         val changed = draft.copy(buttons = draft.buttons.filterNot { it.id == selectedId })
-        return try {
-            repository.saveDraft(changed)
-            mutableState.value = current.copy(
-                draftProfile = immutableSnapshot(changed),
-                selectedButtonId = null,
-                widthValidationMessage = null,
-                errorMessage = null,
-            )
-            true
-        } catch (_: Exception) {
-            mutableState.value = current.copy(errorMessage = DRAFT_SAVE_ERROR)
-            false
-        }
+        return persistButtonChange(current, changed, selectedButtonId = null)
     }
 
     private inline fun updateButtonEditInput(transform: ButtonEditInput.() -> ButtonEditInput) {
@@ -313,22 +288,70 @@ class LayoutEditorViewModel(
         persistButtonChange(current, changed)
     }
 
-    private fun persistButtonChange(current: LayoutEditorState, changed: LayoutProfile) {
-        if (changed == current.draftProfile) {
-            mutableState.value = current.copy(widthValidationMessage = null)
-            return
+    private fun persistButtonChange(
+        current: LayoutEditorState,
+        changed: LayoutProfile,
+        selectedButtonId: String? = current.selectedButtonId,
+        finishButtonEdit: Boolean = false,
+    ): Boolean {
+        val draft = current.draftProfile ?: return false
+        val nextHistory = history.record(
+            LayoutEditorButtonSnapshot(draft.buttons, current.selectedButtonId),
+            LayoutEditorButtonSnapshot(changed.buttons, selectedButtonId),
+        )
+        if (changed.buttons != draft.buttons) {
+            try {
+                repository.saveDraft(changed)
+            } catch (_: Exception) {
+                // Neither the visible snapshot nor either history branch advances on a failed write.
+                mutableState.value = if (finishButtonEdit) {
+                    current.copy(buttonEditSaveError = DRAFT_SAVE_ERROR)
+                } else {
+                    current.copy(errorMessage = DRAFT_SAVE_ERROR, widthValidationMessage = null)
+                }
+                return false
+            }
         }
+        history = nextHistory
+        mutableState.value = current.copy(
+            draftProfile = immutableSnapshot(changed),
+            selectedButtonId = selectedButtonId,
+            canUndo = history.canUndo,
+            canRedo = history.canRedo,
+            widthValidationMessage = null,
+            errorMessage = null,
+            buttonEditInput = if (finishButtonEdit) null else current.buttonEditInput,
+            buttonEditValidation = if (finishButtonEdit) null else current.buttonEditValidation,
+            buttonEditSaveError = if (finishButtonEdit) null else current.buttonEditSaveError,
+        )
+        return true
+    }
+
+    fun undo(): Boolean = restoreButtonHistory(history.undo())
+
+    fun redo(): Boolean = restoreButtonHistory(history.redo())
+
+    private fun restoreButtonHistory(transition: LayoutEditorHistory.Transition?): Boolean {
+        val current = mutableState.value
+        val draft = current.draftProfile ?: return false
+        if (transition == null || current.buttonEditInput != null) return false
+        val changed = immutableSnapshot(draft.copy(buttons = transition.snapshot.buttons))
         try {
             repository.saveDraft(changed)
-            mutableState.value = current.copy(
-                draftProfile = immutableSnapshot(changed),
-                widthValidationMessage = null,
-                errorMessage = null,
-            )
         } catch (_: Exception) {
-            // Do not accept an edit unless its recovery draft is durable.
-            mutableState.value = current.copy(errorMessage = DRAFT_SAVE_ERROR, widthValidationMessage = null)
+            mutableState.value = current.copy(errorMessage = DRAFT_SAVE_ERROR)
+            return false
         }
+        history = transition.history
+        mutableState.value = current.copy(
+            draftProfile = changed,
+            selectedButtonId = transition.snapshot.selectedButtonId,
+            canUndo = history.canUndo,
+            canRedo = history.canRedo,
+            widthValidationMessage = null,
+            errorMessage = null,
+        )
+        return true
     }
 
     /** Returns true when Back may leave immediately; dirty state opens the explicit choice dialog. */
@@ -371,6 +394,7 @@ class LayoutEditorViewModel(
 
         return try {
             repository.saveProfile(draft)
+            history = LayoutEditorHistory()
             mutableState.value = current.copy(
                 savedProfile = immutableSnapshot(draft),
                 draftProfile = immutableSnapshot(draft),
@@ -381,6 +405,8 @@ class LayoutEditorViewModel(
                 buttonEditInput = null,
                 buttonEditValidation = null,
                 buttonEditSaveError = null,
+                canUndo = false,
+                canRedo = false,
             )
             true
         } catch (_: Exception) {
@@ -399,8 +425,10 @@ class LayoutEditorViewModel(
         val saved = current.savedProfile ?: return false
         return try {
             repository.discardDraft(profileId)
+            history = LayoutEditorHistory()
             mutableState.value = current.copy(
                 draftProfile = immutableSnapshot(saved),
+                selectedButtonId = current.selectedButtonId?.takeIf { id -> saved.buttons.any { it.id == id } },
                 profileNameInput = saved.name,
                 isShowingBackConfirmation = false,
                 errorMessage = null,
@@ -408,6 +436,8 @@ class LayoutEditorViewModel(
                 buttonEditInput = null,
                 buttonEditValidation = null,
                 buttonEditSaveError = null,
+                canUndo = false,
+                canRedo = false,
             )
             true
         } catch (_: Exception) {

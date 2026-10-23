@@ -99,6 +99,8 @@ class LayoutEditorActivity : ComponentActivity() {
                     onEditButton = editorViewModel::startSelectedButtonEdit,
                     onDuplicateButton = editorViewModel::startSelectedButtonDuplicate,
                     onDeleteButton = editorViewModel::deleteSelectedButton,
+                    onUndo = editorViewModel::undo,
+                    onRedo = editorViewModel::redo,
                     onButtonTitleChanged = editorViewModel::updateButtonTitleInput,
                     onButtonCommandChanged = editorViewModel::updateButtonCommandInput,
                     onButtonWidthInputChanged = editorViewModel::updateButtonWidthInput,
@@ -143,6 +145,8 @@ private fun LayoutEditorScreen(
     onEditButton: () -> Unit,
     onDuplicateButton: () -> Unit,
     onDeleteButton: () -> Unit,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
     onButtonTitleChanged: (String) -> Unit,
     onButtonCommandChanged: (String) -> Unit,
     onButtonWidthInputChanged: (String) -> Unit,
@@ -184,6 +188,18 @@ private fun LayoutEditorScreen(
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Text(stringResource(R.string.layout_editor_saved_buttons, draft.buttons.size))
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        TextButton(
+                            onClick = onUndo,
+                            enabled = state.canUndo && state.buttonEditInput == null,
+                            modifier = Modifier.testTag("layout-editor-undo"),
+                        ) { Text(stringResource(R.string.layout_editor_undo)) }
+                        TextButton(
+                            onClick = onRedo,
+                            enabled = state.canRedo && state.buttonEditInput == null,
+                            modifier = Modifier.testTag("layout-editor-redo"),
+                        ) { Text(stringResource(R.string.layout_editor_redo)) }
+                    }
                     ButtonEditActions(
                         hasSelection = state.selectedButton != null,
                         onNewButton = onNewButton,

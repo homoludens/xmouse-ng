@@ -228,6 +228,215 @@ class LayoutEditorViewModelTest {
         assertEquals(saved, viewModel.state.value.draftProfile)
     }
 
+    @Test
+    fun historyReducerAndViewModelRestoreAllButtonEditsWithOneEntryPerCompletedDrag() {
+        val files = FakeLayoutProfileFileOps()
+        val repository = LayoutProfileRepository(files)
+        val original = LayoutButton("original", "雪", "  printf '雪, \"raw\"'\nnext\t  ", 3, "#a1B2c3")
+        val neighbor = LayoutButton("neighbor", "Other", " other ", 6, "#123456")
+        val last = LayoutButton("last", "Last", "last\nline", 1, "#80123456")
+        val saved = profile().copy(buttons = listOf(original, neighbor, last))
+        repository.createProfile(saved)
+        val viewModel = LayoutEditorViewModel(saved.id, repository)
+        val snapshots = mutableListOf(saved.buttons)
+        fun checkpoint(buttons: List<LayoutButton>) {
+            snapshots += buttons
+            assertEquals(buttons, viewModel.state.value.draftProfile!!.buttons)
+            assertEquals(viewModel.state.value.draftProfile, repository.loadDraft(saved.id))
+            assertEquals(saved, repository.loadProfile(saved.id))
+            assertEquals(saved, viewModel.state.value.savedProfile)
+            assertTrue(viewModel.state.value.canUndo)
+            assertFalse(viewModel.state.value.canRedo)
+        }
+
+        viewModel.selectButton(original.id)
+        viewModel.startSelectedButtonEdit()
+        val edited = original.copy(title = "Edited 雪", command = "  echo 'new, raw'\n\"quoted\"  ", width = 5, color = "#80Ab12Cd")
+        viewModel.updateButtonTitleInput(edited.title)
+        viewModel.updateButtonCommandInput(edited.command)
+        viewModel.updateButtonWidthInput(edited.width.toString())
+        viewModel.updateButtonColorInput(edited.color)
+        assertTrue(viewModel.saveButtonEdit())
+        checkpoint(listOf(edited, neighbor, last))
+
+        val beforeDrag = viewModel.state.value.draftProfile!!
+        val writesBeforeDrag = files.draftWrites
+        var drag = LayoutEditorDragReducer.begin(beforeDrag, original.id)!!
+        listOf(
+            LayoutEditorDropTarget(last.id, after = false),
+            LayoutEditorDropTarget(neighbor.id, after = true),
+            LayoutEditorDropTarget(last.id, after = true),
+        ).forEach { target ->
+            drag = LayoutEditorDragReducer.update(drag, target)!!
+            LayoutEditorDragReducer.placement(beforeDrag, drag)
+            assertEquals(beforeDrag, viewModel.state.value.draftProfile)
+            assertEquals(writesBeforeDrag, files.draftWrites)
+        }
+        viewModel.commitDrag(drag)
+        assertEquals(writesBeforeDrag + 1, files.draftWrites)
+        checkpoint(listOf(neighbor, last, edited))
+        viewModel.updateButtonWidth(original.id, 9)
+        val resized = edited.copy(width = 9)
+        checkpoint(listOf(neighbor, last, resized))
+
+        viewModel.startSelectedButtonDuplicate()
+        assertTrue(viewModel.saveButtonEdit())
+        val duplicate = viewModel.state.value.selectedButton!!
+        assertNotEquals(original.id, duplicate.id)
+        assertEquals(resized.copy(id = duplicate.id), duplicate)
+        checkpoint(listOf(neighbor, last, resized, duplicate))
+        viewModel.selectButton(original.id)
+        assertTrue(viewModel.deleteSelectedButton())
+        checkpoint(listOf(neighbor, last, duplicate))
+
+        viewModel.startNewButtonEdit()
+        viewModel.updateButtonTitleInput("Created")
+        viewModel.updateButtonCommandInput("  created\nraw, command  ")
+        viewModel.updateButtonWidthInput("4")
+        viewModel.updateButtonColorInput("#ABCDEF")
+        assertTrue(viewModel.saveButtonEdit())
+        val created = viewModel.state.value.selectedButton!!
+        assertEquals(LayoutButton(created.id, "Created", "  created\nraw, command  ", 4, "#ABCDEF"), created)
+        checkpoint(listOf(neighbor, last, duplicate, created))
+
+        // Exercise the pure reducer and its durable ViewModel boundary against the same full snapshots.
+        var reduced = snapshots.zipWithNext().fold(LayoutEditorHistory()) { history, (before, after) ->
+            history.record(LayoutEditorButtonSnapshot(before, null), LayoutEditorButtonSnapshot(after, null))
+        }
+        viewModel.updateProfileNameInput("Independent profile name")
+        snapshots.dropLast(1).asReversed().forEach { buttons ->
+            val transition = reduced.undo()!!
+            assertEquals(buttons, transition.snapshot.buttons)
+            reduced = transition.history
+            assertTrue(viewModel.undo())
+            assertEquals(buttons, viewModel.state.value.draftProfile!!.buttons)
+            assertEquals("Independent profile name", viewModel.state.value.draftProfile!!.name)
+            assertEquals(viewModel.state.value.draftProfile, repository.loadDraft(saved.id))
+            if (buttons == snapshots[4]) assertEquals(original.id, viewModel.state.value.selectedButtonId)
+        }
+        assertFalse(reduced.canUndo)
+        assertFalse(viewModel.state.value.canUndo)
+        assertTrue(viewModel.state.value.canRedo)
+        assertFalse(viewModel.undo()) // Six accepted edits, including exactly one drag entry.
+        snapshots.drop(1).forEach { buttons ->
+            val transition = reduced.redo()!!
+            assertEquals(buttons, transition.snapshot.buttons)
+            reduced = transition.history
+            assertTrue(viewModel.redo())
+            assertEquals(buttons, viewModel.state.value.draftProfile!!.buttons)
+            assertEquals(viewModel.state.value.draftProfile, repository.loadDraft(saved.id))
+        }
+        assertFalse(reduced.canRedo)
+        assertFalse(viewModel.state.value.canRedo)
+        assertFalse(viewModel.redo())
+        assertEquals(created.id, viewModel.state.value.selectedButtonId)
+        val reopened = LayoutEditorViewModel(saved.id, LayoutProfileRepository(files)).state.value
+        assertEquals(viewModel.state.value.draftProfile, reopened.draftProfile)
+        assertFalse(reopened.canUndo)
+        assertFalse(reopened.canRedo) // Recovery persists content, never session history.
+        assertEquals(saved, repository.loadProfile(saved.id))
+        assertTrue(viewModel.undo()) // Save clears both branches, not just undo.
+        val toSave = viewModel.state.value.draftProfile
+        assertTrue(viewModel.save())
+        assertEquals(toSave, repository.loadProfile(saved.id))
+        assertNull(repository.loadDraft(saved.id))
+        assertFalse(viewModel.state.value.canUndo)
+        assertFalse(viewModel.state.value.canRedo)
+        assertFalse(viewModel.undo())
+        assertFalse(viewModel.redo())
+    }
+
+    @Test
+    fun failedWritesNoOpsAndCancelledOrStaleDragsPreserveHistoryUntilANewEditOrDiscard() {
+        val files = FakeLayoutProfileFileOps()
+        val repository = LayoutProfileRepository(files)
+        val original = profile().buttons.single()
+        val neighbor = LayoutButton("neighbor", "Other", " other\nraw ", 6, "#123456")
+        val saved = profile().copy(buttons = listOf(original, neighbor))
+        repository.createProfile(saved)
+        val viewModel = LayoutEditorViewModel(saved.id, repository)
+        viewModel.selectButton(original.id)
+        val stale = LayoutEditorDragReducer.update(
+            LayoutEditorDragReducer.begin(saved, original.id), LayoutEditorDropTarget(neighbor.id, after = true),
+        )!!
+        viewModel.updateButtonWidth(original.id, 4)
+        val resized = viewModel.state.value.draftProfile!!
+        viewModel.startSelectedButtonEdit()
+        viewModel.updateButtonTitleInput("Future branch")
+        assertTrue(viewModel.saveButtonEdit())
+        val future = viewModel.state.value.draftProfile!!
+        assertTrue(viewModel.undo())
+        val writesBeforeNoOps = files.draftWrites
+        viewModel.updateButtonWidth(original.id, 4)
+        viewModel.updateButtonWidth(original.id, 11)
+        viewModel.commitDrag(stale)
+        val begun = LayoutEditorDragReducer.begin(resized, original.id)!!
+        viewModel.commitDrag(begun) // No target.
+        viewModel.commitDrag(LayoutEditorDragReducer.update(begun, LayoutEditorDropTarget(neighbor.id, after = false))!!)
+        val cancelled = LayoutEditorDragReducer.update(begun, LayoutEditorDropTarget(neighbor.id, after = true))
+        viewModel.commitDrag(LayoutEditorDragReducer.update(cancelled, null)!!)
+        viewModel.startSelectedButtonEdit()
+        assertTrue(viewModel.saveButtonEdit()) // Applying identical form values is not a new edit.
+        viewModel.startNewButtonEdit()
+        assertFalse(viewModel.saveButtonEdit()) // Invalid/unapplied form values have no history.
+        assertFalse(viewModel.undo()) // An open form cannot be silently lost to Undo/Redo.
+        assertFalse(viewModel.redo())
+        viewModel.cancelButtonEdit()
+        viewModel.startSelectedButtonDuplicate()
+        viewModel.cancelButtonEdit()
+        assertEquals(writesBeforeNoOps, files.draftWrites)
+        assertEquals(resized, viewModel.state.value.draftProfile)
+        assertTrue(viewModel.state.value.canUndo)
+        assertTrue(viewModel.state.value.canRedo)
+
+        viewModel.startSelectedButtonEdit()
+        viewModel.updateButtonTitleInput("Failed new edit")
+        val input = viewModel.state.value.buttonEditInput
+        files.failNextDraftWrite = true
+        assertFalse(viewModel.saveButtonEdit())
+        assertEquals(input, viewModel.state.value.buttonEditInput)
+        assertTrue(viewModel.state.value.buttonEditSaveError!!.contains("Retry"))
+        viewModel.cancelButtonEdit()
+        files.failNextDraftWrite = true
+        assertFalse(viewModel.undo())
+        assertEquals(resized, viewModel.state.value.draftProfile)
+        assertEquals(resized, repository.loadDraft(saved.id))
+        assertTrue(viewModel.state.value.canUndo)
+        assertTrue(viewModel.state.value.canRedo)
+        assertTrue(viewModel.redo()) // The failed new edit and failed Undo did not destroy the old branch.
+        assertEquals(future, viewModel.state.value.draftProfile)
+        assertTrue(viewModel.undo())
+        files.failNextDraftWrite = true
+        assertFalse(viewModel.redo())
+        assertEquals(resized, viewModel.state.value.draftProfile)
+        assertEquals(resized, repository.loadDraft(saved.id))
+        files.failNextProfileWrite = true
+        assertFalse(viewModel.save())
+        files.failNextDraftDelete = true
+        assertFalse(viewModel.discard())
+        assertTrue(viewModel.state.value.canUndo)
+        assertTrue(viewModel.state.value.canRedo)
+        assertEquals(saved, repository.loadProfile(saved.id))
+
+        viewModel.updateButtonWidth(original.id, 7)
+        assertFalse(viewModel.state.value.canRedo)
+        assertFalse(viewModel.redo())
+        assertTrue(viewModel.undo())
+        assertEquals(resized, viewModel.state.value.draftProfile)
+        assertTrue(viewModel.undo())
+        assertEquals(saved, viewModel.state.value.draftProfile)
+        assertFalse(viewModel.undo()) // Failed writes and all no-ops contributed zero entries.
+        assertTrue(viewModel.redo())
+        assertEquals(resized, viewModel.state.value.draftProfile)
+        assertTrue(viewModel.discard())
+        assertEquals(saved, viewModel.state.value.draftProfile)
+        assertNull(repository.loadDraft(saved.id))
+        assertFalse(viewModel.state.value.canUndo)
+        assertFalse(viewModel.state.value.canRedo)
+        assertFalse(viewModel.undo())
+        assertFalse(viewModel.redo())
+    }
+
     private fun profile() = LayoutProfile(
         id = "editor-profile",
         name = "Saved profile",
@@ -238,6 +447,7 @@ class LayoutEditorViewModelTest {
         private val files = mutableMapOf<String, ByteArray>()
         var failNextProfileWrite = false
         var failNextDraftWrite = false
+        var failNextDraftDelete = false
         var draftWrites = 0
 
         override fun listFileNames(): List<String> = files.keys.toList()
@@ -260,6 +470,10 @@ class LayoutEditorViewModelTest {
         }
 
         override fun deleteAtomically(fileName: String) {
+            if (failNextDraftDelete && fileName.endsWith(".draft.json")) {
+                failNextDraftDelete = false
+                throw IOException("injected draft delete failure")
+            }
             files.remove(fileName)
         }
     }

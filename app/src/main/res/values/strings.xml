@@ -77,6 +77,8 @@
     <string name="layout_editor_loading">Loading layout…</string>
     <string name="layout_editor_unavailable">Layout unavailable.</string>
     <string name="layout_editor_save">Save</string>
+    <string name="layout_editor_undo">Undo</string>
+    <string name="layout_editor_redo">Redo</string>
     <string name="layout_editor_discard">Discard</string>
     <string name="layout_editor_cancel">Cancel</string>
     <string name="layout_editor_back_confirmation_title">Save layout changes?</string>
