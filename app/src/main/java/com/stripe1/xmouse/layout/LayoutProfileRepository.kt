@@ -165,7 +165,7 @@ class LayoutProfileRepository internal constructor(
 }
 
 /** Android AtomicFile keeps a backup of the previous base until the new bytes are synced. */
-private class AndroidAtomicLayoutProfileFileOps(private val directory: File) : LayoutProfileFileOps {
+internal class AndroidAtomicLayoutProfileFileOps(private val directory: File) : LayoutProfileFileOps {
     override fun readAtomically(fileName: String): ByteArray? {
         ensureDirectory()
         val baseFile = child(fileName)
@@ -221,6 +221,6 @@ private class AndroidAtomicLayoutProfileFileOps(private val directory: File) : L
 
     companion object {
         private val fileNamePattern =
-            Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.(?:profile|draft)\\.json")
+            Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.(?:profile|draft|migration)\\.json")
     }
 }
