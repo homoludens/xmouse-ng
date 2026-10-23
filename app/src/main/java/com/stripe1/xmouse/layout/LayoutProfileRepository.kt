@@ -45,6 +45,9 @@ class LayoutProfileNotFoundException(profileId: String) :
 class LayoutProfileAlreadyExistsException(profileId: String) :
     IOException("A layout profile ID is already stored or reserved: '$profileId'.")
 
+class LayoutProfileLastProfileException :
+    IOException("The last remaining layout profile cannot be deleted.")
+
 class LayoutProfileListingException(cause: Throwable) :
     IOException("Could not list saved layout profiles.", cause)
 
@@ -150,9 +153,14 @@ class LayoutProfileRepository internal constructor(
         validateProfileId(profileId)
         val catalog = ensureCatalog()
         requireCatalogProfile(catalog, profileId)
+        if (catalog.profileIds.size <= 1) throw LayoutProfileLastProfileException()
+        val remainingProfileIds = catalog.profileIds.filterNot { it == profileId }
+        val selectedProfileId = catalog.selectedProfileId
+            ?.takeIf { it in remainingProfileIds }
+            ?: remainingProfileIds.firstOrNull()
         val deleting = catalog.copy(
-            profileIds = catalog.profileIds.filterNot { it == profileId },
-            selectedProfileId = catalog.selectedProfileId.takeUnless { it == profileId },
+            profileIds = remainingProfileIds,
+            selectedProfileId = selectedProfileId,
             deletingProfileIds = (catalog.deletingProfileIds + profileId).distinct(),
         )
         writeCatalog(deleting)

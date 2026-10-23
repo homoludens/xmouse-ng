@@ -140,6 +140,141 @@ class LayoutProfileRepositoryTest {
     }
 
     @Test
+    fun managerKeepsNamedProfilesIndependentAndProtectsSelectionAndDeletion() {
+        val files = FakeLayoutProfileFileOps()
+        val repository = LayoutProfileRepository(files)
+        val profiles = (1..5).map { index ->
+            LayoutProfile(
+                id = "manager-profile-$index",
+                name = if (index <= 2) "Shared name" else "Layout $index",
+                buttons = listOf(
+                    LayoutButton(
+                        id = "manager-button-$index",
+                        title = "雪, control $index",
+                        command = " printf 'raw, \"value $index\"' \nsecond line  ",
+                        width = index,
+                        color = "#80ABCDEF",
+                    ),
+                ),
+            )
+        }
+        profiles.forEach(repository::createProfile)
+        repository.selectProfile(profiles.first().id)
+
+        val manager = LayoutProfileManagerViewModel(repository)
+        assertEquals(5, manager.state.value.profiles.size)
+        assertEquals(profiles.first().id, manager.state.value.selectedProfileId)
+
+        manager.beginRename(profiles.first().id)
+        manager.updateNameInput("Renamed layout")
+        assertTrue(manager.commitNameAction())
+        val renamed = profiles.first().copy(name = "Renamed layout")
+        assertEquals(renamed, repository.loadProfile(profiles.first().id))
+        assertEquals(profiles[1], repository.loadProfile(profiles[1].id))
+
+        manager.beginDuplicate(profiles.first().id)
+        manager.updateNameInput("Shared name")
+        assertTrue(manager.commitNameAction())
+        val duplicate = manager.state.value.profiles.single {
+            it.id != profiles.first().id && it.id != profiles[1].id && it.name == "Shared name"
+        }
+        assertNotEquals(profiles.first().id, duplicate.id)
+        assertEquals(
+            renamed.buttons.mapIndexed { index, button -> button.copy(id = duplicate.buttons[index].id) },
+            duplicate.buttons,
+        )
+        assertTrue(
+            renamed.buttons.map(LayoutButton::id).toSet()
+                .intersect(duplicate.buttons.map(LayoutButton::id).toSet()).isEmpty(),
+        )
+        assertEquals(renamed, repository.loadProfile(profiles.first().id))
+        assertEquals(profiles[1], repository.loadProfile(profiles[1].id))
+
+        manager.selectProfile(profiles[4].id)
+        assertEquals(profiles[4].id, LayoutProfileRepository(files).loadSelectedProfile()?.id)
+
+        manager.beginCreate()
+        manager.updateNameInput("  ")
+        val beforeInvalidCreate = files.mutationCount
+        assertFalse(manager.commitNameAction())
+        assertEquals("  ", manager.state.value.nameInput)
+        assertEquals(beforeInvalidCreate, files.mutationCount)
+        manager.updateNameInput("User layout")
+        assertTrue(manager.commitNameAction())
+        val created = manager.state.value.profiles.single { it.name == "User layout" }
+        assertTrue(created.buttons.isEmpty())
+        assertEquals(7, manager.state.value.profiles.size)
+
+        manager.requestDelete(duplicate.id)
+        val beforeCancel = files.mutationCount
+        manager.cancelDelete()
+        assertEquals(beforeCancel, files.mutationCount)
+        assertTrue(manager.state.value.profiles.any { it.id == duplicate.id })
+
+        manager.requestDelete(duplicate.id)
+        assertTrue(manager.confirmDelete())
+        assertTrue(repository.listProfiles().none { it.id == duplicate.id })
+        assertEquals(renamed, repository.loadProfile(profiles.first().id))
+        assertEquals(profiles[1], repository.loadProfile(profiles[1].id))
+        assertEquals(created, repository.loadProfile(created.id))
+        assertEquals(profiles[4].id, repository.loadSelectedProfile()?.id)
+
+        manager.requestDelete(profiles[4].id)
+        assertTrue(manager.confirmDelete())
+        assertEquals(profiles.first().id, repository.loadSelectedProfile()?.id)
+        assertTrue(repository.listProfiles().any { it.id == repository.loadSelectedProfile()?.id })
+
+        repository.listProfiles().drop(1).forEach { repository.deleteProfile(it.id, confirmed = true) }
+        manager.refresh()
+        val lastProfile = manager.state.value.profiles.single()
+        val beforeLastDelete = files.mutationCount
+        manager.requestDelete(lastProfile.id)
+        assertNull(manager.state.value.profileToDeleteId)
+        assertEquals(beforeLastDelete, files.mutationCount)
+        assertThrows(LayoutProfileLastProfileException::class.java) {
+            repository.deleteProfile(lastProfile.id, confirmed = true)
+        }
+        assertEquals(beforeLastDelete, files.mutationCount)
+        assertEquals(listOf(lastProfile), repository.listProfiles())
+    }
+
+    @Test
+    fun managerRefreshesPartialDeleteAndReportsRepositoryFailure() {
+        val files = FakeLayoutProfileFileOps()
+        val repository = LayoutProfileRepository(files)
+        val profiles = listOf(
+            LayoutProfile(id = "delete-failure-one", name = "First"),
+            LayoutProfile(id = "delete-failure-two", name = "Second"),
+        )
+        profiles.forEach(repository::createProfile)
+        val manager = LayoutProfileManagerViewModel(repository)
+
+        manager.requestDelete(profiles.first().id)
+        files.failNextCatalogWrite = true
+        assertFalse(manager.confirmDelete())
+
+        assertEquals(profiles.first().id, manager.state.value.profileToDeleteId)
+        assertEquals(
+            "The layout could not be deleted reliably. Check the saved layout list before retrying.",
+            manager.state.value.errorMessage,
+        )
+        assertTrue(manager.state.value.profiles.any { it.id == profiles.first().id })
+
+        manager.cancelDelete()
+        manager.requestDelete(profiles.last().id)
+        files.failNextDelete = true
+        assertFalse(manager.confirmDelete())
+
+        assertNull(manager.state.value.profileToDeleteId)
+        assertEquals(listOf(profiles.first()), manager.state.value.profiles)
+        assertEquals(manager.state.value.profiles, repository.listProfiles())
+        assertEquals(
+            "The layout could not be deleted reliably. Check the saved layout list before retrying.",
+            manager.state.value.errorMessage,
+        )
+    }
+
+    @Test
     fun catalogReconcilesAtomicBackupsAndReservesBackupOnlyDraftIds() {
         val files = FakeLayoutProfileFileOps()
         val repository = LayoutProfileRepository(files)

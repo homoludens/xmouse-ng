@@ -35,7 +35,7 @@ Use **Disconnect** from the notification or **Session controls** when finished. 
 
 On upgrade, each valid legacy active layout and each of the three preset CSV files is migrated into its own named layout. The original CSV files remain unchanged as recovery sources. If a source is unreadable or malformed, XMouse warns and retains it rather than silently replacing it with defaults.
 
-In the navigation drawer, choose **Layout 1**, **Layout 2**, or **Layout 3** under **Keyboard Layouts** to load a preset. Choose **Edit Keyboard Layout** from the main menu to edit the currently selected layout.
+Open **Manage layouts** from the main menu to create and name layouts, rename or duplicate any profile, select/load it for normal controls, or delete it after confirmation. Profiles are identified independently of their names, so duplicate names are allowed; the manager lists all profiles, including the migrated active layout and all three presets, without a three-layout limit. At least one layout must remain. Choose **Edit Keyboard Layout** from the main menu to edit the currently selected layout.
 
 ## Optional: find computers with Avahi
 

@@ -71,6 +71,7 @@ import com.stripe1.xmouse.layout.LegacyLayoutProfileMigrator;
 import com.stripe1.xmouse.layout.LayoutButton;
 import com.stripe1.xmouse.layout.LayoutEditorActivity;
 import com.stripe1.xmouse.layout.LayoutProfile;
+import com.stripe1.xmouse.layout.LayoutProfileManagerActivity;
 import com.stripe1.xmouse.layout.LayoutProfileActivation;
 import com.stripe1.xmouse.layout.LayoutProfileRepository;
 import com.stripe1.xmouse.layout.LayoutProfileRuntime;
@@ -205,6 +206,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	private LayoutProfileRepository layoutProfileRepository;
 	private boolean legacyLayoutFallbackReadOnly = true;
 	private boolean returningFromLayoutEditor;
+	private boolean returningFromLayoutManager;
 	private final IdentityHashMap<CustomKeyboardButton, String> layoutButtonIds = new IdentityHashMap<>();
 	//static ImageView DeleteView;
 	private RelativeLayout EditKeyboardButtonsLayout;
@@ -687,8 +689,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	protected void onResume() {
 		super.onResume();
 		activityResumed = true;
-		if (returningFromLayoutEditor) {
+		if (returningFromLayoutEditor || returningFromLayoutManager) {
 			returningFromLayoutEditor = false;
+			returningFromLayoutManager = false;
 			reloadSelectedSavedLayout();
 		}
 		foregroundRecoveryWindow = new ForegroundRecoveryWindow();
@@ -1735,6 +1738,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			editor2.commit();
 		} else if (id == R.id.action_edit_layout) {
 			openLayoutEditor();
+		} else if (id == R.id.action_manage_layouts) {
+			openLayoutProfileManager();
+			return true;
 		} else if (id == R.id.action_exit) {
 			// Exit is an explicit session dismissal, unlike ordinary Activity pause/destruction.
 			disconnectForegroundSessionFromUi();
@@ -1995,11 +2001,26 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		}
 	}
 
+	private void openLayoutProfileManager() {
+		if (!isRepositoryLayoutActive() || layoutProfileRepository == null) {
+			Toast.makeText(this, "Named layouts are unavailable until saved profiles are safely activated.",
+					Toast.LENGTH_LONG).show();
+			return;
+		}
+		try {
+			returningFromLayoutManager = true;
+			startActivity(new Intent(this, LayoutProfileManagerActivity.class));
+		} catch (Exception ignored) {
+			returningFromLayoutManager = false;
+			Toast.makeText(this, "The layout manager could not be opened.", Toast.LENGTH_LONG).show();
+		}
+	}
+
 	/** Rebind normal controls only from the repository's saved selected profile after editor return. */
 	private void reloadSelectedSavedLayout() {
 		if (!isRepositoryLayoutActive() || layoutProfileRepository == null) return;
 		try {
-			LayoutProfile selected = layoutProfileRepository.loadSelectedProfile();
+			LayoutProfile selected = layoutProfileRuntime.loadSelectedProfile();
 			if (selected == null) return;
 			mItems = customButtonsFromProfile(selected);
 			if (mCoolDragAndDropGridView != null) {

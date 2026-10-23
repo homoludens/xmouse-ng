@@ -40,6 +40,11 @@
         app:showAsAction="never"
         android:title="Edit Keyboard Layout"/>
     <item
+        android:id="@+id/action_manage_layouts"
+        android:orderInCategory="100"
+        app:showAsAction="never"
+        android:title="@string/layout_profiles_title"/>
+    <item
         android:id="@+id/action_save_preset_one"
         android:orderInCategory="100"
         app:showAsAction="never"

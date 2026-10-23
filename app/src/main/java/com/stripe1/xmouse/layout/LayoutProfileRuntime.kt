@@ -76,6 +76,15 @@ class LayoutProfileRuntime(
         return profile
     }
 
+    /** Reload the repository selection after a manager/editor return without writing the catalog. */
+    @Synchronized
+    fun loadSelectedProfile(): LayoutProfile? {
+        check(repositoryActive) { "Repository layouts are not active" }
+        val selected = repository.loadSelectedProfile() ?: return null
+        selectedProfileId = selected.id
+        return selected
+    }
+
     /** Saves the currently selected runtime profile without ever writing a legacy source file. */
     @Synchronized
     fun saveCurrentProfile(buttons: List<LayoutButton>): LayoutProfile? {
