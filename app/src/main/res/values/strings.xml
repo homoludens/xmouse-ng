@@ -58,7 +58,11 @@
     <string name="layout_editor_saved_layout">Saved layout: %1$s</string>
     <string name="layout_editor_saved_buttons">%1$d saved buttons</string>
     <string name="layout_editor_preview_heading">Ten-column button preview</string>
-    <string name="layout_editor_preview_hint">Tap a button to inspect it. Preview taps do not run remote commands.</string>
+    <string name="layout_editor_preview_hint">Tap to select. Touch and hold, then drag onto the first or second half of another button to insert before or after it. Preview interactions do not run remote commands.</string>
+    <string name="layout_editor_drag_placement">Release to place at position %1$d, row %2$d (%3$d columns).</string>
+    <string name="layout_editor_drag_no_target">Drag onto another button to choose a placement. Releasing here leaves the draft unchanged.</string>
+    <string name="layout_editor_decrease_width">Decrease width</string>
+    <string name="layout_editor_increase_width">Increase width</string>
     <string name="layout_editor_preview_empty">This layout has no buttons yet.</string>
     <string name="layout_editor_preview_select_hint">Select a button to inspect its properties and validation.</string>
     <string name="layout_editor_preview_selected">Selected button</string>

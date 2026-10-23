@@ -5,9 +5,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -32,14 +35,30 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelProvider
 import com.stripe1.xmouse.R
@@ -70,6 +89,8 @@ class LayoutEditorActivity : ComponentActivity() {
                     state = state,
                     onNameChanged = editorViewModel::updateProfileNameInput,
                     onButtonSelected = editorViewModel::selectButton,
+                    onDragCommitted = editorViewModel::commitDrag,
+                    onWidthChanged = editorViewModel::updateButtonWidth,
                     onBack = {
                         if (editorViewModel.state.value.isShowingBackConfirmation) {
                             editorViewModel.resolveBack(LayoutEditorBackChoice.CANCEL)
@@ -102,6 +123,8 @@ private fun LayoutEditorScreen(
     state: LayoutEditorState,
     onNameChanged: (String) -> Unit,
     onButtonSelected: (String?) -> Unit,
+    onDragCommitted: (LayoutEditorDrag) -> Unit,
+    onWidthChanged: (String, Int) -> Unit,
     onBack: () -> Unit,
     onSave: () -> Unit,
     onDiscard: () -> Unit,
@@ -142,6 +165,9 @@ private fun LayoutEditorScreen(
                         selectedButton = state.selectedButton,
                         selectedButtonId = state.selectedButtonId,
                         onButtonSelected = onButtonSelected,
+                        onDragCommitted = onDragCommitted,
+                        onWidthChanged = onWidthChanged,
+                        widthValidationMessage = state.widthValidationMessage,
                     )
                     OutlinedTextField(
                         value = state.profileNameInput,
@@ -199,9 +225,38 @@ private fun ButtonGridPreview(
     selectedButton: LayoutButton?,
     selectedButtonId: String?,
     onButtonSelected: (String?) -> Unit,
+    onDragCommitted: (LayoutEditorDrag) -> Unit,
+    onWidthChanged: (String, Int) -> Unit,
+    widthValidationMessage: String?,
 ) {
     val placements = remember(profile) { LayoutEditorGrid.placements(profile) }
     val buttonsById = remember(profile.buttons) { profile.buttons.associateBy(LayoutButton::id) }
+    var drag by remember(profile.buttons) { mutableStateOf<LayoutEditorDrag?>(null) }
+    val itemCoordinates = remember { mutableMapOf<String, LayoutCoordinates>() }
+    val currentProfile by rememberUpdatedState(profile)
+    val selectButton by rememberUpdatedState(onButtonSelected)
+    val commitDrag by rememberUpdatedState(onDragCommitted)
+    val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val placementProfile = LayoutEditorDragReducer.placement(profile, drag)
+    val previewPlacement = drag?.takeIf { it.target != null }?.let { active ->
+        LayoutEditorGrid.placements(placementProfile).firstOrNull { it.buttonId == active.buttonId }
+    }
+
+    fun updateTarget(position: Offset) {
+        drag = LayoutEditorDragReducer.update(
+            drag,
+            LayoutEditorDragReducer.targetAt(
+                currentProfile.buttons,
+                itemCoordinates.filterValues { it.isAttached }.mapValues { (_, coordinates) ->
+                    val rect = coordinates.boundsInRoot()
+                    LayoutEditorItemBounds(rect.left, rect.top, rect.right, rect.bottom)
+                },
+                position.x,
+                position.y,
+                isRtl,
+            ),
+        )
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
@@ -212,30 +267,98 @@ private fun ButtonGridPreview(
         if (placements.isEmpty()) {
             Text(stringResource(R.string.layout_editor_preview_empty))
         } else {
-            placements.groupBy(LayoutButtonPlacement::row).values.forEach { rowPlacements ->
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    var nextColumn = 0
-                    rowPlacements.forEach { placement ->
-                        if (placement.column > nextColumn) {
-                            Spacer(Modifier.weight((placement.column - nextColumn).toFloat()))
+            // Keep hit-test cells stationary until release. Only the destination overlay moves.
+            val rowCount = maxOf(placements.last().row, previewPlacement?.row ?: 0) + 1
+            val previewHeight = rowCount * LAYOUT_EDITOR_PREVIEW_BUTTON_HEIGHT_DP + (rowCount - 1) * 8
+            Box(Modifier.fillMaxWidth().heightIn(min = previewHeight.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    placements.groupBy(LayoutButtonPlacement::row).values.forEach { rowPlacements ->
+                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            var nextColumn = 0
+                            rowPlacements.forEach { placement ->
+                                if (placement.column > nextColumn) {
+                                    Spacer(Modifier.weight((placement.column - nextColumn).toFloat()))
+                                }
+                                val button = buttonsById.getValue(placement.buttonId)
+                                key(button.id) {
+                                    PreviewButton(
+                                        button = button,
+                                        selected = button.id == selectedButtonId,
+                                        onClick = { onButtonSelected(button.id) },
+                                        modifier = Modifier
+                                            .weight(placement.widthColumns.toFloat())
+                                            .testTag("layout-editor-button-${button.id}")
+                                            .onGloballyPositioned { itemCoordinates[button.id] = it }
+                                            .pointerInput(button.id, isRtl, profile.buttons) {
+                                                detectDragGesturesAfterLongPress(
+                                                    onDragStart = { local ->
+                                                        drag = LayoutEditorDragReducer.begin(currentProfile, button.id)
+                                                        selectButton(button.id)
+                                                        itemCoordinates[button.id]?.takeIf { it.isAttached }?.let {
+                                                            updateTarget(it.localToRoot(local))
+                                                        }
+                                                    },
+                                                    onDrag = { change, _ ->
+                                                        itemCoordinates[button.id]?.takeIf { it.isAttached }?.let {
+                                                            updateTarget(it.localToRoot(change.position))
+                                                        }
+                                                    },
+                                                    onDragEnd = {
+                                                        val completed = drag
+                                                        drag = null
+                                                        if (completed != null) commitDrag(completed)
+                                                    },
+                                                    onDragCancel = { drag = null },
+                                                )
+                                            }
+                                            .alpha(if (drag?.buttonId == button.id) 0.45f else 1f),
+                                    )
+                                }
+                                nextColumn = placement.column + placement.widthColumns
+                            }
+                            if (nextColumn < LAYOUT_COLUMN_COUNT) {
+                                Spacer(Modifier.weight((LAYOUT_COLUMN_COUNT - nextColumn).toFloat()))
+                            }
                         }
-                        val button = buttonsById.getValue(placement.buttonId)
-                        PreviewButton(
-                            button = button,
-                            selected = button.id == selectedButtonId,
-                            onClick = { onButtonSelected(button.id) },
-                            modifier = Modifier.weight(placement.widthColumns.toFloat()),
-                        )
-                        nextColumn = placement.column + placement.widthColumns
                     }
-                    if (nextColumn < LAYOUT_COLUMN_COUNT) {
-                        Spacer(Modifier.weight((LAYOUT_COLUMN_COUNT - nextColumn).toFloat()))
+                }
+                if (previewPlacement != null) {
+                    val tint = MaterialTheme.colorScheme.primary
+                    Canvas(Modifier.matchParentSize().testTag("layout-editor-placement-preview")) {
+                        val columnWidth = size.width / LAYOUT_COLUMN_COUNT
+                        val column = if (isRtl) {
+                            LAYOUT_COLUMN_COUNT - previewPlacement.column - previewPlacement.widthColumns
+                        } else {
+                            previewPlacement.column
+                        }
+                        val topLeft = Offset(
+                            column * columnWidth + 2.dp.toPx(),
+                            previewPlacement.row * (LAYOUT_EDITOR_PREVIEW_BUTTON_HEIGHT_DP + 8).dp.toPx(),
+                        )
+                        val spanSize = Size(
+                            (previewPlacement.widthColumns * columnWidth - 4.dp.toPx()).coerceAtLeast(0f),
+                            LAYOUT_EDITOR_PREVIEW_BUTTON_HEIGHT_DP.dp.toPx(),
+                        )
+                        drawRoundRect(tint.copy(alpha = 0.25f), topLeft, spanSize, CornerRadius(8.dp.toPx()))
+                        drawRoundRect(tint, topLeft, spanSize, CornerRadius(8.dp.toPx()), style = Stroke(3.dp.toPx()))
                     }
                 }
             }
         }
 
-        SelectedButtonProperties(selectedButton)
+        if (previewPlacement != null) {
+            Text(
+                stringResource(
+                    R.string.layout_editor_drag_placement,
+                    placementProfile.buttons.indexOfFirst { it.id == previewPlacement.buttonId } + 1,
+                    previewPlacement.row + 1,
+                    previewPlacement.widthColumns,
+                ),
+            )
+        } else if (drag != null) {
+            Text(stringResource(R.string.layout_editor_drag_no_target))
+        }
+        SelectedButtonProperties(selectedButton, onWidthChanged, widthValidationMessage)
     }
 }
 
@@ -280,7 +403,11 @@ private fun PreviewButton(
 }
 
 @Composable
-private fun SelectedButtonProperties(button: LayoutButton?) {
+private fun SelectedButtonProperties(
+    button: LayoutButton?,
+    onWidthChanged: (String, Int) -> Unit,
+    widthValidationMessage: String?,
+) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceVariant,
@@ -317,6 +444,23 @@ private fun SelectedButtonProperties(button: LayoutButton?) {
                         LAYOUT_COLUMN_COUNT,
                     ),
                 )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = { onWidthChanged(button.id, button.width - 1) },
+                        modifier = Modifier.testTag("layout-editor-decrease-width"),
+                    ) { Text(stringResource(R.string.layout_editor_decrease_width)) }
+                    TextButton(
+                        onClick = { onWidthChanged(button.id, button.width + 1) },
+                        modifier = Modifier.testTag("layout-editor-increase-width"),
+                    ) { Text(stringResource(R.string.layout_editor_increase_width)) }
+                }
+                widthValidationMessage?.let { message ->
+                    Text(
+                        message,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.testTag("layout-editor-width-error"),
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
@@ -329,11 +473,13 @@ private fun SelectedButtonProperties(button: LayoutButton?) {
                         modifier = Modifier.padding(start = 8.dp),
                     )
                 }
-                Text(
-                    stringResource(R.string.layout_editor_preview_valid),
-                    color = MaterialTheme.colorScheme.primary,
-                    style = MaterialTheme.typography.labelMedium,
-                )
+                if (widthValidationMessage == null) {
+                    Text(
+                        stringResource(R.string.layout_editor_preview_valid),
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
             }
         }
     }

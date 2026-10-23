@@ -14,6 +14,7 @@ data class LayoutEditorState(
     val isLoading: Boolean = true,
     val isShowingBackConfirmation: Boolean = false,
     val errorMessage: String? = null,
+    val widthValidationMessage: String? = null,
 ) {
     val selectedButton: LayoutButton?
         get() = LayoutEditorGrid.selectedButton(draftProfile?.buttons.orEmpty(), selectedButtonId)
@@ -76,7 +77,46 @@ class LayoutEditorViewModel(
         val current = mutableState.value
         val buttons = current.draftProfile?.buttons ?: return
         if (buttonId != null && buttons.none { it.id == buttonId }) return
-        mutableState.value = current.copy(selectedButtonId = buttonId)
+        mutableState.value = current.copy(selectedButtonId = buttonId, widthValidationMessage = null)
+    }
+
+    /** One completed gesture is one durable draft edit; cancelled/stale/no-target drags do nothing. */
+    internal fun commitDrag(drag: LayoutEditorDrag) {
+        val current = mutableState.value
+        val draft = current.draftProfile ?: return
+        persistButtonChange(current, LayoutEditorDragReducer.commit(draft, drag))
+    }
+
+    fun updateButtonWidth(buttonId: String, width: Int) {
+        val current = mutableState.value
+        val draft = current.draftProfile ?: return
+        if (draft.buttons.none { it.id == buttonId }) return
+        if (width !in 1..LAYOUT_COLUMN_COUNT) {
+            mutableState.value = current.copy(widthValidationMessage = WIDTH_ERROR)
+            return
+        }
+        val changed = draft.copy(buttons = draft.buttons.map { button ->
+            if (button.id == buttonId) button.copy(width = width) else button
+        })
+        persistButtonChange(current, changed)
+    }
+
+    private fun persistButtonChange(current: LayoutEditorState, changed: LayoutProfile) {
+        if (changed == current.draftProfile) {
+            mutableState.value = current.copy(widthValidationMessage = null)
+            return
+        }
+        try {
+            repository.saveDraft(changed)
+            mutableState.value = current.copy(
+                draftProfile = immutableSnapshot(changed),
+                widthValidationMessage = null,
+                errorMessage = null,
+            )
+        } catch (_: Exception) {
+            // Do not accept an edit unless its recovery draft is durable.
+            mutableState.value = current.copy(errorMessage = DRAFT_SAVE_ERROR, widthValidationMessage = null)
+        }
     }
 
     /** Returns true when Back may leave immediately; dirty state opens the explicit choice dialog. */
@@ -124,6 +164,7 @@ class LayoutEditorViewModel(
                 profileNameInput = draft.name,
                 isShowingBackConfirmation = false,
                 errorMessage = null,
+                widthValidationMessage = null,
             )
             true
         } catch (_: Exception) {
@@ -147,6 +188,7 @@ class LayoutEditorViewModel(
                 profileNameInput = saved.name,
                 isShowingBackConfirmation = false,
                 errorMessage = null,
+                widthValidationMessage = null,
             )
             true
         } catch (_: Exception) {
@@ -189,5 +231,6 @@ class LayoutEditorViewModel(
         const val DRAFT_SAVE_ERROR = "The draft could not be saved. Retry before leaving the editor."
         const val SAVE_ERROR = "The layout could not be saved. Your draft is still available to retry."
         const val DISCARD_ERROR = "The draft could not be discarded. The saved layout is unchanged."
+        const val WIDTH_ERROR = "Button width must be between 1 and 10 columns. Your draft is still open."
     }
 }

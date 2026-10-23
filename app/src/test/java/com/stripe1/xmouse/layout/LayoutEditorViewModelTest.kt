@@ -75,6 +75,62 @@ class LayoutEditorViewModelTest {
         assertTrue(recreatedViewModel.state.value.isDirty)
     }
 
+    @Test
+    fun dragReleaseAndWidthControlsPersistOnlyAcceptedDraftEditsAndKeepSelectionAndRawCommands() {
+        val files = FakeLayoutProfileFileOps()
+        val repository = LayoutProfileRepository(files)
+        val saved = profile().copy(buttons = listOf(
+            profile().buttons.single().copy(command = "  echo '雪, \\\"raw\\\"'\nnext  ", color = "#123456"),
+            LayoutButton(id = "target", title = "Target", command = " target ", width = 8),
+        ))
+        repository.createProfile(saved)
+        val viewModel = LayoutEditorViewModel(saved.id, repository)
+        val moving = saved.buttons.first()
+        viewModel.selectButton(moving.id)
+        val begun = LayoutEditorDragReducer.begin(saved, moving.id)!!
+        viewModel.commitDrag(begun) // Releasing without a target is not an edit or a draft write.
+        var dragging = LayoutEditorDragReducer.update(begun, LayoutEditorDropTarget("target", after = false))
+        dragging = LayoutEditorDragReducer.update(dragging, LayoutEditorDropTarget("target", after = true))
+        assertNull(repository.loadDraft(saved.id))
+        assertEquals(0, files.draftWrites)
+
+        viewModel.commitDrag(dragging!!)
+        val moved = saved.copy(buttons = saved.buttons.reversed())
+        assertEquals(moved, viewModel.state.value.draftProfile)
+        assertEquals(moved, repository.loadDraft(saved.id))
+        assertEquals(1, files.draftWrites)
+        assertEquals(moving, viewModel.state.value.selectedButton)
+
+        viewModel.updateButtonWidth(moving.id, 4)
+        val resized = moved.copy(buttons = listOf(moved.buttons[0], moving.copy(width = 4)))
+        assertEquals(resized, repository.loadDraft(saved.id))
+        assertEquals(moving.copy(width = 4), viewModel.state.value.selectedButton)
+        viewModel.updateButtonWidth(moving.id, 1)
+        viewModel.updateButtonWidth(moving.id, 0)
+        assertEquals(1, viewModel.state.value.selectedButton!!.width)
+        assertTrue(viewModel.state.value.widthValidationMessage!!.contains("1 and 10"))
+        viewModel.updateButtonWidth(moving.id, 10)
+        val lastValid = viewModel.state.value.draftProfile
+        val writesBeforeInvalid = files.draftWrites
+        viewModel.updateButtonWidth(moving.id, 11)
+        assertEquals(lastValid, viewModel.state.value.draftProfile)
+        assertEquals(lastValid, repository.loadDraft(saved.id))
+        assertEquals(writesBeforeInvalid, files.draftWrites)
+        assertTrue(viewModel.state.value.widthValidationMessage!!.contains("still open"))
+        assertFalse(viewModel.state.value.isShowingBackConfirmation)
+        assertTrue(viewModel.state.value.isDirty)
+        assertEquals(saved, repository.loadProfile(saved.id))
+        assertEquals(lastValid, LayoutEditorViewModel(saved.id, repository).state.value.draftProfile)
+
+        files.failNextDraftWrite = true
+        viewModel.updateButtonWidth(moving.id, 9)
+        assertEquals(lastValid, viewModel.state.value.draftProfile)
+        assertEquals(lastValid, repository.loadDraft(saved.id))
+        assertTrue(viewModel.state.value.errorMessage!!.contains("Retry"))
+        assertNull(viewModel.state.value.widthValidationMessage)
+        assertEquals(saved, repository.loadProfile(saved.id))
+    }
+
     private fun profile() = LayoutProfile(
         id = "editor-profile",
         name = "Saved profile",
@@ -84,12 +140,21 @@ class LayoutEditorViewModelTest {
     private class FakeLayoutProfileFileOps : LayoutProfileFileOps {
         private val files = mutableMapOf<String, ByteArray>()
         var failNextProfileWrite = false
+        var failNextDraftWrite = false
+        var draftWrites = 0
 
         override fun listFileNames(): List<String> = files.keys.toList()
 
         override fun readAtomically(fileName: String): ByteArray? = files[fileName]?.copyOf()
 
         override fun writeAtomically(fileName: String, bytes: ByteArray) {
+            if (fileName.endsWith(".draft.json")) {
+                if (failNextDraftWrite) {
+                    failNextDraftWrite = false
+                    throw IOException("injected draft write failure")
+                }
+                draftWrites += 1
+            }
             if (failNextProfileWrite && fileName.endsWith(".profile.json")) {
                 failNextProfileWrite = false
                 throw IOException("injected profile write failure")
