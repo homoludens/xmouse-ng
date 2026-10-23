@@ -216,17 +216,22 @@ class LegacyLayoutProfileMigrator internal constructor(
             LegacyLayoutMigrationWarning(fileName, fingerprint, reason, recordNumber)
     }
 
-    private companion object {
+    companion object {
         // Bump whenever the accepted formats or validation rules change.
-        const val PARSER_VERSION = 1
-        const val SEPARATOR = "<xmousesep>"
-        val processLock = Any()
+        private const val PARSER_VERSION = 1
+        private const val SEPARATOR = "<xmousesep>"
+        private val processLock = Any()
 
-        val SOURCES = listOf(
-            LegacyLayoutSource("keyLayoutFile.csv", "legacy-keyLayoutFile", "Active layout"),
-            LegacyLayoutSource("keyFileOne.csv", "legacy-keyFileOne", "Preset 1"),
-            LegacyLayoutSource("keyFileTwo.csv", "legacy-keyFileTwo", "Preset 2"),
-            LegacyLayoutSource("keyFileThree.csv", "legacy-keyFileThree", "Preset 3"),
+        private val SOURCES = listOf(
+            LegacyLayoutSource("keyLayoutFile.csv", ACTIVE_PROFILE_ID, "Active layout"),
+            LegacyLayoutSource("keyFileOne.csv", PRESET_ONE_PROFILE_ID, "Preset 1"),
+            LegacyLayoutSource("keyFileTwo.csv", PRESET_TWO_PROFILE_ID, "Preset 2"),
+            LegacyLayoutSource("keyFileThree.csv", PRESET_THREE_PROFILE_ID, "Preset 3"),
         )
+
+        const val ACTIVE_PROFILE_ID = "legacy-keyLayoutFile"
+        const val PRESET_ONE_PROFILE_ID = "legacy-keyFileOne"
+        const val PRESET_TWO_PROFILE_ID = "legacy-keyFileTwo"
+        const val PRESET_THREE_PROFILE_ID = "legacy-keyFileThree"
     }
 }
