@@ -13,11 +13,17 @@
     tools:showIn="@layout/activity_list_edit"
     android:orientation="vertical">
 
+    <Button
+        android:id="@+id/find_computers"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/host_find_computers" />
 
     <ListView
         android:id="@+id/myListView"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content">
+        android:layout_height="0dp"
+        android:layout_weight="1">
 
     </ListView>
 

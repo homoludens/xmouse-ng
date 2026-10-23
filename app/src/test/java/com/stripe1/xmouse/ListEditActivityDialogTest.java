@@ -87,7 +87,8 @@ public class ListEditActivityDialogTest {
         typeField.set(activity, type);
         inflaterField.set(activity, inflater);
         itemsField.set(activity, Collections.singletonList(record));
-        accessibleField("credentials").set(activity, mock(CredentialRepository.class));
+        CredentialRepository repository = mock(CredentialRepository.class);
+        accessibleField("credentials").set(activity, repository);
 
         try (MockedConstruction<AlertDialog.Builder> builders = mockConstruction(
                 AlertDialog.Builder.class,
@@ -127,6 +128,7 @@ public class ListEditActivityDialogTest {
             if (script) {
                 verifyNoInteractions(username, port, password);
             }
+            if (!script && !editing) verifyNoInteractions(repository);
         }
     }
 

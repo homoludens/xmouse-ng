@@ -12,7 +12,11 @@ import android.os.Looper
 import android.os.Bundle
 import android.preference.EditTextPreference
 import android.preference.PreferenceManager
+import android.view.View
+import android.widget.Button
 import android.widget.EditText
+import android.widget.ListView
+import android.widget.TextView
 import androidx.core.content.edit
 import androidx.core.net.toUri
 import androidx.test.core.app.ActivityScenario
@@ -33,6 +37,9 @@ import com.stripe1.xmouse.session.SessionForegroundService
 import com.stripe1.xmouse.session.SessionInteractions
 import com.stripe1.xmouse.session.SessionServiceOwner
 import com.stripe1.xmouse.connection.ConnectionState
+import com.stripe1.xmouse.connection.ConnectionFailure
+import com.stripe1.xmouse.connection.EndpointLocator
+import com.stripe1.xmouse.discovery.SshServiceDiscovery
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -40,6 +47,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.File
+import java.net.InetAddress
 import java.security.KeyStore
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
@@ -72,6 +80,19 @@ class CredentialRepositoryAndroidTest {
         }
 
         override fun close() { controller.close() }
+    }
+
+    private class RecordingDiscoveryFactory : ListEditActivity.DiscoveryFactory {
+        class Session(val listener: SshServiceDiscovery.Listener) : ListEditActivity.DiscoveryHandle {
+            var starts = 0
+            var closes = 0
+            override fun start() { starts++ }
+            override fun close() { closes++ }
+        }
+
+        val sessions = mutableListOf<Session>()
+        override fun create(context: Context, listener: SshServiceDiscovery.Listener): ListEditActivity.DiscoveryHandle =
+            Session(listener).also(sessions::add)
     }
 
     @Test fun capturedAuthenticationSelectionCannotReadAnotherProfileOrNewCredentialAfterSelectionChanges() = fixture { f ->
@@ -447,6 +468,110 @@ class CredentialRepositoryAndroidTest {
             }
             assertEquals(initialCount + endpoints.size, f.repository.hosts().size)
             f.assertNoPlaintext()
+        }
+    }
+
+    @Test fun actualHostDiscoveryShowsEmptyAndTypedErrorsAndKeepsSelectionTransient() = uiFixture { f ->
+        val factory = RecordingDiscoveryFactory()
+        ListEditActivity.setDiscoveryFactoryForTests(factory)
+        ListEditActivity.setPermissionRequiredForTests(false)
+        try {
+            ActivityScenario.launch<ListEditActivity>(Intent(target, ListEditActivity::class.java)).use { scenario ->
+                barrier()
+                val savedRows = f.rows("contacts")
+                val savedFiles = f.encryptedFiles()
+                val savedHosts = f.onRepositoryWorker(f.repository) { f.repository.hosts() }
+
+                scenario.onActivity { activity ->
+                    assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.find_computers).visibility)
+                    activity.findViewById<Button>(R.id.find_computers).performClick()
+                }
+                barrier()
+                assertEquals(1, factory.sessions.size)
+                assertEquals(1, factory.sessions.single().starts)
+                scenario.onActivity { activity ->
+                    val dialog = discoveryDialog(activity)
+                    assertTrue(dialog.findViewById<TextView>(R.id.find_computers_status).text
+                        .contains("Running SSH alone may not advertise"))
+                    factory.sessions.single().listener.onFailure(
+                        SshServiceDiscovery.Failure(SshServiceDiscovery.Operation.START, 3, null, null),
+                    )
+                }
+                instrumentation.waitForIdleSync()
+                scenario.onActivity { activity ->
+                    val dialog = discoveryDialog(activity)
+                    assertTrue(dialog.findViewById<TextView>(R.id.find_computers_status).text
+                        .contains("Could not search for advertised SSH computers"))
+                    factory.sessions.single().listener.onFailure(
+                        SshServiceDiscovery.Failure(
+                            SshServiceDiscovery.Operation.PERMISSION,
+                            null,
+                            null,
+                            ConnectionFailure.Permission(ConnectionFailure.PermissionReason.DENIED),
+                        ),
+                    )
+                }
+                instrumentation.waitForIdleSync()
+                scenario.onActivity { activity ->
+                    val dialog = discoveryDialog(activity)
+                    assertTrue(dialog.findViewById<TextView>(R.id.find_computers_status).text
+                        .contains("Local network access was denied"))
+                    assertEquals("Manual entry", dialog.getButton(AlertDialog.BUTTON_NEUTRAL).text.toString())
+                    dialog.getButton(AlertDialog.BUTTON_NEUTRAL).performClick()
+                    val editor = editor(activity)
+                    assertEquals("", editor.findViewById<EditText>(R.id.new_host_ip).text.toString())
+                    assertEquals("", editor.findViewById<EditText>(R.id.new_host_username).text.toString())
+                    assertEquals("", editor.findViewById<EditText>(R.id.new_host_password).text.toString())
+                    editor.getButton(AlertDialog.BUTTON_NEGATIVE).performClick()
+                    assertEquals(1, factory.sessions.single().closes)
+                }
+
+                scenario.onActivity { activity -> activity.findViewById<Button>(R.id.find_computers).performClick() }
+                barrier()
+                val selected = SshServiceDiscovery.Candidate(
+                    SshServiceDiscovery.Identity("test-network", "office", "_ssh._tcp", "local"),
+                    EndpointLocator.DiscoveredService("Office", "_ssh._tcp.", "local."),
+                    2222,
+                    listOf(InetAddress.getByName("192.0.2.23")),
+                )
+                scenario.onActivity { activity ->
+                    factory.sessions.last().listener.onServiceFound(selected)
+                    val dialog = discoveryDialog(activity)
+                    val results = dialog.findViewById<ListView>(R.id.find_computers_results)
+                    assertEquals(1, results.adapter.count)
+                    assertTrue(results.adapter.getItem(0).toString().contains("Office — SSH port 2222"))
+                    results.performItemClick(results.adapter.getView(0, null, results), 0, 0L)
+                }
+                barrier()
+                scenario.onActivity { activity ->
+                    assertFalse(discoveryDialogOrNull(activity)?.isShowing == true)
+                    val candidate = field(activity, "transientDiscoveryCandidate") as SshServiceDiscovery.Candidate
+                    assertEquals(selected, candidate)
+                    val dialog = editor(activity)
+                    assertEquals("Office", dialog.findViewById<EditText>(R.id.new_host_alias).text.toString())
+                    assertEquals("192.0.2.23", dialog.findViewById<EditText>(R.id.new_host_ip).text.toString())
+                    assertEquals("2222", dialog.findViewById<EditText>(R.id.new_host_port).text.toString())
+                    assertEquals("", dialog.findViewById<EditText>(R.id.new_host_username).text.toString())
+                    assertEquals("", dialog.findViewById<EditText>(R.id.new_host_password).text.toString())
+                    assertFalse(SessionForegroundService.hasRetainedSession(activity))
+                    dialog.getButton(AlertDialog.BUTTON_NEGATIVE).performClick()
+                }
+                barrier()
+                assertEquals(savedRows, f.rows("contacts"))
+                assertEquals(savedFiles, f.encryptedFiles())
+                assertEquals(savedHosts, f.onRepositoryWorker(f.repository) { f.repository.hosts() })
+
+                ActivityScenario.launch<ListEditActivity>(Intent(target, ListEditActivity::class.java)
+                    .putExtra("intVariableType", 1)).use { scripts ->
+                    scripts.onActivity { activity ->
+                        assertEquals(View.GONE, activity.findViewById<View>(R.id.find_computers).visibility)
+                    }
+                    assertEquals(2, factory.sessions.size)
+                }
+            }
+        } finally {
+            ListEditActivity.setDiscoveryFactoryForTests(null)
+            ListEditActivity.setPermissionRequiredForTests(null)
         }
     }
 
@@ -982,6 +1107,8 @@ class CredentialRepositoryAndroidTest {
         return result.get() as T
     }
     private fun editor(activity: ListEditActivity) = field(activity, "editing") as AlertDialog
+    private fun discoveryDialog(activity: ListEditActivity) = field(activity, "discoveryDialog") as AlertDialog
+    private fun discoveryDialogOrNull(activity: ListEditActivity) = field(activity, "discoveryDialog") as AlertDialog?
     private fun secretDialog(activity: SettingsActivity): AlertDialog {
         return dialog(field(activity, "credentialsUi") as CredentialUi)
     }
