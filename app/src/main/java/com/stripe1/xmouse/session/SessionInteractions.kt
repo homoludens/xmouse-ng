@@ -4,6 +4,7 @@ import com.stripe1.xmouse.secrets.CredentialKind
 import com.stripe1.xmouse.secrets.CredentialReentryRequest
 import com.stripe1.xmouse.trust.HostTrustRequests
 import com.stripe1.xmouse.trust.HostKeyMismatch
+import com.stripe1.xmouse.transport.ClipboardTransferResult
 import java.lang.ref.WeakReference
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
@@ -60,6 +61,7 @@ class SessionInteractions(private val dispatcher: Executor) {
         fun recentCommand(command: String) { }
         fun execCompleted(command: String, output: String) { }
         fun execFailed(command: String) { }
+        fun clipboardResult(result: ClipboardTransferResult) { }
         fun commandResultsInvalidated() { }
         fun replacementFinished(mismatch: HostKeyMismatch, success: Boolean) { }
     }
@@ -239,6 +241,18 @@ class SessionInteractions(private val dispatcher: Executor) {
 
     internal fun execFailed(scope: CommandResultScope, target: PresentationToken, command: String) {
         notifyCommandResult(scope, target) { it.execFailed(command) }
+    }
+
+    internal fun clipboardResult(
+        scope: CommandResultScope,
+        target: PresentationToken,
+        result: ClipboardTransferResult,
+    ) {
+        notifyCommandResult(scope, target) { it.clipboardResult(result) }
+    }
+
+    internal fun isCurrentPresentation(target: PresentationToken): Boolean = synchronized(this) {
+        presentation === target && listener.get() != null
     }
 
     private fun notifyCommandResult(scope: CommandResultScope, target: PresentationToken, action: (Listener) -> Unit) {

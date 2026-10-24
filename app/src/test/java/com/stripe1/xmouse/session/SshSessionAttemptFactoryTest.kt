@@ -26,12 +26,14 @@ class SshSessionAttemptFactoryTest {
         val backends = CopyOnWriteArrayList<RecordingSshBackend>()
         val identities = CopyOnWriteArrayList<Pair<EndpointIdentity, CredentialHost>>()
         val requests = CopyOnWriteArrayList<SshConnectionRequest>()
+        val diagnosticEvents = CopyOnWriteArrayList<SshDiagnosticEvent>()
+        private val diagnostics = SshDiagnostics { diagnosticEvents.add(it) }
         val runtime = SshRuntime()
         val limits = SshLimits(800, 800, 800, 1200, 800, 500, 500, 500, 400, 300, 3, 50, 200, 4096)
         val interactions = SessionInteractions(Executor { it.run() })
         @Volatile var permissionDenied = false
         val factory = SshSessionAttemptFactory(credentials, HostKeyRepository(directory, TrustFileIo()), interactions,
-            limits, runtime, credentialMillis, closeMillis, { _, _ ->
+            limits, runtime, credentialMillis, closeMillis, { _, trusted ->
                 val backend = RecordingSshBackend().apply {
                     if (backends.isEmpty()) { blockAt = block; failAt = fail; ignoreInterrupts = true }
                 }
@@ -44,14 +46,22 @@ class SshSessionAttemptFactoryTest {
                     }
                     override fun create(request: SshConnectionRequest, authentication: AuthenticationMaterial): SshBackend.Session {
                         identities.add(request.endpoint.identity to authentication.host)
-                        return backend.create(request, authentication)
+                        val created = backend.create(request, authentication)
+                        if (fail != "auth_rejected") return created
+                        return object : SshBackend.Session by created {
+                            override fun connect(timeoutMillis: Int) {
+                                backend.record("session.connect")
+                                trusted.run() // Preserve the production trust-before-auth ordering.
+                                throw SshBackend.AuthenticationRejectedException()
+                            }
+                        }
                     }
                     override fun create(request: SshConnectionRequest, authentication: AuthenticationMaterial, current: BooleanSupplier) =
                         create(request, authentication)
                 }
             }, permissionFailure = {
                 if (permissionDenied) ConnectionFailure.Permission(ConnectionFailure.PermissionReason.DENIED) else null
-            })
+            }, diagnostics = diagnostics)
         val controller = SessionController(factory, queue)
         fun connect(host: SessionHost) { controller.connectIfNeeded(host); queue.drain() }
         override fun close() {
@@ -196,6 +206,44 @@ class SshSessionAttemptFactoryTest {
             assertEquals(2, f.backends.sumOf { backend -> backend.events.count { it.name == "resolve" } })
             assertEquals(2, f.identities.size)
         }
+    }
+
+    @Test fun typedAuthenticationRejectionMapsToRejectedWithoutRetryAndDiagnosticsStayAllowlisted() {
+        Fixture(fail = "auth_rejected").use { f ->
+            f.connect(a)
+            f.credentials.succeed(0, a)
+            val rejected = ConnectionFailure.Authentication(ConnectionFailure.AuthenticationReason.REJECTED)
+            eventually(f.queue) { f.controller.current.connection.failure == rejected }
+
+            assertEquals(rejected, f.controller.current.connection.failure)
+            assertEquals("authentication rejection is terminal for this attempt", 1, f.credentials.reads.size)
+            assertEquals(1, f.backends.size)
+            assertFalse(f.backends.single().events.any { it.name == "session.open" || it.name == "shell.connect" })
+            assertTrue(f.diagnosticEvents.any { it.stage == SshDiagnosticStage.HOST_TRUSTED })
+            assertTrue(f.diagnosticEvents.any {
+                it.stage == SshDiagnosticStage.AUTH_METHOD_CONFIGURED && it.authMethod == SshAuthenticationMethod.PASSWORD
+            })
+            assertTrue(f.diagnosticEvents.any {
+                it.stage == SshDiagnosticStage.AUTH_METHOD_CONFIGURED &&
+                    it.authMethod == SshAuthenticationMethod.KEYBOARD_INTERACTIVE
+            })
+            val failureEvent = f.diagnosticEvents.single { it.failure != null }
+            assertEquals(SshDiagnosticStage.AUTHENTICATION_REJECTED, failureEvent.stage)
+            assertEquals(rejected, failureEvent.failure)
+            val safeOutput = f.diagnosticEvents.joinToString("\n") { it.toSafeLogMessage() + " " + it }
+            assertFalse(safeOutput.contains("NOT_REAL_provider_password_key_typed_content"))
+            assertFalse(safeOutput.contains("NOT_REAL_user"))
+            assertFalse(safeOutput.contains("synthetic.invalid"))
+        }
+    }
+
+    @Test fun transportRefusalAndUnreachableMapToDistinctTypedFailures() {
+        assertEquals(ConnectionFailure.Transport(ConnectionFailure.TransportReason.CONNECTION_REFUSED),
+            SshTransport.Failure.CONNECTION_REFUSED.toConnectionFailure())
+        assertEquals(ConnectionFailure.Transport(ConnectionFailure.TransportReason.UNREACHABLE),
+            SshTransport.Failure.UNREACHABLE.toConnectionFailure())
+        assertEquals(ConnectionFailure.Authentication(ConnectionFailure.AuthenticationReason.REJECTED),
+            SshTransport.Failure.AUTHENTICATION.toConnectionFailure())
     }
 
     @Test fun serviceOnlyProfileKeepsItsLocatorAndUsesItsExistingUserAuthentication() {

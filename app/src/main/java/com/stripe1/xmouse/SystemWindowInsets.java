@@ -14,6 +14,15 @@ public final class SystemWindowInsets {
     private SystemWindowInsets() { }
 
     public static void applyTo(Window window, View root) {
+        applyTo(window, root, false);
+    }
+
+    /** Applies insets to a safe-area container and consumes only those handled here. */
+    public static void applyToAndConsume(Window window, View root) {
+        applyTo(window, root, true);
+    }
+
+    private static void applyTo(Window window, View root, boolean consumeInsets) {
         WindowCompat.setDecorFitsSystemWindows(window, false);
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
 
@@ -29,9 +38,17 @@ public final class SystemWindowInsets {
                     edges(displayCutout),
                     edges(ime));
             view.setPadding(padding.getLeft(), padding.getTop(), padding.getRight(), padding.getBottom());
-            return windowInsets;
+            return consumeInsets ? withoutHandledInsets(windowInsets) : windowInsets;
         });
         ViewCompat.requestApplyInsets(root);
+    }
+
+    private static WindowInsetsCompat withoutHandledInsets(WindowInsetsCompat windowInsets) {
+        return new WindowInsetsCompat.Builder(windowInsets)
+                .setInsets(WindowInsetsCompat.Type.systemBars(), Insets.NONE)
+                .setInsets(WindowInsetsCompat.Type.displayCutout(), Insets.NONE)
+                .setInsets(WindowInsetsCompat.Type.ime(), Insets.NONE)
+                .build();
     }
 
     private static InsetEdges edges(Insets insets) {

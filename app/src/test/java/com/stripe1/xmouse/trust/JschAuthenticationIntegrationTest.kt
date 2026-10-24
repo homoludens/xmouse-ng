@@ -5,7 +5,9 @@ import com.jcraft.jsch.KeyPair as JschKeyPair
 import com.stripe1.xmouse.connection.Endpoint
 import com.stripe1.xmouse.secrets.AuthenticationMaterial
 import com.stripe1.xmouse.secrets.CredentialHost
+import com.stripe1.xmouse.transport.ClipboardTransferResult
 import com.stripe1.xmouse.transport.JschSshBackend
+import com.stripe1.xmouse.transport.LinuxClipboardHelper
 import com.stripe1.xmouse.transport.SshConnectionRequest
 import com.stripe1.xmouse.transport.SshTransport
 import org.apache.sshd.common.SshConstants
@@ -32,11 +34,14 @@ import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.InetAddress
+import java.net.ServerSocket
 import java.nio.file.Files
 import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -50,13 +55,20 @@ class JschAuthenticationIntegrationTest {
         val publicKeyAlgorithm: String? = null,
     )
 
-    private class SyntheticServer(authorizedKeys: Set<String>) : AutoCloseable {
+    private class SyntheticServer(
+        authorizedKeys: Set<String>,
+        @Volatile var clipboardExitStatus: Int = 0,
+    ) : AutoCloseable {
         val authenticationRequests = AtomicInteger()
         val passwordAuthenticatorCalls = AtomicInteger()
         val publicKeyAuthenticatorCalls = AtomicInteger()
         val channelRequests = AtomicInteger()
         val commandRequests = AtomicInteger()
         val inputReceived = CountDownLatch(1)
+        val clipboardInputs = LinkedBlockingQueue<ByteArray>()
+        val clipboardEofCount = AtomicInteger()
+        val execCommands = CopyOnWriteArrayList<String>()
+        val shellInput = ByteArrayOutputStream()
         val authRequests = CopyOnWriteArrayList<AuthRequest>()
         val allowedSignatureAlgorithms = SERVER_SIGNATURES
         val ssh = SshServer.setUpDefaultServer().apply {
@@ -89,21 +101,47 @@ class JschAuthenticationIntegrationTest {
                 override fun channelInitialized(channel: Channel) { channelRequests.incrementAndGet() }
             })
             setShellFactory { command() }
-            setCommandFactory { _, _ -> command() }
+            setCommandFactory { _, text -> execCommands.add(text); command(text) }
             start()
         }
 
-        private fun command(): Command {
+        private fun command(text: String = "shell"): Command {
             commandRequests.incrementAndGet()
             return object : Command {
                 private var input: InputStream? = null
+                private var exit: ExitCallback? = null
                 override fun setInputStream(input: InputStream) { this.input = input }
                 override fun setOutputStream(output: OutputStream) { }
                 override fun setErrorStream(error: OutputStream) { }
-                override fun setExitCallback(callback: ExitCallback) { }
+                override fun setExitCallback(callback: ExitCallback) { exit = callback }
                 override fun start(channel: ChannelSession, env: Environment) {
-                    Thread({ try { if (input?.read() != -1) inputReceived.countDown() } catch (_: IOException) { } },
-                        "synthetic-auth-input").apply { isDaemon = true; start() }
+                    if (text == LinuxClipboardHelper.COMMAND) {
+                        Thread({
+                            val received = ByteArrayOutputStream()
+                            try {
+                                val buffer = ByteArray(1024)
+                                while (true) {
+                                    val count = input!!.read(buffer)
+                                    if (count < 0) break
+                                    received.write(buffer, 0, count)
+                                }
+                                clipboardInputs.add(received.toByteArray())
+                                clipboardEofCount.incrementAndGet()
+                                exit!!.onExit(clipboardExitStatus)
+                            } catch (_: IOException) { }
+                        }, "synthetic-clipboard-input").apply { isDaemon = true; start() }
+                    } else {
+                        Thread({
+                            try {
+                                while (true) {
+                                    val next = input!!.read()
+                                    if (next < 0) break
+                                    synchronized(shellInput) { shellInput.write(next) }
+                                    inputReceived.countDown()
+                                }
+                            } catch (_: IOException) { }
+                        }, "synthetic-auth-input").apply { isDaemon = true; start() }
+                    }
                 }
                 override fun destroy(channel: ChannelSession) { input?.close() }
             }
@@ -147,6 +185,16 @@ class JschAuthenticationIntegrationTest {
         fun await() { assertTrue("SSH operation did not finish", done.await(10, TimeUnit.SECONDS)) }
     }
 
+    private class ClipboardResult : SshTransport.Callback<ClipboardTransferResult> {
+        val done = CountDownLatch(1)
+        var value: ClipboardTransferResult? = null
+        var failure: SshTransport.Failure? = null
+        override fun success(value: ClipboardTransferResult?) { this.value = value; done.countDown() }
+        override fun failure(failure: SshTransport.Failure) { this.failure = failure; done.countDown() }
+        override fun mismatch(mismatch: HostKeyMismatch) { }
+        fun await() { assertTrue("clipboard SSH operation did not finish", done.await(10, TimeUnit.SECONDS)) }
+    }
+
     private class Fixture : AutoCloseable, HostTrustRequests.Listener {
         val directory = Files.createTempDirectory("xmouse-ssh-auth-").toFile()
         val repository = HostKeyRepository(directory, TrustFileIo())
@@ -172,6 +220,10 @@ class JschAuthenticationIntegrationTest {
                     it,
                 )
             }
+        }
+
+        fun connect(endpoint: Endpoint, authentication: AuthenticationMaterial): Result = Result().also {
+            transport.connect(SshConnectionRequest(endpoint, "127.0.0.1", "", null), authentication, it)
         }
 
         fun disconnect() {
@@ -216,7 +268,7 @@ class JschAuthenticationIntegrationTest {
             val wrong = passwordMaterial(server, "NOT_REAL_wrong_password".toByteArray(), stableHost)
             val wrongResult = fixture.connect(server, wrong)
             wrongResult.await()
-            assertEquals(SshTransport.Failure.CONNECTION, wrongResult.failure)
+            assertEquals(SshTransport.Failure.AUTHENTICATION, wrongResult.failure)
             assertFalse(fixture.transport.isConnected)
             val failedRequests = server.authRequests.drop(requestsBefore)
             assertTrue(failedRequests.any { it.method == "password" })
@@ -230,6 +282,46 @@ class JschAuthenticationIntegrationTest {
             assertTrue(approved.matches(requireNotNull(fixture.repository.find(prompt.endpoint.identity))))
             assertArrayEquals(trustSnapshot, File(fixture.directory, HostKeyRepository.FILE).readBytes())
             assertTrue(wrong.password.all { it == 0.toByte() })
+        } }
+    }
+
+    @Test fun realJschClipboardExecDeliversLiteralStdinThroughEofAndKeepsSessionHealthyOnMissingHelper() {
+        SyntheticServer(emptySet()).use { server -> Fixture().use { fixture ->
+            val endpoint = Endpoint.manual("desktop.local", server.ssh.port)
+            val connected = fixture.connect(endpoint, passwordMaterial(server))
+            fixture.prompt().accept()
+            connected.await()
+            assertNull("valid synthetic password did not authenticate", connected.failure)
+            assertTrue(fixture.transport.isConnected)
+
+            val payload = "Unicode ☃ 😀\nquotes ' \" `; $(not-a-command)\nline two  \n"
+            val copied = ClipboardResult()
+            assertTrue(fixture.transport.sendClipboard(payload, copied))
+            copied.await()
+            assertNull(copied.failure)
+            assertEquals(ClipboardTransferResult.COPIED, copied.value)
+            assertArrayEquals(payload.toByteArray(Charsets.UTF_8),
+                requireNotNull(server.clipboardInputs.poll(5, TimeUnit.SECONDS)))
+            assertEquals("the synthetic helper exits only after stdin EOF", 1, server.clipboardEofCount.get())
+            assertEquals(listOf(LinuxClipboardHelper.COMMAND), server.execCommands.toList())
+            assertArrayEquals("clipboard text must not use the interactive shell", byteArrayOf(),
+                synchronized(server.shellInput) { server.shellInput.toByteArray() })
+            assertTrue(fixture.transport.isConnected)
+
+            server.clipboardExitStatus = 70
+            val missing = ClipboardResult()
+            assertTrue(fixture.transport.sendClipboard("helper unavailable", missing))
+            missing.await()
+            assertNull(missing.failure)
+            assertEquals(ClipboardTransferResult.MISSING_HELPER, missing.value)
+            assertArrayEquals("helper unavailable".toByteArray(Charsets.UTF_8),
+                requireNotNull(server.clipboardInputs.poll(5, TimeUnit.SECONDS)))
+            assertEquals(2, server.clipboardEofCount.get())
+            assertEquals(listOf(LinuxClipboardHelper.COMMAND, LinuxClipboardHelper.COMMAND), server.execCommands.toList())
+            assertArrayEquals("clipboard text must not use the interactive shell", byteArrayOf(),
+                synchronized(server.shellInput) { server.shellInput.toByteArray() })
+            assertTrue("a synthetic missing-helper result must leave the SSH session healthy",
+                fixture.transport.isConnected)
         } }
     }
 
@@ -295,7 +387,7 @@ class JschAuthenticationIntegrationTest {
             val rejection = keyMaterial(server, notAuthorized.privateBytes, byteArrayOf(), password = VALID_PASSWORD.toByteArray())
             val rejectionResult = fixture.connect(server, rejection)
             rejectionResult.await()
-            assertEquals(SshTransport.Failure.CONNECTION, rejectionResult.failure)
+            assertEquals(SshTransport.Failure.AUTHENTICATION, rejectionResult.failure)
             val rejectedRequests = server.authRequests.drop(beforeRejectedKey)
             assertTrue(rejectedRequests.any { it.method == "publickey" })
             assertFalse("selected-key failure must not fall back to password", rejectedRequests.any {
@@ -311,6 +403,21 @@ class JschAuthenticationIntegrationTest {
             rsa.privateBytes.fill(0)
             notAuthorized.privateBytes.fill(0)
         } }
+    }
+
+    @Test fun actualTcpRefusalRemainsAConnectionFailureNotAuthentication() {
+        val refusedPort = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { it.localPort }
+        val endpoint = Endpoint.manual("desktop.local", refusedPort)
+        val host = CredentialHost(41L, "NOT_REAL alias", "desktop.local", TEST_USER,
+            refusedPort.toString(), null, false)
+        val authentication = AuthenticationMaterial(host, false, VALID_PASSWORD.toByteArray(), byteArrayOf(), byteArrayOf())
+        Fixture().use { fixture ->
+            val result = fixture.connect(endpoint, authentication)
+            result.await()
+            assertEquals(SshTransport.Failure.CONNECTION_REFUSED, result.failure)
+            assertFalse(fixture.transport.isConnected)
+            assertTrue(authentication.password.all { it == 0.toByte() })
+        }
     }
 
     @Test fun encryptedEcdsaAuthenticatesAndWrongPassphraseFailsBeforeServerAuthentication() {

@@ -74,4 +74,11 @@ class SessionCommandTransport(context: Context) : CommandTransport {
     fun executeExecCommand(command: String, presentation: SessionInteractions.PresentationToken?): Boolean =
         if (presentation == null) false else
             application.sessionOwners.retainedOwnerOrNull()?.controller?.executeExecCommand(command, presentation) ?: false
+
+    fun canSendClipboard(presentation: SessionInteractions.PresentationToken?): Boolean =
+        application.sessionOwners.retainedOwnerOrNull()?.controller?.canSendClipboard(presentation) ?: false
+
+    fun sendClipboard(text: String, presentation: SessionInteractions.PresentationToken?): Boolean =
+        if (presentation == null) false else
+            application.sessionOwners.retainedOwnerOrNull()?.controller?.sendClipboard(text, presentation) ?: false
 }

@@ -181,6 +181,16 @@ The legacy reader handles `keyLayoutFile.csv`, `keyFileOne.csv`, `keyFileTwo.csv
 
 **Alternatives:** raw text editing leaves the usability problem intact. A freeform dashboard requires a new geometry model and device-size policy the user did not request. Rewriting every command into structured actions risks altering custom shell behavior.
 
+### 9. Send clipboard text only on a deliberate foreground action
+
+Add a toolbar action beside Connect that remains available in every control mode and is disabled unless the attached screen has a ready session. Before reading `ClipboardManager`, the click handler verifies that the Activity window is resumed, visible, and focused and that its presentation token still belongs to the ready session. Read only the primary clip's direct text item; do not coerce URIs/intents, subscribe to clipboard changes, or read in the background. Reject empty/non-text or malformed text and UTF-8 payloads over 64 KiB; preserve accepted characters, whitespace, and line breaks without truncation.
+
+Carry the text through the existing controller admission and attempt-generation guards. Allocate its bounded UTF-8 bytes on the SSH worker after dispatch accepts the current owner, write them as exec-channel stdin to a fixed `/bin/sh -c` helper, close stdin to deliver EOF, and best-effort clear the owned byte array after provider I/O completes. The command string and callbacks contain only the fixed helper and typed result codes. Do not use the interactive shell, shell quoting/base64 of the payload, environment variables, xdotool typing, Ctrl+V, recent-command UI, output dialogs, logs, persistent storage, or an offline queue. A disconnect, reconnect, or host change invalidates any not-yet-dispatched payload exactly like other commands.
+
+The helper prefers `wl-copy` only when one usable current-user Wayland socket is identified from the SSH environment or the current user's standard `/run/user/<uid>` runtime directory; ambiguous sockets are not guessed. Otherwise it tries `xclip -selection clipboard -in` then `xsel --clipboard --input`, defaulting an unset X11 `DISPLAY` to `:0`. It does not install tools or inspect other users' runtime directories. Helper stdout/stderr is discarded, its exit status maps to fixed missing-helper/desktop-unavailable/general-failure results, and only status zero means success. A helper exit failure is an app-operation result, not SSH transport loss while the session remains healthy; channel deadlines and cleanup still use the established transport limits.
+
+**Alternative:** sending text through the existing interactive shell would expose it to command-history/UI paths and shell parsing. Typing it through xdotool/ydotool or issuing Ctrl+V would depend on focus and alter target input rather than the Linux clipboard. Background clipboard monitoring would violate the explicit-transfer privacy boundary.
+
 ## Risks / Trade-offs
 
 - [Minimum-version change] -> API 26 was explicitly approved on 2026-10-20 after the API 24 ECDSA failure and successful actual API 26 gate; document the break and do not increase it again implicitly through dependencies.

@@ -3,6 +3,9 @@ package com.stripe1.xmouse;
 import android.annotation.SuppressLint;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.ClipData;
+import android.content.ClipDescription;
+import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -52,6 +55,10 @@ import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.google.android.material.navigation.NavigationView;
 import com.stripe1.xmouse.secrets.AndroidCredentials;
 import com.stripe1.xmouse.secrets.CredentialUi;
+import com.stripe1.xmouse.clipboard.ClipboardPreparation;
+import com.stripe1.xmouse.clipboard.ClipboardRead;
+import com.stripe1.xmouse.clipboard.ClipboardShareCoordinator;
+import com.stripe1.xmouse.clipboard.PlainTextClipboardSource;
 import com.stripe1.xmouse.connection.ConnectionFailure;
 import com.stripe1.xmouse.connection.ConnectionState;
 import com.stripe1.xmouse.session.SessionActivityPresenter;
@@ -103,6 +110,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	private static final String POST_NOTIFICATIONS_PERMISSION = "android.permission.POST_NOTIFICATIONS";
 
 	MenuItem conDiscButton = null;
+	MenuItem clipboardSendButton = null;
 	MenuItem KeyLockButton = null;
 	MenuItem InvScrollButton= null;
 	FragmentManager fm = getSupportFragmentManager();
@@ -126,6 +134,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	private SessionSnapshot sessionSnapshot;
 	private ForegroundRecoveryWindow foregroundRecoveryWindow;
 	private SessionActivityPresenter sessionPresenter;
+	private final ClipboardShareCoordinator clipboardShareCoordinator = new ClipboardShareCoordinator();
 	private CredentialUi credentialUi;
 	private Toolbar toolbar;
 	private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -292,6 +301,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		// Inflate the menu; this adds items to the action bar if it is present.
 		getMenuInflater().inflate(R.menu.main, menu);
 		conDiscButton = menu.findItem(R.id.action_conn_disc);//getItem(0);
+		clipboardSendButton = menu.findItem(R.id.action_send_clipboard);
 		KeyLockButton = menu.findItem(R.id.action_lock_keys);
 		InvScrollButton = menu.findItem(R.id.action_invert_scroll);
 		showConnectionStat();
@@ -314,7 +324,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		localNetworkPermissionLauncher = registerForActivityResult(
 				new ActivityResultContracts.RequestPermission(), granted -> onLocalNetworkPermissionResult(granted));
 		setContentView(R.layout.activity_main);
-		SystemWindowInsets.applyTo(getWindow(), findViewById(R.id.drawer_layout));
+		SystemWindowInsets.applyToAndConsume(getWindow(), findViewById(R.id.main_safe_area));
 		toolbar = (Toolbar) findViewById(R.id.toolbar);
 		setSupportActionBar(toolbar);
 		commandTransport = new SessionCommandTransport(getApplicationContext());
@@ -417,7 +427,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		//keyboardLayout.addView(new MyKeyboardView(getBaseContext(), MainActivity.this));
 
 		joystickControlView = new MyJSView(this);
-		jsLayout.addView(joystickControlView);
+		JoystickSurfaceLayout.addTo(jsLayout, joystickControlView);
 		gyroToggle = findViewById(R.id.gyroToggle);
 		gyroToggle.setChecked(PreferenceManager.getDefaultSharedPreferences(this)
 				.getBoolean(PREF_GYRO_ENABLED, false));
@@ -1459,10 +1469,83 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			conDiscButton.setTitle(action);
 			conDiscButton.setContentDescription(status + ". " + action);
 		}
+		updateClipboardAction();
 		if (state.getPhase() == ConnectionState.Phase.ERROR && sessionSnapshot != null &&
 				sessionSnapshot.getGeneration() != lastShownErrorGeneration) {
 			lastShownErrorGeneration = sessionSnapshot.getGeneration();
 			Toast.makeText(this, connectionFailureMessage(state.getFailure()), Toast.LENGTH_LONG).show();
+		}
+	}
+
+	private void updateClipboardAction() {
+		if (clipboardSendButton == null) return;
+		SessionInteractions.PresentationToken presentation = sessionPresenter == null
+				? null : sessionPresenter.presentationToken();
+		boolean ready = sessionSnapshot != null && sessionSnapshot.getConnection().isReady() &&
+				commandTransport != null && commandTransport.canSendClipboard(presentation);
+		String title = getString(R.string.clipboard_send_title);
+		clipboardSendButton.setEnabled(ready);
+		clipboardSendButton.setTitle(title);
+		clipboardSendButton.setContentDescription(ready ? title : title + ". " +
+				getString(R.string.clipboard_send_connect_first));
+		clipboardSendButton.setTooltipText(getString(R.string.clipboard_send_tooltip));
+	}
+
+	private boolean isClipboardWindowForegroundVisible() {
+		View decor = getWindow().getDecorView();
+		return activityResumed && windowFocused && !isFinishing() && !isDestroyed() &&
+				getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) &&
+				decor.isAttachedToWindow() && decor.isShown() && decor.getWindowVisibility() == View.VISIBLE;
+	}
+
+	private void sendClipboardToLinux() {
+		boolean foreground = isClipboardWindowForegroundVisible();
+		SessionInteractions.PresentationToken presentation = sessionPresenter == null
+				? null : sessionPresenter.presentationToken();
+		boolean ready = foreground && commandTransport != null && commandTransport.canSendClipboard(presentation);
+		PlainTextClipboardSource source = this::readAndroidPrimaryPlainText;
+		ClipboardPreparation preparation = clipboardShareCoordinator.prepareForSend(true, foreground, ready, source);
+		if (preparation instanceof ClipboardPreparation.Ready) {
+			String text = ((ClipboardPreparation.Ready) preparation).getText();
+			if (commandTransport == null || !commandTransport.sendClipboard(text, presentation)) {
+				Toast.makeText(this, R.string.clipboard_send_rejected, Toast.LENGTH_LONG).show();
+			}
+			return;
+		}
+		if (preparation == ClipboardPreparation.NotForeground.INSTANCE ||
+				preparation == ClipboardPreparation.NotTapped.INSTANCE) return;
+		if (preparation == ClipboardPreparation.ConnectFirst.INSTANCE) {
+			Toast.makeText(this, R.string.clipboard_send_connect_first, Toast.LENGTH_LONG).show();
+		} else if (preparation == ClipboardPreparation.Empty.INSTANCE) {
+			Toast.makeText(this, R.string.clipboard_send_empty, Toast.LENGTH_LONG).show();
+		} else if (preparation == ClipboardPreparation.NonText.INSTANCE) {
+			Toast.makeText(this, R.string.clipboard_send_non_text, Toast.LENGTH_LONG).show();
+		} else if (preparation == ClipboardPreparation.TooLarge.INSTANCE) {
+			Toast.makeText(this, R.string.clipboard_send_too_large, Toast.LENGTH_LONG).show();
+		} else if (preparation == ClipboardPreparation.Malformed.INSTANCE) {
+			Toast.makeText(this, R.string.clipboard_send_malformed, Toast.LENGTH_LONG).show();
+		} else if (preparation == ClipboardPreparation.Unavailable.INSTANCE) {
+			Toast.makeText(this, R.string.clipboard_send_unavailable, Toast.LENGTH_LONG).show();
+		}
+	}
+
+	/** Reads only a direct text item; URI/Intent coercion or content loading is deliberately absent. */
+	private ClipboardRead readAndroidPrimaryPlainText() {
+		try {
+			Object service = getSystemService(Context.CLIPBOARD_SERVICE);
+			if (!(service instanceof ClipboardManager)) return ClipboardRead.Unavailable.INSTANCE;
+			ClipboardManager clipboard = (ClipboardManager) service;
+			ClipData clip = clipboard.getPrimaryClip();
+			if (clip == null || clip.getItemCount() == 0) return ClipboardRead.Empty.INSTANCE;
+			ClipDescription description = clip.getDescription();
+			if (clip.getItemCount() != 1 || description == null ||
+					!description.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN)) {
+				return ClipboardRead.NonText.INSTANCE;
+			}
+			CharSequence text = clip.getItemAt(0).getText();
+			return text == null ? ClipboardRead.NonText.INSTANCE : new ClipboardRead.Text(text.toString());
+		} catch (RuntimeException ignored) {
+			return ClipboardRead.Unavailable.INSTANCE;
 		}
 	}
 
@@ -1689,6 +1772,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		if(InvScrollButton!=null){
 			InvScrollButton.setChecked(setting_invert_scroll);
 		}
+		updateClipboardAction();
 		//Log.d("prepMenu","menu prepared");
 		return true;
 	}
@@ -1705,6 +1789,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		} else if (id == R.id.action_conn_disc) {
 			if (hasActiveOrPendingSession()) disconnectForegroundSessionFromUi();
 			else requestForegroundSessionFromUi();
+			return true;
+		} else if (id == R.id.action_send_clipboard) {
+			sendClipboardToLinux();
 			return true;
 		} else if (id == R.id.action_restore_default_keys) {
 			KEYLOAYOUTFILENAME = "keyLayoutFile.csv";

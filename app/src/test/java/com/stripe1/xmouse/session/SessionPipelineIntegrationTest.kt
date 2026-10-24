@@ -173,6 +173,7 @@ class SessionPipelineIntegrationTest {
         val prompts = LinkedBlockingQueue<SessionInteractions.Prompt>()
         val replacementResults = LinkedBlockingQueue<Boolean>()
         val execResults = CopyOnWriteArrayList<Pair<String, String>>()
+        val clipboardResults = CopyOnWriteArrayList<ClipboardTransferResult>()
         val interactions = SessionInteractions(Executor { it.run() })
         val presentation = interactions.attach(this)
         val reads = AtomicInteger()
@@ -216,6 +217,7 @@ class SessionPipelineIntegrationTest {
         override fun show(prompt: SessionInteractions.Prompt) { prompts.add(prompt) }
         override fun dismiss(prompt: SessionInteractions.Prompt) { }
         override fun execCompleted(command: String, output: String) { execResults.add(command to output) }
+        override fun clipboardResult(result: ClipboardTransferResult) { clipboardResults.add(result) }
         override fun replacementFinished(mismatch: HostKeyMismatch, success: Boolean) { replacementResults.add(success) }
         fun await(assertion: () -> Boolean) {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
@@ -354,6 +356,91 @@ class SessionPipelineIntegrationTest {
             } finally {
                 initialServer.close()
             }
+        }
+    }
+
+    @Test fun clipboardUsesFixedExecCommandAndExactStdinAndHelperFailureKeepsHealthySession() {
+        val backend = RecordingSshBackend()
+        Fixture(commandBackend = backend).use { f ->
+            val host = SessionFixtures.host("synthetic.invalid")
+            f.connect(host)
+            f.await { f.controller.current.connection.isReady }
+            assertTrue(f.controller.canSendClipboard(f.presentation))
+
+            val literal = "Unicode ☃ 😀\nquotes ' \" and `ticks` \$(not-shell)  \n"
+            assertTrue(f.controller.sendClipboard(literal, f.presentation))
+            f.await { f.clipboardResults.size == 1 }
+
+            val clipboardChannel = backend.channels.single { it.command == LinuxClipboardHelper.COMMAND }
+            assertArrayEquals(literal.toByteArray(Charsets.UTF_8), clipboardChannel.inputBytes.toByteArray())
+            assertTrue("clipboard text must not be present in the exec command",
+                backend.channels.none { it.command?.contains(literal) == true })
+            assertTrue("clipboard text must not be sent as interactive typing",
+                backend.channels.filter { it.type == "shell" }.all { it.inputBytes.size() == 0 })
+            assertEquals(ClipboardTransferResult.COPIED, f.clipboardResults[0])
+            assertTrue(f.controller.current.connection.isReady)
+
+            backend.execExitStatus = 70
+            assertTrue(f.controller.sendClipboard("helper unavailable", f.presentation))
+            f.await { f.clipboardResults.size == 2 }
+            assertEquals(ClipboardTransferResult.MISSING_HELPER, f.clipboardResults[1])
+            assertTrue("a helper's nonzero exit must not mark a healthy SSH session lost",
+                f.controller.current.connection.isReady)
+
+            backend.execExitStatus = 71
+            assertTrue(f.controller.sendClipboard("desktop unavailable", f.presentation))
+            f.await { f.clipboardResults.size == 3 }
+            assertEquals(ClipboardTransferResult.DESKTOP_UNAVAILABLE, f.clipboardResults[2])
+            assertTrue(f.controller.current.connection.isReady)
+        }
+    }
+
+    @Test fun clipboardWriteFailureWithClosedZeroStatusChannelReportsFailedAndKeepsHealthySession() {
+        val backend = RecordingSshBackend().apply { failAt = "exec.write" }
+        Fixture(commandBackend = backend).use { f ->
+            val host = SessionFixtures.host("synthetic.invalid")
+            f.connect(host)
+            f.await { f.controller.current.connection.isReady }
+
+            val payload = "must not be reported copied"
+            assertTrue(f.controller.sendClipboard(payload, f.presentation))
+            f.await { f.clipboardResults.size == 1 }
+
+            val clipboardChannel = backend.channels.single { it.command == LinuxClipboardHelper.COMMAND }
+            assertEquals("the failed provider write must not admit payload bytes", 0,
+                clipboardChannel.inputBytes.size())
+            assertEquals(ClipboardTransferResult.FAILED, f.clipboardResults.single())
+            assertTrue("an application-level write failure need not lose a healthy SSH session",
+                f.controller.current.connection.isReady)
+        }
+    }
+
+    @Test fun clipboardQueuedForOldGenerationIsDiscardedOnHostChangeAndNeverReplayed() {
+        val backend = RecordingSshBackend().apply { blockAt = "exec.connect"; ignoreInterrupts = true }
+        Fixture(commandBackend = backend).use { f ->
+            val originalHost = SessionFixtures.host("synthetic.invalid")
+            f.connect(originalHost)
+            f.await { f.controller.current.connection.isReady }
+
+            assertTrue(f.controller.executeExecCommand("block-old-generation", f.presentation))
+            f.queue.drain()
+            assertTrue("the exec channel must be blocking before clipboard admission",
+                backend.entered.await(5, TimeUnit.SECONDS))
+
+            val payload = "must-not-cross-host-generation"
+            assertTrue(f.controller.sendClipboard(payload, f.presentation))
+            f.queue.drain()
+            val nextHost = SessionFixtures.host("replacement.invalid", id = 2)
+            f.controller.connectIfNeeded(nextHost)
+            f.queue.drain()
+            backend.release.countDown()
+
+            f.await { f.controller.current.connection.isReady && f.controller.current.attemptHost == nextHost }
+            assertTrue("the old queued payload must not be dispatched to any exec channel",
+                backend.channels.none { it.command == LinuxClipboardHelper.COMMAND })
+            assertTrue("the invalidated screen/session must not receive a stale transfer result",
+                f.clipboardResults.isEmpty())
+            assertTrue(f.controller.current.connection.isReady)
         }
     }
 

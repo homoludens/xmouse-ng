@@ -362,7 +362,7 @@ class JschHostTrustIntegrationTest {
                 Server("127.0.0.1", fallback.ssh.port, trustedKey, acceptPassword = false).use { rejectedPassword ->
                     val authentication = f.connect(rejectedPassword, endpoint = endpoint)
                     authentication.await()
-                    assertEquals(SshTransport.Failure.CONNECTION, authentication.failure)
+                    assertEquals(SshTransport.Failure.AUTHENTICATION, authentication.failure)
                     assertTrue(rejectedPassword.credentialAuth.get() > 0)
                     assertEquals("authentication failure is terminal, not an address-retry signal", 0,
                         fallback.credentialAuth.get())

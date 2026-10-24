@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.StringReader;
+import java.util.Arrays;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -38,7 +39,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class SshTransport implements CommandTransport, AutoCloseable {
     public enum Operation { CONNECT, WRITE, EXEC, SCP, DISCONNECT, TRUST_REPLACEMENT, MONITOR }
-    public enum Failure { CONNECTION, PRIVATE_KEY, IO, CLOSED, HOST_TRUST, HOST_MISMATCH, TRUST_STORAGE,
+    public enum Failure { CONNECTION, AUTHENTICATION, CONNECTION_REFUSED, UNREACHABLE, PRIVATE_KEY, IO, CLOSED, HOST_TRUST, HOST_MISMATCH, TRUST_STORAGE,
         PERMISSION, RESOLUTION, RESOLUTION_TIMEOUT, CONNECTION_TIMEOUT, CHANNEL_TIMEOUT, WRITE_TIMEOUT,
         EXEC_TIMEOUT, SCP_TIMEOUT, CLEANUP_TIMEOUT, OUTPUT_LIMIT, SESSION_LOST, CHANNEL_CLOSED, CAPACITY }
     public interface Callback<T> {
@@ -170,13 +171,15 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
                         default: failure = Failure.HOST_TRUST;
                     }
                 } catch (PrivateKeyImportException ignored) { failure = Failure.PRIVATE_KEY; }
+                catch (SshBackend.AuthenticationRejectedException ignored) { failure = Failure.AUTHENTICATION; }
                 catch (Outcome outcome) { failure = outcome.failure; }
                 catch (SshAddressResolver.AccessDeniedException ignored) { failure = Failure.PERMISSION; }
                 catch (SshAddressResolver.NetworkChangedException ignored) { failure = Failure.RESOLUTION; }
                 catch (java.net.UnknownHostException ignored) { failure = Failure.RESOLUTION; }
                 catch (Exception rejected) {
                     Failure resolverFailure = resolverFailure(rejected);
-                    failure = resolverFailure != null ? resolverFailure :
+                    Failure networkFailure = networkFailure(rejected);
+                    failure = resolverFailure != null ? resolverFailure : networkFailure != null ? networkFailure :
                             socketTimedOut(rejected) ? Failure.CONNECTION_TIMEOUT : Failure.CONNECTION;
                 }
                 finally {
@@ -274,6 +277,74 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
                 return capture.result();
             } finally { owned.closeHere(); }
         });
+    }
+
+    /** Sends bounded plain text only as exec-channel stdin; helper exit codes are app-operation results. */
+    public boolean sendClipboard(String text, Callback<ClipboardTransferResult> callback) {
+        if (text == null || text.isEmpty() || callback == null ||
+                ClipboardTextBounds.validate(text) != ClipboardTextValidity.VALID) return false;
+        return submit(callback, limits.exec, Failure.EXEC_TIMEOUT, scope -> sendClipboard(scope, text));
+    }
+
+    private ClipboardTransferResult sendClipboard(Scope scope, String text) throws Exception {
+        SshBackend.Channel channel = scope.session.openChannel("exec");
+        Slot channelSlot = scope.add(channel::close);
+        Slot inputSlot = null;
+        boolean connected = false;
+        boolean stdinComplete = false;
+        try {
+            check(scope);
+            channel.command(LinuxClipboardHelper.COMMAND);
+            channel.output(DISCARD, DISCARD);
+            OutputStream input = channel.input();
+            inputSlot = scope.add(input::close);
+            check(scope);
+            channel.connect(limits.channel);
+            connected = true;
+            check(scope);
+
+            // Allocate only after this generation reached the SSH worker. Clear only after the
+            // provider write/flush has returned (or failed); timeout cleanup owns any blocked I/O.
+            byte[] payload = text.getBytes(StandardCharsets.UTF_8);
+            try {
+                check(scope);
+                input.write(payload);
+                input.flush();
+            } finally {
+                Arrays.fill(payload, (byte) 0);
+            }
+            inputSlot.closeHere(); // SSH EOF lets the helper finish reading stdin and exit.
+            stdinComplete = true;
+
+            while (!channel.isClosed()) {
+                check(scope);
+                if (!scope.session.isConnected()) throw new Outcome(Failure.SESSION_LOST);
+                if (scope.shell.isClosed()) throw new Outcome(Failure.CHANNEL_CLOSED);
+                Thread.sleep(10);
+            }
+            if (!scope.session.isConnected()) throw new Outcome(Failure.SESSION_LOST);
+            if (scope.shell.isClosed()) throw new Outcome(Failure.CHANNEL_CLOSED);
+            return LinuxClipboardHelper.resultForExitStatus(channel.exitStatus());
+        } catch (Exception failure) {
+            // A desktop helper can exit early (for example, because DISPLAY is unavailable). Its
+            // exec channel closing while the authenticated session/shell stay healthy is an
+            // ordinary clipboard failure, not evidence that the SSH connection was lost.
+            // Cancellation/deadline/interrupt outcomes belong to the transport, never to the
+            // clipboard helper result. In particular, exit status zero cannot prove a copy if
+            // writing, flushing, or delivering stdin EOF did not finish.
+            if (failure instanceof CancellationException || failure instanceof Outcome ||
+                    failure instanceof InterruptedException || failure instanceof TimeoutException) {
+                throw failure;
+            }
+            if (connected && channel.isClosed() && scope.session.isConnected() && !scope.shell.isClosed()) {
+                int status = channel.exitStatus();
+                if (!stdinComplete && status == 0) return ClipboardTransferResult.FAILED;
+                return LinuxClipboardHelper.resultForExitStatus(status);
+            }
+            throw failure;
+        } finally {
+            closeTemporary(inputSlot, channelSlot);
+        }
     }
 
     public boolean downloadScp(String command, File destination, Callback<Void> callback) {
@@ -508,6 +579,15 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
             if (failure instanceof SshAddressResolver.AccessDeniedException) return Failure.PERMISSION;
             if (failure instanceof SshAddressResolver.NetworkChangedException) return Failure.RESOLUTION;
             if (failure instanceof SshAddressResolver.ResolutionTimeoutException) return Failure.RESOLUTION_TIMEOUT;
+        }
+        return null;
+    }
+    private static Failure networkFailure(Throwable failure) {
+        // Classify only stable exception types, never provider/socket messages.
+        for (int depth = 0; failure != null && depth < 8; depth++, failure = failure.getCause()) {
+            if (failure instanceof java.net.ConnectException) return Failure.CONNECTION_REFUSED;
+            if (failure instanceof java.net.NoRouteToHostException ||
+                    failure instanceof java.net.PortUnreachableException) return Failure.UNREACHABLE;
         }
         return null;
     }

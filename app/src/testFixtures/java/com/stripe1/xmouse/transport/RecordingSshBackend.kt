@@ -37,6 +37,7 @@ class RecordingSshBackend : SshBackend {
     var stdout = "out one\nout two\n".toByteArray()
     var stderr = "err one\r\nerr two\n".toByteArray()
     var scp = "C0644 3 test.jpg\nabc\u0000".toByteArray()
+    @Volatile var execExitStatus = 0
 
     fun record(name: String) {
         events.add(Event(name, Thread.currentThread()))
@@ -119,6 +120,7 @@ class RecordingSshBackend : SshBackend {
             }
         }
         override fun isClosed(): Boolean { record("$name.isClosed"); return closed }
+        override fun exitStatus(): Int = if (name == "exec") execExitStatus else 0
         override fun close() { closed = true; record("$name.close") }
     }
 

@@ -48,6 +48,9 @@ interface SessionAttempt {
         return executeShellCommand(command, null)
     }
     fun executeExecCommand(command: String, presentation: SessionInteractions.PresentationToken): Boolean = false
+    /** Clipboard work has its own typed result path; text is never a command-history value. */
+    fun canSendClipboard(presentation: SessionInteractions.PresentationToken): Boolean = false
+    fun executeClipboard(text: String, presentation: SessionInteractions.PresentationToken): Boolean = false
 }
 
 fun interface SessionAttemptFactory {
@@ -87,7 +90,12 @@ class SessionController @JvmOverloads constructor(
     /** Bounds admitted input waiting on the serialized owner queue; the transport has its own cap. */
     private val pendingCommandAdmissions = AtomicLong()
     /** Immutable admission token: callers can validate a ready session without reading queue-owned state. */
-    private data class CommandOwner(val generation: Long, val host: SessionHost, val disconnectEpoch: Long)
+    private data class CommandOwner(
+        val generation: Long,
+        val host: SessionHost,
+        val disconnectEpoch: Long,
+        val attempt: SessionAttempt,
+    )
     private val commandOwner = AtomicReference<CommandOwner?>()
     private data class ActiveInputSurface(
         val token: InputSurfaceToken,
@@ -277,6 +285,29 @@ class SessionController @JvmOverloads constructor(
     /** Script results are bound to the screen that admitted the exec, not whichever screen is attached later. */
     fun executeExecCommand(command: String, presentation: SessionInteractions.PresentationToken): Boolean =
         postReadyCommand(command) { it.executeExecCommand(command, presentation) }
+
+    /** Synchronous, read-only preflight used before the Activity is allowed to read ClipboardManager. */
+    fun canSendClipboard(presentation: SessionInteractions.PresentationToken?): Boolean {
+        if (presentation == null) return false
+        val owner = commandOwner.get() ?: return false
+        return isCurrentReadyOwner(owner) && owner.attempt.canSendClipboard(presentation)
+    }
+
+    /** Clipboard text is captured only by this admitted generation and is never replayed. */
+    fun sendClipboard(text: String, presentation: SessionInteractions.PresentationToken?): Boolean {
+        if (text.isEmpty() || presentation == null) return false
+        val owner = commandOwner.get() ?: return false
+        val currentTarget = {
+            isCurrentReadyOwner(owner) && owner.attempt.canSendClipboard(presentation)
+        }
+        if (!currentTarget()) return false
+        return postReadyCommand(
+            command = "clipboard-send",
+            expectedOwner = owner,
+            admissionIsCurrent = currentTarget,
+            dispatchIsCurrent = currentTarget,
+        ) { it.executeClipboard(text, presentation) }
+    }
 
     /**
      * Opens an input-only capability for the exact ready attempt currently attached to the controls.
@@ -635,7 +666,7 @@ class SessionController @JvmOverloads constructor(
             return
         }
         owned = entry
-        commandOwner.set(CommandOwner(entry.generation, entry.host, disconnectEpoch.get()))
+        commandOwner.set(CommandOwner(entry.generation, entry.host, disconnectEpoch.get(), entry.attempt))
         val listener = object : SessionAttempt.Listener {
             override fun phase(phase: ConnectionState.Phase) { events.post {
                 if (!matches(entry)) return@post
@@ -709,7 +740,8 @@ class SessionController @JvmOverloads constructor(
 
     private fun releaseHeldInputForOwner(entry: Owned) {
         val matches = heldButtons.values.filter { it.owner.generation == entry.generation && it.owner.host === entry.host }
-        releaseHeldButtons(matches, CommandOwner(entry.generation, entry.host, disconnectEpoch.get()))
+        releaseHeldButtons(matches,
+            CommandOwner(entry.generation, entry.host, disconnectEpoch.get(), entry.attempt))
         inputGestures.values.filter { it.surface.owner.generation == entry.generation && it.surface.owner.host === entry.host }
             .forEach { gesture ->
                 gesture.accepting.set(false)

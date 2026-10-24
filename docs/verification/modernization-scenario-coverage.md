@@ -1,8 +1,8 @@
 # Modernization capability scenario coverage (task 11.7)
 
-This crosswalk accounts for every `#### Scenario:` in the five
-`openspec/changes/modernize-xmouse/specs/*/spec.md` files. **50/50 scenarios are listed**;
-accounting for a scenario is not a claim that it passed. Task IDs below refer to
+This crosswalk originally accounted for the 50 scenarios audited by task 11.7. Task 10.7 adds
+three clipboard scenarios, so **53/53 current scenarios are listed**; accounting for a scenario is
+not a claim that it passed. Task IDs below refer to
 [`tasks.md`](../../openspec/changes/modernize-xmouse/tasks.md). Test-class names identify evidence,
 not a promise that an Android test ran.
 
@@ -89,6 +89,9 @@ coverage.
 | `secure-ssh` | Device encryption key unavailable | Tasks 3.2, 4.1; `CredentialAccessTest`, `CredentialRepositoryAndroidTest`, `CredentialAccessAndroidTest`; [credential-reentry.md](credential-reentry.md), [ssh-crypto.md](ssh-crypto.md) | **Current JVM pass** for failure/re-entry policy; **historical API 26/35 only** for Android key-loss instrumentation. Current device behavior is **NOT RUN**. |
 | `secure-ssh` | Interrupted upgrade | Tasks 3.4, 3.5, 11.4; `LegacyCredentialMigrationTest`, `CredentialMigrationAndroidTest`, `DatabaseMigrationAndroidTest`; [credential-migration.md](credential-migration.md), [database-migrations.md](database-migrations.md) | **Current JVM pass** for checkpoint/restart cases; Android migration instrumentation is **historical API 26/35 only**. Latest upgrade/failure device matrix is **NOT RUN**. |
 | `secure-ssh` | Legacy private-key path no longer readable | Tasks 4.7, 4.8; `PrivateKeyRepositoryTest`, `PrivateKeyImportAndroidTest`; [private-key-import.md](private-key-import.md) | **Current JVM pass** for unreadable-path preservation/re-import state; **historical API 26/35 only** for picker/device behavior. Latest integrated device test is **NOT RUN**. |
+| `modern-android-runtime` | Explicitly send literal clipboard text | Task 10.7; `ClipboardShareCoordinatorTest`, `LinuxClipboardHelperTest`, `SessionPipelineIntegrationTest` | **Current JVM pass** — literal text reaches a fixed exec command only as stdin; the isolated helper scripts preserve bytes and select the expected fake tool. Actual Android UI and desktop clipboard behavior are **NOT RUN**. |
+| `modern-android-runtime` | Do not read clipboard without a foreground tap and ready session | Task 10.7; `ClipboardShareCoordinatorTest`, MainActivity clipboard action | **Current JVM pass** for zero-read gates and clip validation; Activity menu/window integration is **build/compiled-only**, with no Android UI/device run. |
+| `modern-android-runtime` | Linux clipboard helper is unavailable or fails | Task 10.7; `LinuxClipboardHelperTest`, `SessionPipelineIntegrationTest` | **Current JVM pass** — fake missing-helper/display failures return typed failures and leave a healthy SSH session ready; real Linux desktop-helper behavior is **NOT RUN**. |
 
 ## Open runtime verification and task 11.7 decision
 
@@ -102,7 +105,7 @@ coverage.
    26/35 emulator tests do not cover the latest integrated code, API 31/33/34/36/37, the physical five-minute
    continuity check, or live LAN/discovery. See [android-platform-coverage.md](android-platform-coverage.md).
 
-**Decision:** all 50/50 capability scenarios are mapped and this audit found no unresolved implementation gap.
+**Decision:** the original task 11.7 audit mapped 50/50 scenarios and found no unresolved implementation gap. The later task 10.7 scope adds three scenarios; task-specific JVM/build evidence is recorded above and in `tasks.md`. Android UI/device clipboard acceptance remains **NOT RUN** and is not represented as a runtime pass.
 The profile-manager implementation is present; task 6.5 and tasks 11.2–11.5 remain open only for clearly
 identified device/API/LAN verification, which is **NOT RUN**, not passed. With strict validation successful,
 task 11.7 is complete; this does not complete or alter any open device-verification task.

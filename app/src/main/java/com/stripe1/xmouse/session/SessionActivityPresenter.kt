@@ -15,6 +15,7 @@ import com.stripe1.xmouse.secrets.CredentialUi
 import com.stripe1.xmouse.trust.HostKeyMismatch
 import com.stripe1.xmouse.trust.HostTrustReplacementUi
 import com.stripe1.xmouse.trust.HostTrustUi
+import com.stripe1.xmouse.transport.ClipboardTransferResult
 import java.util.function.Consumer
 
 /** Activity-local session presentation. Session owners retain this listener only weakly. */
@@ -131,6 +132,18 @@ class SessionActivityPresenter(
     override fun execFailed(command: String) {
         mainOnly()
         if (isLive()) Toast.makeText(activity, "Command execution failed.", Toast.LENGTH_LONG).show()
+    }
+
+    override fun clipboardResult(result: ClipboardTransferResult) {
+        mainOnly()
+        if (!isLive()) return
+        val message = when (result) {
+            ClipboardTransferResult.COPIED -> activity.getString(R.string.clipboard_send_success)
+            ClipboardTransferResult.MISSING_HELPER -> activity.getString(R.string.clipboard_send_missing_helper)
+            ClipboardTransferResult.DESKTOP_UNAVAILABLE -> activity.getString(R.string.clipboard_send_desktop_unavailable)
+            ClipboardTransferResult.FAILED -> activity.getString(R.string.clipboard_send_failed)
+        }
+        Toast.makeText(activity, message, Toast.LENGTH_LONG).show()
     }
 
     override fun commandResultsInvalidated() {

@@ -6,12 +6,16 @@ Use an Android phone or tablet to control a Linux desktop over SSH.
 
 - Control the desktop with the on-screen keyboard and mouse; send volume-key shortcuts and other special keys.
 - Create custom keyboard buttons and run saved scripts or custom SSH commands.
+- Tap **Send clipboard to Linux** to send plain text from Android's clipboard to the connected Linux desktop clipboard.
 - Free with no ads.
 
 ## Requirements
 
 - Android 8.0 (API 26) or later. Android 7 (API 24–25) and earlier remain on the legacy release. This minimum is not a claim that every supported Android version or device has been tested.
 - A Linux host reachable by SSH, with an OpenSSH server and the existing `xdotool` (X11) or `ydotool` (Wayland) command setup. XMouse sends commands directly over SSH; it needs no XMouse-specific replacement daemon or cloud account.
+- For clipboard sharing, the Linux user needs `wl-copy` on a usable Wayland desktop, or `xclip`/`xsel` on X11. XMouse does not install clipboard tools; a usable desktop session/display must be available.
+
+Clipboard sharing is a deliberate, one-way action: tap the toolbar button while connected to send the current plain-text clip. XMouse does not monitor the clipboard in the background, send clipboard text as simulated typing, or replay it after a disconnect. Empty, non-text, and over-64-KiB clips are not sent.
 
 ## Connect to a host
 

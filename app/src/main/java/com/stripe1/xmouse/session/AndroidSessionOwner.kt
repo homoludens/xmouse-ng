@@ -53,6 +53,7 @@ class AndroidSessionOwner private constructor(
             }
             val factory = SshSessionAttemptFactory(provider, AndroidHostTrust.open(app), interactions,
                 backendFactory = { trust, trusted -> JschSshBackend(HostTrustPolicy(trust, trusted), addressResolver) },
+                diagnostics = SshDiagnostics(AndroidSshDiagnosticSink),
                 permissionFailure = {
                     val internet = app.checkSelfPermission(android.Manifest.permission.INTERNET) == PackageManager.PERMISSION_GRANTED
                     if (!internet) ConnectionFailure.Permission(ConnectionFailure.PermissionReason.DENIED)

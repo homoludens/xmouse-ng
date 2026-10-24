@@ -31,6 +31,7 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
         JschSshBackend(HostTrustPolicy(trust, trusted))
     },
     private val permissionFailure: () -> ConnectionFailure.Permission? = { null },
+    private val diagnostics: SshDiagnostics = SshDiagnostics.NONE,
 ) : SessionAttemptFactory {
     init { require(credentialTimeoutMillis in 1..60_000); require(closeTimeoutMillis in 1..5_000) }
 
@@ -57,9 +58,14 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
         private var permissionTimer: ScheduledFuture<*>? = null
         private var mismatchObservation: HostTrustRequests.MismatchObservation? = null
         private var mismatchReviewEpoch = -1L
+        private val authMode = if (host.authentication.useKey) SshAuthenticationMode.PUBLIC_KEY
+            else SshAuthenticationMode.PASSWORD
+        @Volatile private var diagnosticStage = SshDiagnosticStage.PREPARING_CREDENTIALS
         private val trust = HostTrustRequests(trustRepository, Executor { it.run() }).also { it.attach(this) }
         private val transport = SshTransport(backendFactory(trust, Runnable {
-            phase(ConnectionState.Phase.AUTHENTICATING)
+            // The UI state advances here for compatibility; JSch has verified trust but may not
+            // yet have sent a user-auth request, so diagnostics retain the more precise stage.
+            phase(ConnectionState.Phase.AUTHENTICATING, SshDiagnosticStage.HOST_TRUSTED)
         }), SshTransport.newWorker(), limits, runtime).also { ssh ->
             ssh.setProgressListener { progress -> phase(if (progress == SshTransport.Progress.RESOLVING)
                 ConnectionState.Phase.RESOLVING else ConnectionState.Phase.CONNECTING) }
@@ -70,6 +76,7 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
             synchronized(lock) {
                 check(!started); started = true; this.listener = listener
                 if (!live.get()) { credentialsDone = true; return }
+                diagnostics.record(SshDiagnosticEvent(diagnosticStage, authMode))
                 val denied = accessFailure()
                 if (denied != null) { credentialsDone = true; fail(denied); return }
                 permissionTimer = timers.scheduleWithFixedDelay({
@@ -79,7 +86,9 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
                     synchronized(lock) {
                         if (!credentialsDone && live.getAndSet(false)) {
                             interactions.clear(this)
-                            listener.failed(ConnectionFailure.Authentication(ConnectionFailure.AuthenticationReason.TIMED_OUT))
+                            val failure = ConnectionFailure.Authentication(ConnectionFailure.AuthenticationReason.TIMED_OUT)
+                            diagnostics.record(SshDiagnosticEvent(diagnosticStage, authMode, failure = failure))
+                            listener.failed(failure)
                         }
                     }
                 }, credentialTimeoutMillis, TimeUnit.MILLISECONDS)
@@ -118,6 +127,8 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
                         override fun success(value: Void?) {
                             if (live.get()) {
                                 host.initialCommand?.let { interactions.recentCommand(commandResults, it) }
+                                diagnosticStage = SshDiagnosticStage.CONNECTED
+                                diagnostics.record(SshDiagnosticEvent(diagnosticStage, authMode))
                                 listener?.ready()
                             }
                         }
@@ -185,9 +196,63 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
             })
         }
 
-        private fun phase(phase: ConnectionState.Phase) { if (live.get()) listener?.phase(phase) }
+        override fun canSendClipboard(presentation: SessionInteractions.PresentationToken): Boolean =
+            live.get() && transport.isConnected && interactions.isCurrentPresentation(presentation)
+
+        override fun executeClipboard(
+            text: String,
+            presentation: SessionInteractions.PresentationToken,
+        ): Boolean {
+            if (!canSendClipboard(presentation)) return false
+            val accepted = transport.sendClipboard(text, object : SshTransport.Callback<ClipboardTransferResult> {
+                override fun success(value: ClipboardTransferResult) {
+                    if (live.get()) interactions.clipboardResult(commandResults, presentation, value)
+                }
+                override fun failure(failure: SshTransport.Failure) {
+                    if (live.get()) interactions.clipboardResult(
+                        commandResults, presentation, ClipboardTransferResult.FAILED,
+                    )
+                }
+            })
+            if (!accepted && live.get()) {
+                interactions.clipboardResult(commandResults, presentation, ClipboardTransferResult.FAILED)
+            }
+            return accepted
+        }
+
+        private fun phase(phase: ConnectionState.Phase, diagnosticStageOverride: SshDiagnosticStage? = null) {
+            if (!live.get()) return
+            diagnosticStage = diagnosticStageOverride ?: when (phase) {
+                ConnectionState.Phase.PREPARING_CREDENTIALS -> SshDiagnosticStage.PREPARING_CREDENTIALS
+                ConnectionState.Phase.RESOLVING -> SshDiagnosticStage.RESOLVING
+                ConnectionState.Phase.CONNECTING -> SshDiagnosticStage.CONNECTING
+                ConnectionState.Phase.AWAITING_TRUST -> SshDiagnosticStage.AWAITING_TRUST
+                ConnectionState.Phase.AUTHENTICATING -> SshDiagnosticStage.AUTHENTICATING
+                ConnectionState.Phase.CONNECTED -> SshDiagnosticStage.CONNECTED
+                ConnectionState.Phase.CLOSING -> SshDiagnosticStage.CLOSING
+                ConnectionState.Phase.DISCONNECTED -> SshDiagnosticStage.DISCONNECTED
+                ConnectionState.Phase.ERROR -> SshDiagnosticStage.FAILED
+            }
+            diagnostics.record(SshDiagnosticEvent(diagnosticStage, authMode))
+            if (phase == ConnectionState.Phase.AUTHENTICATING) {
+                // These are the configured candidates, not a claim that each method was attempted.
+                if (authMode == SshAuthenticationMode.PUBLIC_KEY) {
+                    diagnostics.record(SshDiagnosticEvent(stage = SshDiagnosticStage.AUTH_METHOD_CONFIGURED,
+                        authMode = authMode, authMethod = SshAuthenticationMethod.PUBLIC_KEY))
+                } else {
+                    diagnostics.record(SshDiagnosticEvent(SshDiagnosticStage.AUTH_METHOD_CONFIGURED,
+                        authMode, SshAuthenticationMethod.PASSWORD))
+                    diagnostics.record(SshDiagnosticEvent(SshDiagnosticStage.AUTH_METHOD_CONFIGURED,
+                        authMode, SshAuthenticationMethod.KEYBOARD_INTERACTIVE))
+                }
+            }
+            listener?.phase(phase)
+        }
         private fun fail(failure: ConnectionFailure) {
             if (!live.compareAndSet(true, false)) return
+            val failureStage = if (failure == ConnectionFailure.Authentication(ConnectionFailure.AuthenticationReason.REJECTED))
+                SshDiagnosticStage.AUTHENTICATION_REJECTED else diagnosticStage
+            diagnostics.record(SshDiagnosticEvent(failureStage, authMode, failure = failure))
             interactions.invalidateCommandResults(commandResults)
             listener?.failed(failure)
         }
@@ -296,6 +361,9 @@ class SshSessionAttemptFactory @JvmOverloads constructor(
 }
 
 internal fun SshTransport.Failure.toConnectionFailure(): ConnectionFailure = when (this) {
+    SshTransport.Failure.AUTHENTICATION -> ConnectionFailure.Authentication(ConnectionFailure.AuthenticationReason.REJECTED)
+    SshTransport.Failure.CONNECTION_REFUSED -> ConnectionFailure.Transport(ConnectionFailure.TransportReason.CONNECTION_REFUSED)
+    SshTransport.Failure.UNREACHABLE -> ConnectionFailure.Transport(ConnectionFailure.TransportReason.UNREACHABLE)
     SshTransport.Failure.PERMISSION -> ConnectionFailure.Permission(ConnectionFailure.PermissionReason.REVOKED)
     SshTransport.Failure.RESOLUTION -> ConnectionFailure.Resolution(ConnectionFailure.ResolutionReason.NOT_FOUND)
     SshTransport.Failure.RESOLUTION_TIMEOUT -> ConnectionFailure.Resolution(ConnectionFailure.ResolutionReason.TIMED_OUT)

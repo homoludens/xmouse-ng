@@ -35,8 +35,13 @@ public class MyJSView extends View {
 
 
     public MyJSView(Context c) {
+        this(c, (MainActivity) c);
+    }
+
+    /** Draw-only constructor for isolated layout fixtures; runtime controls use the activity-bound constructor. */
+    MyJSView(Context c, MainActivity activity) {
         super(c);
-        activity = (MainActivity) c;
+        this.activity = activity;
         
         base = new Paint();
         base.setAntiAlias(true);
@@ -90,6 +95,7 @@ public class MyJSView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        if (activity == null) return false;
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 if (gestureToken != null) activity.cancelControlInputGesture(gestureToken);

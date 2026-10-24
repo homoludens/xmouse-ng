@@ -1,0 +1,4 @@
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/ic_mouse_gyro_on" android:state_checked="true" />
+    <item android:drawable="@drawable/ic_mouse_gyro_off" />
+</selector>

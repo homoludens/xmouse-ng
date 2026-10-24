@@ -12,6 +12,12 @@ import java.util.function.BooleanSupplier;
  * Implementations must make status reads thread safe and abort/close idempotent.
  */
 public interface SshBackend {
+    /** Backend-only typed outcome for JSch's verified user-authentication rejection signal. */
+    final class AuthenticationRejectedException extends Exception {
+        private static final long serialVersionUID = 1L;
+        public AuthenticationRejectedException() { super(); }
+    }
+
     default SshConnectionRequest resolve(SshConnectionRequest request) throws Exception { return request; }
     default SshConnectionRequest resolve(SshConnectionRequest request, BooleanSupplier current) throws Exception {
         if (!current.getAsBoolean()) throw new CancellationException();

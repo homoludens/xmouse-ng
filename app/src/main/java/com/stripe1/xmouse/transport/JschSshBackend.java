@@ -3,6 +3,7 @@ package com.stripe1.xmouse.transport;
 import com.jcraft.jsch.ChannelExec;
 import com.jcraft.jsch.ChannelShell;
 import com.jcraft.jsch.JSch;
+import com.jcraft.jsch.JSchException;
 import com.stripe1.xmouse.connection.Endpoint;
 import com.stripe1.xmouse.secrets.AuthenticationMaterial;
 import com.stripe1.xmouse.secrets.BoundedSshKey;
@@ -21,6 +22,10 @@ import java.util.function.BooleanSupplier;
 
 /** JSch/socket adaptation: Android/network policy is supplied through the attempt-local resolver seam. */
 public final class JschSshBackend implements SshBackend {
+    private static final String AUTH_FAILURE_PREFIX = "Auth fail for methods '";
+    private static final String AUTH_CANCEL_PREFIX = "Auth cancel for methods '";
+    private static final int MAX_AUTH_METHODS_MESSAGE_LENGTH = 1024;
+
     public interface SessionPolicy {
         void configure(JSch jsch, com.jcraft.jsch.Session session, Endpoint endpoint) throws Exception;
         default void configure(JSch jsch, com.jcraft.jsch.Session session, Endpoint endpoint,
@@ -37,6 +42,29 @@ public final class JschSshBackend implements SshBackend {
     public JschSshBackend(SessionPolicy policy, SshAddressResolver resolver) {
         this.policy = policy;
         this.resolver = resolver;
+    }
+
+    /**
+     * mwiede JSch 2.28.8 has no typed "credentials rejected" exception. Its pinned Session.connect()
+     * source throws a fixed `Auth fail` or `Auth cancel` result after configured user-auth methods
+     * are exhausted. This app installs no JSch UserInfo, so the latter is an unhandled interactive
+     * challenge rather than a user cancellation. Match only those bounded templates, here at the
+     * JSch boundary; never retain or forward server-controlled method-list text.
+     */
+    static boolean isAuthenticationRejected(JSchException failure) {
+        String message = failure.getMessage();
+        String prefix = message != null && message.startsWith(AUTH_FAILURE_PREFIX) ? AUTH_FAILURE_PREFIX :
+                message != null && message.startsWith(AUTH_CANCEL_PREFIX) ? AUTH_CANCEL_PREFIX : null;
+        if (prefix == null || !message.endsWith("'") ||
+                message.length() > MAX_AUTH_METHODS_MESSAGE_LENGTH) return false;
+        String methods = message.substring(prefix.length(), message.length() - 1);
+        for (int i = 0; i < methods.length(); i++) {
+            char value = methods.charAt(i);
+            // The inserted value is an SSH name-list. Reject control characters/oversized payloads;
+            // its contents are untrusted and are used only for this local recognition check.
+            if (value < 0x20 || value > 0x7e) return false;
+        }
+        return true;
     }
 
     @Override public SshConnectionRequest resolve(SshConnectionRequest request) throws Exception {
@@ -154,7 +182,12 @@ public final class JschSshBackend implements SshBackend {
             // Set the post-auth socket timeout BEFORE JSch starts its reader. Setting it afterwards
             // could leave the reader's first already-started read with an infinite timeout.
             session.setServerAliveInterval(limits.keepaliveInterval);
-            session.connect(timeoutMillis); // Finite KEX/auth read timeout; outer budget also covers trust.
+            try {
+                session.connect(timeoutMillis); // Finite KEX/auth read timeout; outer budget also covers trust.
+            } catch (JSchException failure) {
+                if (isAuthenticationRejected(failure)) throw new SshBackend.AuthenticationRejectedException();
+                throw failure;
+            }
             lastInbound = System.nanoTime();
             if (aborted) { abort(); throw new IOException(); }
         }
