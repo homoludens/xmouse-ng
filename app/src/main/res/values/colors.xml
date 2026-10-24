@@ -1,6 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="colorPrimary">#000</color>
-    <color name="colorPrimaryDark">#000</color>
-    <color name="colorAccent">#000</color>
+    <!-- Legacy aliases used by the existing app-bar and preference screens. -->
+    <color name="colorPrimary">@color/ng_accent</color>
+    <color name="colorPrimaryDark">@color/ng_accent</color>
+    <color name="colorAccent">@color/ng_accent</color>
+    <color name="ng_navigation_bar">#216A58</color>
+
+    <!-- XMouse-NG semantic palette; keep these names aligned with values-night. -->
+    <color name="ng_background">#F7F8FA</color>
+    <color name="ng_surface">#FFFFFF</color>
+    <color name="ng_surface_soft">#EEF1F4</color>
+    <color name="ng_text_primary">#20272E</color>
+    <color name="ng_text_secondary">#626D78</color>
+    <color name="ng_border">#DCE2E7</color>
+    <color name="ng_accent">#216A58</color>
+    <color name="ng_on_accent">#FFFFFF</color>
+    <color name="ng_accent_soft">#E0EFE8</color>
+    <color name="ng_danger">#A64041</color>
+    <color name="ng_danger_soft">#FBE9E7</color>
+    <color name="ng_action_blue_soft">#E8EFFA</color>
+    <color name="ng_on_action_blue">#345F98</color>
 </resources>

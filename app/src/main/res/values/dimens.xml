@@ -6,4 +6,10 @@
     <dimen name="activity_horizontal_margin">16dp</dimen>
     <dimen name="activity_vertical_margin">16dp</dimen>
     <dimen name="fab_margin">16dp</dimen>
+    <dimen name="ng_min_touch_target">48dp</dimen>
+    <dimen name="ng_icon_size">24dp</dimen>
+    <dimen name="ng_radius_control">12dp</dimen>
+    <dimen name="ng_radius_surface">16dp</dimen>
+    <dimen name="ng_radius_touchpad">20dp</dimen>
+    <dimen name="ng_radius_sheet">24dp</dimen>
 </resources>

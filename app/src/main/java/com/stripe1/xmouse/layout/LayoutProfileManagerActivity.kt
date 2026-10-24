@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelProvider
 import com.stripe1.xmouse.R
+import com.stripe1.xmouse.ui.XMouseNgTheme
 import java.io.File
 
 /** User-facing CRUD and selection screen for saved named layouts. */
@@ -57,7 +58,7 @@ class LayoutProfileManagerActivity : ComponentActivity() {
         )[LayoutProfileManagerViewModel::class.java]
 
         setContent {
-            MaterialTheme {
+            XMouseNgTheme {
                 val state by managerViewModel.state.collectAsState()
                 LayoutProfileManagerScreen(
                     state = state,

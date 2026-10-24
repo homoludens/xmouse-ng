@@ -80,6 +80,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelProvider
 import com.stripe1.xmouse.R
+import com.stripe1.xmouse.ui.XMouseNgTheme
 import java.io.File
 
 /** Separate editor surface; it never receives or invokes the remote command sink. */
@@ -103,7 +104,7 @@ class LayoutEditorActivity : ComponentActivity() {
         )[LayoutEditorViewModel::class.java]
 
         setContent {
-            MaterialTheme {
+            XMouseNgTheme {
                 val state by editorViewModel.state.collectAsState()
                 LayoutEditorScreen(
                     state = state,

@@ -1,6 +1,6 @@
 ## 1. Native foundation
 
-- [ ] 1.1 [low] Add the approved semantic light/dark native theme, reusable local-vector/control styles, system-following Compose editor colors, and visible XMouse-NG branding without changing package identity or storage paths; verify resource/theme checks and debug/lint/instrumentation APK builds.
+- [x] 1.1 [low] Add the approved semantic light/dark native theme, reusable local-vector/control styles, system-following Compose editor colors, and visible XMouse-NG branding without changing package identity or storage paths; verify resource/theme checks and debug/lint/instrumentation APK builds.
 - [ ] 1.2 [high] Replace drawer/FAB primary navigation with the real computer/status header and Touchpad/Keys/Actions shell, explicitly scoping pointer/key/typing capabilities across destinations, overlays, Back, lifecycle, and recreation while retaining one service session; verify navigation-only dispatch, held-input release, stale-gesture rejection, and session-reuse regressions.
 
 ## 2. Functional destinations and editors
@@ -18,3 +18,9 @@
 - [ ] 3.3 [low] Commit the completed redesign and verification records, preserve the original upstream remote, push source without force to the authorized homoludens/xmouse-ng repository using gh-backed GitHub authentication, and create a GitHub release containing the verified APK/checksum and truthful notes; verify remote commit and downloadable artifact metadata.
 
 Routing: 2 high / 8 low tasks (20%). The high tasks cover the shell/input-lifetime extraction and the attempt-only SSH/credential-edit lifecycle; ordinary resource, UI, API integration, defined testing, and release procedures remain low. Do not close unrelated modernize-xmouse tasks or claim unrun runtime checks.
+
+### Task 1.1 verification evidence
+
+- Focused JVM resource/theme/branding check (`XMouseNgThemeResourcesTest`): 3 tests passed.
+- With `ANDROID_HOME` and `ANDROID_SDK_ROOT` set to `/home/homoludens/Android/Sdk`, `:app:assembleDebug`, `:app:assembleDebugAndroidTest`, and `:app:lintDebug` all passed.
+- Strict change validation (`openspec validate redesign-xmouse-ng --strict`) and `git diff --check` passed.

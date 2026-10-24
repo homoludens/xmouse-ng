@@ -1,9 +1,9 @@
 <resources>
     <string name="session_controls_retry">Retry</string>
-    <string name="session_notification_channel_name">Remote session</string>
-    <string name="session_notification_channel_description">Visibility for a requested XMouse network-device session.</string>
-    <string name="session_notification_title">XMouse remote session</string>
-    <string name="session_notification_text">XMouse is preparing or maintaining a requested network-device connection.</string>
+    <string name="session_notification_channel_name">XMouse-NG remote session</string>
+    <string name="session_notification_channel_description">Visibility for a requested XMouse-NG network-device session.</string>
+    <string name="session_notification_title">XMouse-NG remote session</string>
+    <string name="session_notification_text">XMouse-NG is preparing or maintaining a requested network-device connection.</string>
     <string name="session_notification_open">Open controls</string>
     <string name="session_notification_disconnect">Disconnect</string>
     <string name="session_controls_menu">Session controls</string>
@@ -22,7 +22,7 @@
     <string name="clipboard_send_unavailable">Android clipboard is unavailable. Copy the text again and retry.</string>
     <string name="session_controls_title">Session controls</string>
     <string name="session_controls_idle_message">Start a foreground session for the selected host. To avoid two SSH connections, disconnect any existing in-app connection first.</string>
-    <string name="session_controls_active_message">A foreground session is active. You can return to the XMouse controls or disconnect this session here.</string>
+    <string name="session_controls_active_message">A foreground session is active. You can return to the XMouse-NG controls or disconnect this session here.</string>
     <string name="session_controls_pending_message">A foreground session request is waiting for notification permission or host selection. Continue that request or disconnect it before starting another SSH connection.</string>
     <string name="session_controls_hidden_api33_message">Android may hide this session from the notification drawer. Its foreground-service notice remains available in Android Task Manager. Use Disconnect here to stop the session.</string>
     <string name="session_controls_hidden_older_message">Notification settings may hide the notification-drawer actions. Use Disconnect here to stop the session.</string>
@@ -32,25 +32,25 @@
     <string name="session_controls_close">Close</string>
     <string name="session_controls_continue_request">Continue request</string>
     <string name="session_controls_cancel_request">Cancel request</string>
-    <string name="session_controls_pending_legacy_guidance">A foreground XMouse session is being prepared or is active. Use Session controls to continue or disconnect it before starting another SSH connection.</string>
+    <string name="session_controls_pending_legacy_guidance">A foreground XMouse-NG session is being prepared or is active. Use Session controls to continue or disconnect it before starting another SSH connection.</string>
     <string name="session_controls_legacy_active">The existing in-app connection is still active or connecting. Disconnect it before starting a foreground session to avoid a second SSH connection.</string>
     <string name="session_permission_rationale_title">Show session notification actions?</string>
-    <string name="session_permission_rationale_message">Android 13 and later uses notification permission to show XMouse Open controls and Disconnect actions in the notification drawer. If you deny it, the foreground session can still run, but its notice is shown in Android Task Manager rather than the drawer. You can always disconnect from Session controls in XMouse.</string>
+    <string name="session_permission_rationale_message">Android 13 and later uses notification permission to show XMouse-NG Open controls and Disconnect actions in the notification drawer. If you deny it, the foreground session can still run, but its notice is shown in Android Task Manager rather than the drawer. You can always disconnect from Session controls in XMouse-NG.</string>
     <string name="session_permission_request">Request permission</string>
     <string name="session_permission_continue_without">Continue without drawer actions</string>
     <string name="session_permission_denied_title">Notification permission denied</string>
-    <string name="session_permission_denied_message">The foreground session may not appear in the notification drawer, so its Open controls and Disconnect actions may be unavailable there. Android still discloses the running foreground service in Task Manager. XMouse Session controls remain available in the app.</string>
+    <string name="session_permission_denied_message">The foreground session may not appear in the notification drawer, so its Open controls and Disconnect actions may be unavailable there. Android still discloses the running foreground service in Task Manager. XMouse-NG Session controls remain available in the app.</string>
     <string name="session_permission_settings_title">Notification visibility is off</string>
-    <string name="session_permission_settings_message">Android will not show another permission prompt after this choice. Open XMouse notification settings to restore notification-drawer actions, or continue without them. The session remains disclosed by Android, and you can disconnect from Session controls in XMouse.</string>
-    <string name="session_permission_older_settings_message">This Android version does not use the notification runtime permission. Notification or channel settings may hide drawer actions; use Session controls in XMouse to disconnect.</string>
+    <string name="session_permission_settings_message">Android will not show another permission prompt after this choice. Open XMouse-NG notification settings to restore notification-drawer actions, or continue without them. The session remains disclosed by Android, and you can disconnect from Session controls in XMouse-NG.</string>
+    <string name="session_permission_older_settings_message">This Android version does not use the notification runtime permission. Notification or channel settings may hide drawer actions; use Session controls in XMouse-NG to disconnect.</string>
     <string name="session_permission_open_settings">Open notification settings</string>
     <string name="session_permission_not_now">Not now</string>
-    <string name="session_start_rejected">Android could not start the foreground session from this screen. Keep XMouse visible and try again.</string>
+    <string name="session_start_rejected">Android could not start the foreground session from this screen. Keep XMouse-NG visible and try again.</string>
     <string name="local_network_permission_title">Allow local network access?</string>
-    <string name="local_network_permission_message">Android 17 requires permission before XMouse can resolve a computer or connect to it on your local network. Grant access before continuing; host-key trust and SSH authentication checks still apply afterward.</string>
+    <string name="local_network_permission_message">Android 17 requires permission before XMouse-NG can resolve a computer or connect to it on your local network. Grant access before continuing; host-key trust and SSH authentication checks still apply afterward.</string>
     <string name="local_network_permission_request">Request access</string>
     <string name="local_network_permission_denied_title">Local network access denied</string>
-    <string name="local_network_permission_denied_message">XMouse did not resolve the host or start SSH because local network access was denied. Grant Local network access in Android settings, then deliberately retry. Your saved host and authentication settings are unchanged.</string>
+    <string name="local_network_permission_denied_message">XMouse-NG did not resolve the host or start SSH because local network access was denied. Grant Local network access in Android settings, then deliberately retry. Your saved host and authentication settings are unchanged.</string>
     <string name="local_network_permission_retry">Try again</string>
     <string name="local_network_permission_open_settings">Open app settings</string>
     <string name="local_network_permission_not_now">Not now</string>
@@ -145,7 +145,7 @@
     <string name="mouse_control_show_joystick_tooltip">Switch from touchpad to joystick controls.</string>
     <string name="joystick_control_show_touchpad">Show touchpad controls</string>
     <string name="joystick_control_show_touchpad_tooltip">Return to touchpad controls.</string>
-    <string name="app_name">XMouse</string>
+    <string name="app_name">XMouse-NG</string>
     <string name="app_version">v2.0.26</string>
     <string name="navigation_drawer_open">Open navigation drawer</string>
     <string name="navigation_drawer_close">Close navigation drawer</string>
@@ -155,5 +155,5 @@
     <string name="action_disconnect">Disconnect</string>
     <string name="title_activity_new_host_settingss">New Host</string>
     <string name="title_activity_list_edit">Edit</string>
-    <string name="app_desc"><![CDATA[XMouse Remote Mouse & Keyboard]]></string>
+    <string name="app_desc"><![CDATA[XMouse-NG Remote Mouse & Keyboard]]></string>
 </resources>
