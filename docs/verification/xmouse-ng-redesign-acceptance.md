@@ -1,8 +1,8 @@
 # XMouse-NG redesign — integrated acceptance
 
-Date: **2026-10-25**. Scope: `redesign-xmouse-ng` **3.1 [low]** only, using the recorded user-approved `openai/gpt-6.1-sol#xhigh` exception. Starting revision: `301e4a9`, branch `redesign/xmouse-ng`. Tasks 3.2/3.3, signing, publication, and unrelated `modernize-xmouse` statuses are not completed by this record.
+Date: **2026-10-25**. Scope: `redesign-xmouse-ng` **3.1 [low]** only, using the recorded user-approved `openai/gpt-6.1-sol#xhigh` exception. Starting revision: `301e4a9`, branch `redesign/xmouse-ng`. This is a **historical pre-release snapshot**: tasks 3.2/3.3 were pending when it was written. They were subsequently completed; see [signed-release verification](xmouse-ng-signed-release.md) and task 3.3 evidence in `openspec/changes/redesign-xmouse-ng/tasks.md`. Unrelated `modernize-xmouse` statuses remain unchanged.
 
-**Later distribution evidence:** task 3.2 subsequently built and verified the signed **2.1.0 (26)** release; see [the signed-release record](xmouse-ng-signed-release.md). The versions, sizes, and out-of-scope distribution statuses below describe the earlier 3.1 snapshot and are not overwritten by that later verification. Task 3.3 publication and real signed-installation migration remain unrun.
+**Later distribution evidence:** task 3.2 subsequently built and verified the signed **2.1.0 (26)** release; task 3.3 published it. See [the signed-release record](xmouse-ng-signed-release.md) and the **Task 3.3 publication evidence** section of `openspec/changes/redesign-xmouse-ng/tasks.md`. The versions and sizes in this report describe the earlier 3.1 snapshot. Real signed-installation migration remains unrun.
 
 ## Result and evidence boundary
 
@@ -138,15 +138,15 @@ Same-toolchain debug comparison against pre-redesign **`66e62a9`**, built from a
 
 Measured debug growth: **1,023,979 bytes (+5.0624%)**. This is a debug-to-debug measurement, including debug-only tooling/fixtures, not a promised release size. The separate test APK is not a production runtime dependency.
 
-The resolved `debugRuntimeClasspath` dependency graphs are **identical** to baseline (812 dependency-tree lines, zero additions/removals). Gradle build/dependency configuration is unchanged. No browser, WebView, font, animation, or other heavy runtime library was added. APK ZIP inspection found **zero HTML/HTM/JS/MJS, handoff/reference assets, or bundled TTF/OTF files** in the final app/test APKs. Main sources contain no WebView/browser-reference implementation. Debug fixture Activities remain under `src/debug`; release APK exclusion/signature inspection still belongs to task 3.2 and is not inferred from this debug audit.
+The resolved `debugRuntimeClasspath` dependency graphs are **identical** to baseline (812 dependency-tree lines, zero additions/removals), and no runtime dependency declarations changed. No browser, WebView, font, animation, or other heavy runtime library was added. APK ZIP inspection found **zero HTML/HTM/JS/MJS, handoff/reference assets, or bundled TTF/OTF files** in the final app/test APKs. Main sources contain no WebView/browser-reference implementation. Debug fixture Activities remain under `src/debug`; release APK exclusion/signature inspection was not inferred from this debug audit and was verified separately under task 3.2.
 
-Debug badging confirms **`com.stripe1.xmouse`**, **minimum SDK 26**, target/compile SDK 37, visible **XMouse-NG**, existing version 25 / 2.0.27. Release version/signing changes were intentionally not made. Storage paths/formats, secret/trust identities, credentials, session ownership, and original upstream remote were not changed by these integration fixes.
+At this task 3.1 snapshot, debug badging confirmed **`com.stripe1.xmouse`**, **minimum SDK 26**, target/compile SDK 37, visible **XMouse-NG**, version 25 / 2.0.27. Release version/signing changes were not part of that debug audit; task 3.2 later set version 26 / 2.1.0 and verified the signed artifact. Storage paths/formats, secret/trust identities, credentials, session ownership, and original upstream remote were not changed by these integration fixes.
 
 ## Explicitly not run
 
 - Real Linux/X11/Wayland SSH control, authenticated Android Test connection, remote scripts, actual media/brightness effects, live discovery, or Linux clipboard export.
 - Physical devices, API 26 runtime, API 36/37-specific permission/Back behavior, real sensor accuracy, or a human TalkBack traversal (native labels/semantics/targets were asserted on API 35).
 - In-place upgrade under the user's release certificate, real-user legacy DB/vault/preferences/profile migration, backup/restore across devices, process-kill fault recovery on hardware, or differently signed update compatibility. Synthetic unit/SQLite/Keystore/profile fixtures are not these checks.
-- Release build/signature/fingerprint/checksum/provenance, version rollout, release fixture exclusion inspection, GitHub authentication, staging/commit/push/release/archive. Tasks 3.2/3.3 remain unchecked.
+- At the time of this task 3.1 snapshot, release build/signature/fingerprint/checksum/provenance, version rollout, release fixture exclusion inspection, GitHub authentication, staging/commit/push/release/archive were not run; tasks 3.2/3.3 were pending. Those tasks have since been completed as recorded in the signed-release and task 3.3 evidence. The live/device/data checks in the preceding bullets remain unrun.
 
 The owned emulator/AVD and isolated baseline source/build directory are cleaned up after verification; logs/screenshots/measurement reports remain in the evidence directory. No existing/user AVD or inherited verification artifact is removed.
