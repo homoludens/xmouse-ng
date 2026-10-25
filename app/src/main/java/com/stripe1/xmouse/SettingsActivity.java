@@ -16,8 +16,6 @@ import android.preference.RingtonePreference;
 import android.text.TextUtils;
 import android.view.MenuItem;
 
-import androidx.core.app.NavUtils;
-
 import com.stripe1.xmouse.secrets.PrivateKeySettingsController;
 import com.stripe1.xmouse.secrets.CredentialUi;
 import com.stripe1.xmouse.secrets.AndroidCredentials;
@@ -47,6 +45,7 @@ public class SettingsActivity extends AppCompatPreferenceActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (getSupportActionBar() != null) getSupportActionBar().setDisplayHomeAsUpEnabled(true);
         credentialsUi = new CredentialUi(this);
         AndroidCredentials.get(this).execute(() -> {
             if (!AndroidCredentials.get(this).prepare()) runOnUiThread(() -> {
@@ -70,16 +69,8 @@ public class SettingsActivity extends AppCompatPreferenceActivity {
         switch (item.getItemId()) {
 
             case android.R.id.home:
-                // This ID represents the Home or Up button. In the case of this
-                // activity, the Up button is shown. Use NavUtils to allow users
-                // to navigate up one level in the application structure. For
-                // more details, see the Navigation pattern on Android Design:
-                //
-                // http://developer.android.com/design/patterns/navigation.html#up-vs-back
-                //
-                // TODO: If Settings has multiple levels, Up should navigate up
-                // that hierarchy.
-                NavUtils.navigateUpFromSameTask(this);
+                // Return to the actual caller (native Settings or the computer editor), not Main.
+                finish();
                 return true;
 
         }

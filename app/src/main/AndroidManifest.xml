@@ -58,9 +58,14 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
         <activity
+            android:name=".NativeSettingsActivity"
+            android:exported="false"
+            android:label="@string/title_activity_settings"
+            android:theme="@style/AppTheme.NoActionBar" />
+        <activity
             android:name=".SettingsActivity"
             android:configChanges="orientation|screenSize"
-            android:label="@string/title_activity_settings">
+            android:label="@string/ng_settings_advanced">
             <meta-data
                 android:name="android.support.PARENT_ACTIVITY"
                 android:value="com.stripe1.xmouse.MainActivity" />

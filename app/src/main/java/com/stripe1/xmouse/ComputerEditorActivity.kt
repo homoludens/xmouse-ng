@@ -85,7 +85,7 @@ class ComputerEditorActivity : AppCompatActivity(), ConnectionProbe.Listener, Se
         }
         findViewById<View>(R.id.computer_delete).setOnClickListener { confirmDelete() }
         findViewById<View>(R.id.computer_auth_settings).setOnClickListener {
-            cancelTest(); startActivity(Intent(this, SettingsActivity::class.java))
+            cancelTest(); startActivity(Intent(this, NativeSettingsActivity::class.java))
         }
         for (id in FORM_FIELDS) field(id).doAfterTextChanged {
             if (loaded && (probe.owner.busy || pendingPermission)) cancelTest()

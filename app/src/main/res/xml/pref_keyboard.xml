@@ -1,20 +1,20 @@
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android" >
 
    
-	<CheckBoxPreference
-        android:defaultValue="true"
-        android:key="setting_keyboard_batch"
-        android:summary="Disable to send keys as they are pressed"
-        android:title="Instant Messenger Style" />
+	<Preference
+        android:persistent="false"
+        android:selectable="false"
+        android:summary="@string/ng_settings_explicit_send"
+        android:title="@string/ng_settings_keyboard" />
 	<CheckBoxPreference
         android:defaultValue="true"
         android:key="keyboard_autoclear"
         android:summary="@string/pref_description_keyboard_autoclear"
         android:title="@string/pref_title_keyboard_autoclear" />
-	<CheckBoxPreference
-        android:defaultValue="false"
-        android:key="keyboard_layout_locked"
-        android:summary="Disable to drag and drop keys"
-        android:title="Layout is Locked" />
+	<Preference
+        android:persistent="false"
+        android:selectable="false"
+        android:summary="@string/ng_settings_layout_help"
+        android:title="@string/ng_actions" />
 	
 </PreferenceScreen>

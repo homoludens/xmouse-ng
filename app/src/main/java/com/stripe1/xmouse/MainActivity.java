@@ -228,7 +228,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	public static String setting_user="";
 	public static int setting_port=22;
 	public static String setting_shell = "";
-	public static float setting_sensitivity=1.5f;
+	public static float setting_sensitivity=InputPreferences.DEFAULT_POINTER_SPEED;
 	public static int setting_delay=350;
 	public static int setting_mdelay=0;
 
@@ -250,7 +250,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	public static String setting_dotool_initial="";
 	public static String setting_xdotool_initial="";
 	//static boolean setting_mouse_background=false;
-	private static boolean setting_keyboard_batch=true;
 	private boolean setting_keyboard_autoclear=true;
 	public static boolean setting_use_keys = false;
 	public static boolean setting_invert_scroll = false;
@@ -394,6 +393,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		});
         NativeShellViews.bind(shellRoot, shellNavigation, this::bindKeyCatalogCommand);
 		if (savedInstanceState != null) {
+			externalScreenPending = savedInstanceState.getBoolean("shell.externalPending");
 			ArrayList<String> overlays = savedInstanceState.getStringArrayList("shell.overlays");
 			shellNavigation.restore(savedInstanceState.getString("shell.destination"),
 					savedInstanceState.getBoolean("shell.joystick"), overlays == null ? new ArrayList<>() : overlays);
@@ -600,6 +600,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		outState.putBoolean("actions.existingDataAtLaunch", databaseExistedAtLaunch || preferencesExistedAtLaunch);
 		outState.putString("shell.destination", shellNavigation.destination().name());
 		outState.putBoolean("shell.joystick", shellNavigation.joystick());
+		outState.putBoolean("shell.externalPending", externalScreenPending);
 		ArrayList<String> overlays = new ArrayList<>();
 		for (ShellNavigation.Overlay overlay : shellNavigation.overlays()) overlays.add(overlay.name());
 		outState.putStringArrayList("shell.overlays", overlays);
@@ -715,7 +716,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		return button;
 	}
 
-	private void openSettings() { openExternalScreen(new Intent(this, SettingsActivity.class)); }
+	private void openSettings() { openExternalScreen(new Intent(this, NativeSettingsActivity.class)); }
 	private void openLegacyManager(int type) {
 		openExternalScreen(new Intent(this, ListEditActivity.class).putExtra("intVariableType", type));
 	}
@@ -766,8 +767,13 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 
 	public void getPreferences(){
 
+		SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+		// Read these independently: malformed unrelated legacy settings must not prevent input reload.
+		InputPreferences input = InputPreferences.read(prefs.getAll());
+		setting_sensitivity = input.pointerSpeed;
+		setting_invert_scroll = input.invertScroll;
+		setting_keyboard_autoclear = input.keyboardAutoClear;
 		try{
-			SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
 
 			setting_host= prefs.getString("setting_host", "");
 			setting_user= prefs.getString("setting_user", "");
@@ -788,7 +794,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
                 Toast.makeText(getBaseContext(), "No Saved Host selected", Toast.LENGTH_LONG).show();
             }*/
 
-			setting_sensitivity = Float.valueOf(prefs.getString("sensitivity_list", "1.0f"));
 			setting_delay = Integer.valueOf(prefs.getString("delay_list", "350"));
 			setting_mdelay = Integer.valueOf(prefs.getString("mdelay_list", "0"));
 
@@ -806,15 +811,12 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 			setting_dotool_initial=prefs.getString("setting_dotool_initial", "xdotool");
 			setting_xdotool_initial=prefs.getString("setting_xdotool_initial", "export DISPLAY=':0' && unset HISTFILE");
 			setting_shell = prefs.getString("setting_shell", "");
-			setting_keyboard_autoclear=prefs.getBoolean("keyboard_autoclear", true);
 			//setting_keyboard_show_details=prefs.getBoolean("show_commands_on_buttons",false);
 			setting_use_keys = prefs.getBoolean("pref_usekeyauth",false);
-			setting_keyboard_batch=prefs.getBoolean("setting_keyboard_batch",true);
 			//setting_mouse_background=prefs.getBoolean("setting_mouse_background",false);
 			setting_keyboard_locked=prefs.getBoolean("keyboard_layout_locked",false);
 			//setting_log_staydown=prefs.getBoolean("log_staydown", true);
 			//setting_command_overlay=prefs.getBoolean("command_overlay", false);
-			setting_invert_scroll=prefs.getBoolean("mouse_invert_scroll",false);
 		}catch(Exception ignored){
 			Log.w(TAG, "settings_read_failed");
 			Toast.makeText(getApplicationContext(), "There was a problem retrieving your settings.", Toast.LENGTH_LONG).show();
@@ -844,10 +846,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	protected void onResume() {
 		super.onResume();
 		activityResumed = true;
-		if (externalScreenPending) {
-			externalScreenPending = false;
-			shellNavigation.close(ShellNavigation.Overlay.EXTERNAL);
-		}
+		final boolean returningFromExternal = externalScreenPending;
 		if (returningFromLayoutEditor || returningFromLayoutManager || returningFromActionEditor || returningFromScriptsManager) {
 			returningFromLayoutEditor = false;
 			returningFromLayoutManager = false;
@@ -864,8 +863,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 
 
 		//Toast.makeText(getBaseContext(), "setting_autoconnect "+String.valueOf(setting_autoconnect), Toast.LENGTH_SHORT).show();
-		scheduleAutomaticForegroundSessionAfterVisibleFrame(activityGeneration, getWindow().getDecorView(),
-				!openedFromNotification);
+		// Returning from a form/Settings only reloads data; it is not a connection request.
+		if (!returningFromExternal) scheduleAutomaticForegroundSessionAfterVisibleFrame(
+				activityGeneration, getWindow().getDecorView(), !openedFromNotification);
 
 		if(mCoolDragAndDropGridView!=null){
 			mItemAdapter = new CustomKeyboardButtonAdapter(MainActivity.this, mItems);
@@ -875,6 +875,10 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		initMenu();
 		showConnectionStat();
 		initDoTool();
+		if (returningFromExternal) {
+			externalScreenPending = false;
+			shellNavigation.close(ShellNavigation.Overlay.EXTERNAL);
+		}
 		requestActionsData();
 		windowFocused = getWindow().getDecorView().hasWindowFocus();
 		updateControlInputSurface();

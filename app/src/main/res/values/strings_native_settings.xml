@@ -1,0 +1,17 @@
+<resources>
+    <string name="ng_settings_advanced">Advanced settings</string>
+    <string name="ng_settings_back">Back</string>
+    <string name="ng_settings_pointer_speed">Pointer speed</string>
+    <string name="ng_settings_pointer_value">Pointer speed\n%1$s</string>
+    <string name="ng_settings_saved_scale">Saved custom scale: %1$s×</string>
+    <string name="ng_settings_pointer_help">Scales touchpad movement using the saved mouse sensitivity. Changes are saved immediately and used when you return.</string>
+    <string name="ng_settings_natural">Natural scrolling</string>
+    <string name="ng_settings_natural_on">On: swipe up to scroll down. Content follows your fingers. Applies to touchpad gestures, not the labeled scroll buttons.</string>
+    <string name="ng_settings_natural_off">Off: swipe up to scroll up. Content moves opposite your fingers. Applies to touchpad gestures, not the labeled scroll buttons.</string>
+    <string name="ng_settings_keyboard">Typing</string>
+    <string name="ng_settings_auto_clear">Clear text after Send</string>
+    <string name="ng_settings_explicit_send">Typing always requires Send. Editing text never sends keystrokes. The old instant-send choice remains stored for compatibility but is not used.</string>
+    <string name="ng_settings_advanced_help">Global SSH key authentication, passphrase and document import; session startup, shell and input tool; drag delays; gyro and joystick sensitivity, size and dead zone. Gyro remains in Touchpad; Joystick is in the top More menu. Authentication, shell and startup command changes apply on a later connection; Settings does not connect or disconnect.</string>
+    <string name="ng_settings_layout_help">Reorder actions in Actions → More → Advanced editor. The old main-grid lock choice remains stored for compatibility but does not control this editor.</string>
+    <string name="ng_settings_appearance">Appearance follows your system light or dark theme.</string>
+</resources>
