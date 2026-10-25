@@ -21,16 +21,42 @@
         </LinearLayout>
     </ScrollView>
     <ScrollView android:id="@+id/typing_content" android:layout_width="match_parent"
-        android:layout_height="match_parent" android:fillViewport="true" android:visibility="gone">
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:text="@string/ng_typing_label" android:labelFor="@+id/keyboard_input" />
+        android:layout_height="match_parent" android:fillViewport="true" android:scrollbars="vertical"
+        android:visibility="gone">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:paddingBottom="12dp">
+            <TextView android:id="@+id/keyboard_input_label" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="@string/ng_typing_label" android:labelFor="@+id/keyboard_input"
+                android:textColor="@color/ng_text_secondary" android:textSize="14sp" />
             <EditText android:id="@id/keyboard_input" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:minHeight="96dp" android:gravity="top" android:inputType="textMultiLine|textCapSentences"
+                android:minHeight="120dp" android:layout_marginTop="6dp" android:gravity="top|start"
+                android:inputType="textMultiLine|textNoSuggestions" android:imeOptions="flagNoExtractUi"
+                android:textSize="16sp" android:textColor="@color/ng_text_primary"
                 android:hint="@string/ng_typing_hint" android:saveEnabled="false" android:importantForAutofill="no" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="8dp" android:orientation="vertical">
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+                    <Button android:id="@+id/typing_key_escape" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                        android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:text="@string/ng_escape" />
+                    <Button android:id="@+id/typing_key_tab" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                        android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:layout_marginStart="6dp" android:text="@string/ng_tab" />
+                </LinearLayout>
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp" android:orientation="horizontal">
+                    <Button android:id="@+id/typing_key_backspace" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                        android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:text="@string/ng_backspace" />
+                    <Button android:id="@+id/typing_key_enter" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                        android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:layout_marginStart="6dp" android:text="@string/ng_enter" />
+                </LinearLayout>
+            </LinearLayout>
             <Button android:id="@+id/keyboard_send" style="@style/Widget.XMouseNg.ControlButton.Accent"
-                android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/ng_send"
-                android:onClick="xMouseKeyboardSend" />
+                android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="8dp"
+                android:text="@string/ng_send" android:onClick="xMouseKeyboardSend" />
         </LinearLayout>
     </ScrollView>
 </LinearLayout>

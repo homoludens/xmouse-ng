@@ -3,11 +3,11 @@ package com.stripe1.xmouse;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PointF;
+import android.graphics.RectF;
 import android.view.MotionEvent;
 import android.view.View;
 
@@ -32,7 +32,15 @@ public class MyMouseView extends View {
     //private Canvas  mCanvas;
     private Path mPath;
     private Paint mBitmapPaint;
-    private float scrollStart = 120f; //pixels to draw from left, for scroll bar
+    private Paint stripPaint;
+    private Paint stripTrackPaint;
+    private Paint hintTitlePaint;
+    private Paint hintDetailPaint;
+    private Paint hintIconPaint;
+    private final Path scrollStripPath = new Path();
+    private final RectF scrollStripBounds = new RectF();
+    private final float[] scrollStripRadii = new float[8];
+    private float scrollStart; // physical width of the right-hand scroll strip
     final int CLICK = 3;
     private int w=0;
     private int h=0;
@@ -59,8 +67,13 @@ public class MyMouseView extends View {
     }
 
     public MyMouseView(Context c) {
+        this(c, (MainActivity) c);
+    }
+
+    /** Draw-capable fixture constructor; a null Activity intentionally makes input inert. */
+    MyMouseView(Context c, MainActivity activity) {
         super(c);
-        activity = (MainActivity) c;
+        this.activity = activity;
 
         mPaint = new Paint();
         mPaint.setAntiAlias(true);
@@ -76,12 +89,39 @@ public class MyMouseView extends View {
         //mBlur = new BlurMaskFilter(8, BlurMaskFilter.Blur.NORMAL);
         mPath = new Path();
         mBitmapPaint = new Paint(Paint.DITHER_FLAG);
+        stripPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        stripPaint.setStyle(Paint.Style.FILL);
+        stripPaint.setColor(c.getColor(R.color.ng_surface_soft));
+        stripTrackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        stripTrackPaint.setColor(c.getColor(R.color.ng_border));
+        stripTrackPaint.setStrokeCap(Paint.Cap.ROUND);
+        hintTitlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        hintTitlePaint.setColor(c.getColor(R.color.ng_text_primary));
+        hintTitlePaint.setTextAlign(Paint.Align.CENTER);
+        hintTitlePaint.setTextSize(sp(14));
+        hintDetailPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        hintDetailPaint.setColor(c.getColor(R.color.ng_text_secondary));
+        hintDetailPaint.setTextAlign(Paint.Align.CENTER);
+        hintDetailPaint.setTextSize(sp(12));
+        hintIconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        hintIconPaint.setColor(c.getColor(R.color.ng_accent));
+        hintIconPaint.setStyle(Paint.Style.STROKE);
+        hintIconPaint.setStrokeCap(Paint.Cap.ROUND);
+        hintIconPaint.setStrokeWidth(dp(1.5f));
+        scrollStart = dp(48);
+        yX = scrollStart;
+        float cornerRadius = dp(18);
+        scrollStripRadii[2] = cornerRadius;
+        scrollStripRadii[3] = cornerRadius;
+        scrollStripRadii[4] = cornerRadius;
+        scrollStripRadii[5] = cornerRadius;
+        setContentDescription(c.getString(R.string.ng_touchpad_accessibility_hint));
     }
 
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
-        mBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        mBitmap = w > 0 && h > 0 ? Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888) : null;
         this.w=w;
         this.h=h;
 
@@ -91,53 +131,69 @@ public class MyMouseView extends View {
 
     @Override
     protected void onDraw(Canvas c) {
-        //canvas.drawColor(0xFFAAAAAA);
-        //canvas.drawColor(0xFFAAAA4C);
-        canvas=c;
-        canvas.drawBitmap(mBitmap, 0, 0, mBitmapPaint);
+        canvas = c;
+        if (mBitmap != null) canvas.drawBitmap(mBitmap, 0, 0, mBitmapPaint);
 
-        mPaint.setColor(Color.BLUE);
-        mPaint.setStrokeWidth(3);
-        canvas.drawLine(w-scrollStart, h*0.1f, w-scrollStart, h*0.9f, mPaint);
-
-        //mPaint.setStrokeWidth(1);
-        //mPaint.setTextSize(20);
-        //canvas.drawText(String.valueOf(scrolling), 20, 20, mPaint);
-        //canvas.drawText(mX+","+mY, 20, 40, mPaint);
-
-        if(dragging){
-            mPaint.setColor(Color.YELLOW);
-        }else{
-            mPaint.setColor(0xFFFF0000);//red
-
+        float stripLeft = Math.max(0f, w - scrollStart);
+        scrollStripBounds.set(stripLeft, 0f, w, h);
+        scrollStripPath.reset();
+        scrollStripPath.addRoundRect(scrollStripBounds, scrollStripRadii, Path.Direction.CW);
+        canvas.drawPath(scrollStripPath, stripPaint);
+        stripTrackPaint.setColor(getResources().getColor(R.color.ng_border, getContext().getTheme()));
+        stripTrackPaint.setStrokeWidth(dp(1));
+        canvas.drawLine(stripLeft, 0f, stripLeft, h, stripTrackPaint);
+        stripTrackPaint.setStrokeWidth(dp(3));
+        float trackTop = Math.min(dp(64), h * 0.28f);
+        float trackBottom = Math.max(trackTop, h - trackTop);
+        if (trackBottom > trackTop) {
+            float trackX = stripLeft + (w - stripLeft) / 2f;
+            canvas.drawLine(trackX, trackTop, trackX, trackBottom, stripTrackPaint);
         }
 
-        mPaint.setStrokeWidth(10);
+        if (!touching) drawTouchpadHint(canvas, stripLeft, h);
+
+        mPaint.setStyle(Paint.Style.STROKE);
+        mPaint.setColor(getResources().getColor(R.color.ng_accent, getContext().getTheme()));
+        mPaint.setStrokeWidth(dp(dragging ? 4 : 2));
         canvas.drawPath(mPath, mPaint);
-
-        if(touching) {
-            mPaint.setColor(Color.BLACK);
-            if(dragging) {
-                mPaint.setStrokeWidth(10);
-            }else{
-                mPaint.setStrokeWidth(3);
-            }
-            if(!scrolling && !zooming) {
-                canvas.drawCircle(mX, mY, 80, mPaint);
-            }
-            if(zooming || scrolling){
-
-
-                canvas.drawCircle(curr.x, curr.y, 80, mPaint);
-
-                if(yX<scrollStart || twoFingerScroll) {
-                    canvas.drawCircle(yX, yY, 80, mPaint);
-
-                }
+        if (touching) {
+            if (!scrolling && !zooming) canvas.drawCircle(mX, mY, dp(12), mPaint);
+            if (zooming || scrolling) {
+                if (curr != null) canvas.drawCircle(curr.x, curr.y, dp(12), mPaint);
+                if (yX < scrollStart || twoFingerScroll) canvas.drawCircle(yX, yY, dp(12), mPaint);
             }
         }
+    }
 
+    private void drawTouchpadHint(Canvas canvas, float stripLeft, float height) {
+        float centerX = stripLeft / 2f;
+        float centerY = height / 2f;
+        float iconWidth = dp(16);
+        float iconHeight = dp(11);
+        canvas.drawRoundRect(centerX - iconWidth / 2f, centerY - dp(36), centerX + iconWidth / 2f,
+                centerY - dp(36) + iconHeight, dp(2), dp(2), hintIconPaint);
+        canvas.drawLine(centerX, centerY - dp(36), centerX, centerY - dp(30), hintIconPaint);
+        canvas.drawText(getResources().getString(R.string.ng_touchpad_move_hint), centerX,
+                centerY + dp(4), hintTitlePaint);
 
+        String instruction = getResources().getString(R.string.ng_touchpad_gesture_hint);
+        float availableWidth = Math.max(0f, stripLeft - dp(16));
+        if (hintDetailPaint.measureText(instruction) <= availableWidth) {
+            canvas.drawText(instruction, centerX, centerY + dp(29), hintDetailPaint);
+        } else {
+            canvas.drawText(getResources().getString(R.string.ng_touchpad_tap_hint), centerX,
+                    centerY + dp(25), hintDetailPaint);
+            canvas.drawText(getResources().getString(R.string.ng_touchpad_scroll_hint), centerX,
+                    centerY + dp(43), hintDetailPaint);
+        }
+    }
+
+    private float dp(float value) {
+        return value * getResources().getDisplayMetrics().density;
+    }
+
+    private float sp(float value) {
+        return value * getResources().getDisplayMetrics().scaledDensity;
     }
 
     private boolean twoFingerScroll = false;
@@ -220,6 +276,7 @@ public class MyMouseView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        if (activity == null) return false;
         float x = event.getX();
         float y = event.getY();
         curr = new PointF(event.getX(), event.getY());

@@ -2,7 +2,6 @@ package com.stripe1.xmouse;
 
 import android.content.Context;
 import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.Paint;
 import android.view.MotionEvent;
 import android.view.View;
@@ -45,7 +44,7 @@ public class MyJSView extends View {
         
         base = new Paint();
         base.setAntiAlias(true);
-        base.setColor(Color.BLACK);
+        base.setColor(c.getColor(R.color.ng_text_secondary));
         base.setStrokeWidth(3);
         base.setStyle(Paint.Style.STROKE);
         base.setStrokeJoin(Paint.Join.MITER);
@@ -53,7 +52,7 @@ public class MyJSView extends View {
         
         dead_zone = new Paint();
         dead_zone.setAntiAlias(true);
-        dead_zone.setColor(Color.GRAY);
+        dead_zone.setColor(c.getColor(R.color.ng_surface_soft));
         dead_zone.setStrokeWidth(1);
         dead_zone.setStyle(Paint.Style.FILL_AND_STROKE);
         dead_zone.setStrokeJoin(Paint.Join.MITER);
@@ -61,13 +60,14 @@ public class MyJSView extends View {
         
         hat = new Paint();
         hat.setAntiAlias(true);
-        hat.setColor(Color.BLACK);
+        hat.setColor(c.getColor(R.color.ng_accent));
         hat.setStrokeWidth(3);
         hat.setStyle(Paint.Style.FILL_AND_STROKE);
         hat.setStrokeJoin(Paint.Join.MITER);
         hat.setStrokeCap(Paint.Cap.SQUARE);
 
         sensitivity=MainActivity.setting_js_sensitivity;
+        setContentDescription(c.getString(R.string.ng_joystick_accessibility_hint));
     }
 
     @Override

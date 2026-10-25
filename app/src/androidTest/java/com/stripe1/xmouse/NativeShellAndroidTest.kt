@@ -3,7 +3,9 @@ package com.stripe1.xmouse
 import android.content.Intent
 import android.view.View
 import android.view.ViewGroup
+import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -55,7 +57,75 @@ class NativeShellAndroidTest {
                     }
                     assertEquals("XMouse-NG", activity.getString(R.string.app_name))
                     assertEquals("● Disconnected", root.findViewById<TextView>(R.id.connection_status).text.toString())
+
+                    val surface = root.findViewById<FrameLayout>(R.id.mouse_surface_host)
+                    val pointer = (0 until surface.childCount).map { surface.getChildAt(it) }
+                        .filterIsInstance<MyMouseView>().single()
+                    assertTrue("real pointer host has positive width", pointer.width > 0)
+                    assertTrue("real pointer host has positive height", pointer.height > 0)
+                    for (id in listOf(R.id.firstMouseButton, R.id.secondMouseButton, R.id.thirdMouseButton)) {
+                        val button = root.findViewById<View>(id)
+                        val location = IntArray(2)
+                        val surfaceLocation = IntArray(2)
+                        button.getLocationOnScreen(location)
+                        surface.getLocationOnScreen(surfaceLocation)
+                        assertTrue("mouse click control $id is below the touchpad", location[1] >= surfaceLocation[1] + surface.height)
+                        assertTrue("mouse click target $id is at least 48dp high", button.height >= 48 * density - 1)
+                    }
+                    val scrollUp = root.findViewById<View>(R.id.fourthMouseButton)
+                    val scrollDown = root.findViewById<View>(R.id.fifthMouseButton)
+                    val scrollUpLocation = IntArray(2)
+                    val scrollDownLocation = IntArray(2)
+                    val surfaceLocation = IntArray(2)
+                    scrollUp.getLocationOnScreen(scrollUpLocation)
+                    scrollDown.getLocationOnScreen(scrollDownLocation)
+                    surface.getLocationOnScreen(surfaceLocation)
+                    assertTrue("scroll up stays in the right strip",
+                        surfaceLocation[0] + surface.width - scrollUpLocation[0] - scrollUp.width <= 1)
+                    assertTrue("scroll down stays in the right strip",
+                        surfaceLocation[0] + surface.width - scrollDownLocation[0] - scrollDown.width <= 1)
+                    assertTrue(scrollUpLocation[1] < scrollDownLocation[1])
+                    for (id in listOf(R.id.touchpad_key_escape, R.id.touchpad_key_switch, R.id.touchpad_key_super)) {
+                        val button = root.findViewById<Button>(id)
+                        assertTrue("quick key $id is labeled", button.text.isNotBlank())
+                        assertTrue("quick key $id is a 48dp target", button.height >= 48 * density - 1)
+                    }
+                    assertTrue("typing access remains a 48dp target",
+                        root.findViewById<View>(R.id.type_on_computer).height >= 48 * density - 1)
                 }
+            }
+        }
+    }
+
+    @Test fun typingUsesLabeledMultilineImeAndReachableExplicitQuickKeys() {
+        ActivityScenario.launch(MainInsetsFixtureActivity::class.java).use { scenario ->
+            instrumentation.waitForIdleSync()
+            scenario.onActivity { activity ->
+                activity.findViewById<View>(R.id.type_on_computer).performClick()
+                val root = activity.findViewById<ViewGroup>(R.id.native_shell)
+                val input = activity.findViewById<EditText>(R.id.keyboard_input)
+                assertTrue(input.isShown)
+                assertTrue(input.inputType and android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE != 0)
+                assertFalse("typing content is not saved into a state bundle", input.isSaveEnabled)
+                assertEquals(activity.getString(R.string.ng_typing_label),
+                    activity.findViewById<TextView>(R.id.keyboard_input_label).text.toString())
+                for ((id, label) in listOf(
+                    R.id.typing_key_escape to R.string.ng_escape,
+                    R.id.typing_key_tab to R.string.ng_tab,
+                    R.id.typing_key_backspace to R.string.ng_backspace,
+                    R.id.typing_key_enter to R.string.ng_enter,
+                )) {
+                    val button = activity.findViewById<Button>(id)
+                    assertEquals(activity.getString(label), button.text.toString())
+                    assertTrue("typing quick key $id is at least 48dp high", button.height >= 48 * activity.resources.displayMetrics.density - 1)
+                }
+                val send = activity.findViewById<Button>(R.id.keyboard_send)
+                assertEquals(activity.getString(R.string.ng_send), send.text.toString())
+                assertTrue("Send is a full touch target", send.height >= 48 * activity.resources.displayMetrics.density - 1)
+
+                input.setText("fixture edit remains local")
+                assertEquals("fixture edit remains local", input.text.toString())
+                assertTrue("scrollable typing flow stays within the shell", root.findViewById<View>(R.id.typing_content).height > 0)
             }
         }
     }

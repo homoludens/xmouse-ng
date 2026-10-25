@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="fill_parent"
     android:layout_height="wrap_content">
 
@@ -12,8 +11,9 @@
 
         <Button
             android:id="@+id/js_firstMouseButton"
+            style="@style/Widget.XMouseNg.IconButton"
             android:layout_width="0dp"
-            android:layout_height="60dp"
+            android:layout_height="48dp"
             android:contentDescription="@string/mouse_control_left_click"
             android:drawableTop="@drawable/ic_mouse_left_click"
             android:drawableTint="@color/mouse_control_icon_tint"
@@ -29,8 +29,9 @@
 
         <Button
             android:id="@+id/js_secondMouseButton"
+            style="@style/Widget.XMouseNg.IconButton"
             android:layout_width="0dp"
-            android:layout_height="60dp"
+            android:layout_height="48dp"
             android:contentDescription="@string/mouse_control_middle_click"
             android:drawableTop="@drawable/ic_mouse_middle_click"
             android:drawableTint="@color/mouse_control_icon_tint"
@@ -45,8 +46,9 @@
 
         <Button
             android:id="@+id/js_thirdMouseButton"
+            style="@style/Widget.XMouseNg.IconButton"
             android:layout_width="0dp"
-            android:layout_height="60dp"
+            android:layout_height="48dp"
             android:contentDescription="@string/mouse_control_right_click"
             android:drawableTop="@drawable/ic_mouse_right_click"
             android:drawableTint="@color/mouse_control_icon_tint"
@@ -61,8 +63,9 @@
 
         <Button
             android:id="@+id/js_fourthMouseButton"
+            style="@style/Widget.XMouseNg.IconButton"
             android:layout_width="0dp"
-            android:layout_height="60dp"
+            android:layout_height="48dp"
             android:contentDescription="@string/mouse_control_scroll_up"
             android:drawableTop="@drawable/ic_mouse_scroll_up"
             android:drawableTint="@color/mouse_control_icon_tint"
@@ -77,8 +80,9 @@
 
         <Button
             android:id="@+id/js_fifthMouseButton"
+            style="@style/Widget.XMouseNg.IconButton"
             android:layout_width="0dp"
-            android:layout_height="60dp"
+            android:layout_height="48dp"
             android:contentDescription="@string/mouse_control_scroll_down"
             android:drawableTop="@drawable/ic_mouse_scroll_down"
             android:drawableTint="@color/mouse_control_icon_tint"
@@ -90,18 +94,11 @@
             app:layout_constraintEnd_toStartOf="@id/js_firstMouseButton"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent" />
-        <!--
-            <ToggleButton
-                android:id="@+id/js_gyroToggle"
-                android:layout_width="0dp"
-                android:layout_height="60dp"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintEnd_toStartOf="@id/js_fifthMouseButton"
-                app:layout_constraintTop_toTopOf="parent" />-->
         <Button
             android:id="@+id/js_jsToggle"
+            style="@style/Widget.XMouseNg.IconButton"
             android:layout_width="0dp"
-            android:layout_height="60dp"
+            android:layout_height="48dp"
             android:contentDescription="@string/joystick_control_show_touchpad"
             android:drawableTop="@drawable/ic_mouse_touchpad"
             android:drawableTint="@color/mouse_control_icon_tint"

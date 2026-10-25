@@ -2,6 +2,8 @@ package com.stripe1.xmouse
 
 import android.os.Bundle
 import android.content.res.Configuration
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import androidx.appcompat.app.AppCompatActivity
 
@@ -35,6 +37,12 @@ class MainInsetsFixtureActivity : AppCompatActivity() {
                 if (!navigation.back()) finish()
             }
         })
+        val mouseSurface = findViewById<FrameLayout>(R.id.mouse_surface_host)
+        mouseSurface.clipToOutline = true
+        mouseSurface.addView(
+            MyMouseView(this, null),
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
+        )
         JoystickSurfaceLayout.addTo(
             findViewById<LinearLayout>(R.id.js),
             MyJSView(this, null),

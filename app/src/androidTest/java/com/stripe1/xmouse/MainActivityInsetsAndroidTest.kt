@@ -3,6 +3,7 @@ package com.stripe1.xmouse
 import android.os.Build
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.ScrollView
 import androidx.appcompat.widget.Toolbar
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -43,6 +44,13 @@ class MainActivityInsetsAndroidTest {
             dispatch(scenario, portraitBars, portraitCutout, Insets.NONE)
             assertPadding(scenario, Insets.of(0, 72, 0, 48))
             assertMainControlsReachable(scenario)
+            assertTouchpadControlsReachable(scenario)
+
+            scenario.onActivity { it.findViewById<View>(R.id.type_on_computer).performClick() }
+            dispatch(scenario, portraitBars, portraitCutout, visibleIme)
+            assertTypingControlsReachable(scenario)
+            scenario.onActivity { it.navigation.closeTop() }
+            dispatch(scenario, portraitBars, portraitCutout, Insets.NONE)
 
             // Landscape-shaped system/cutout insets exercise the physical left and right edges.
             val landscapeBars = Insets.of(24, 0, 32, 24)
@@ -156,6 +164,61 @@ class MainActivityInsetsAndroidTest {
                 overlayLocation[1] + overlay.height <=
                     safeLocation[1] + safeArea.height - safeArea.paddingBottom)
             activity.navigation.closeTop()
+        }
+    }
+
+    private fun assertTouchpadControlsReachable(scenario: ActivityScenario<MainInsetsFixtureActivity>) {
+        scenario.onActivity { activity ->
+            val safeArea = activity.findViewById<FrameLayout>(R.id.main_safe_area)
+            val bottom = activity.findViewById<BottomNavigationView>(R.id.bottom_navigation)
+            val safeLocation = IntArray(2)
+            val bottomLocation = IntArray(2)
+            safeArea.getLocationOnScreen(safeLocation)
+            bottom.getLocationOnScreen(bottomLocation)
+            for (id in listOf(
+                R.id.mouse_surface_host, R.id.firstMouseButton, R.id.secondMouseButton, R.id.thirdMouseButton,
+                R.id.fourthMouseButton, R.id.fifthMouseButton, R.id.gyroToggle, R.id.jsToggle,
+                R.id.touchpad_key_escape, R.id.touchpad_key_switch, R.id.touchpad_key_super, R.id.type_on_computer,
+            )) {
+                val control = activity.findViewById<View>(id)
+                val location = IntArray(2)
+                control.getLocationOnScreen(location)
+                assertTrue("touchpad control $id remains inside the safe width",
+                    location[0] >= safeLocation[0] + safeArea.paddingLeft &&
+                        location[0] + control.width <= safeLocation[0] + safeArea.width - safeArea.paddingRight)
+                assertTrue("touchpad control $id remains above bottom navigation",
+                    location[1] >= safeLocation[1] + safeArea.paddingTop && location[1] + control.height <= bottomLocation[1])
+                assertTrue("touchpad control $id keeps a 48dp target",
+                    control.height >= 48 * activity.resources.displayMetrics.density - 1)
+            }
+        }
+    }
+
+    private fun assertTypingControlsReachable(scenario: ActivityScenario<MainInsetsFixtureActivity>) {
+        scenario.onActivity { activity ->
+            val typing = activity.findViewById<ScrollView>(R.id.typing_content)
+            val input = activity.findViewById<View>(R.id.keyboard_input)
+            val send = activity.findViewById<View>(R.id.keyboard_send)
+            val bottom = activity.findViewById<BottomNavigationView>(R.id.bottom_navigation)
+            val typingLocation = IntArray(2)
+            val bottomLocation = IntArray(2)
+            typing.getLocationOnScreen(typingLocation)
+            bottom.getLocationOnScreen(bottomLocation)
+            assertTrue("typing panel stays above the IME-adjusted navigation",
+                typingLocation[1] + typing.height <= bottomLocation[1])
+            assertTrue("the multiline field remains visible after IME resize", input.isShown && input.height > 0)
+            val sendBounds = android.graphics.Rect()
+            send.getDrawingRect(sendBounds)
+            typing.offsetDescendantRectToMyCoords(send, sendBounds)
+            assertTrue("Send is visible or reachable by scrolling when the IME reduces the panel",
+                typing.canScrollVertically(1) || sendBounds.bottom <= typing.height)
+            for (id in listOf(
+                R.id.typing_key_escape, R.id.typing_key_tab, R.id.typing_key_backspace,
+                R.id.typing_key_enter, R.id.keyboard_send,
+            )) {
+                assertTrue("typing action $id retains a 48dp target",
+                    activity.findViewById<View>(id).height >= 48 * activity.resources.displayMetrics.density - 1)
+            }
         }
     }
 }

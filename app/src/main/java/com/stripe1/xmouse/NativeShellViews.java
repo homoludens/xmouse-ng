@@ -36,9 +36,12 @@ public final class NativeShellViews {
         visible(root, R.id.typing_content, state.topOverlay() == ShellNavigation.Overlay.TYPING);
         ((android.widget.TextView) root.findViewById(R.id.overlay_title)).setText(
                 state.topOverlay() == ShellNavigation.Overlay.TYPING ? R.string.ng_typing : R.string.ng_computers);
+        ((android.widget.TextView) root.findViewById(R.id.touchpad_title)).setText(
+                state.joystick() ? R.string.mouse_control_joystick_short : R.string.ng_touchpad);
         visible(root, R.id.touchpad_destination, state.destination() == ShellNavigation.Destination.TOUCHPAD);
         root.findViewById(R.id.mouse).setVisibility(state.joystick() ? View.INVISIBLE : View.VISIBLE);
         root.findViewById(R.id.js).setVisibility(state.joystick() ? View.VISIBLE : View.INVISIBLE);
+        visible(root, R.id.jsToggle, !state.joystick());
         visible(root, R.id.keys_destination, state.destination() == ShellNavigation.Destination.KEYS);
         visible(root, R.id.actions_destination, state.destination() == ShellNavigation.Destination.ACTIONS);
         View header = root.findViewById(R.id.shell_header);

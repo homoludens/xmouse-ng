@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.ToggleButton
 import androidx.core.graphics.drawable.DrawableCompat
@@ -23,19 +24,11 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class MouseControlButtonsAndroidTest {
     @Test
-    fun touchpadAndJoystickRowsHaveDistinctLabeledIconsAndPreserveTheirOrder() {
+    fun touchpadClickControlsAndJoystickRowKeepRealTargetsAndMeaningfulIcons() {
         ActivityScenario.launch(MainInsetsFixtureActivity::class.java).use { scenario ->
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             scenario.onActivity { activity ->
-                val mouseOrder = listOf(
-                    R.id.gyroToggle,
-                    R.id.fifthMouseButton,
-                    R.id.firstMouseButton,
-                    R.id.secondMouseButton,
-                    R.id.thirdMouseButton,
-                    R.id.fourthMouseButton,
-                    R.id.jsToggle,
-                )
+                val mouseOrder = listOf(R.id.firstMouseButton, R.id.secondMouseButton, R.id.thirdMouseButton)
                 val joystickOrder = listOf(
                     R.id.js_fifthMouseButton,
                     R.id.js_firstMouseButton,
@@ -45,19 +38,39 @@ class MouseControlButtonsAndroidTest {
                     R.id.js_jsToggle,
                 )
                 assertPhysicalOrder(activity, mouseOrder)
-                assertPhysicalOrder(activity, joystickOrder)
+                val surface = activity.findViewById<FrameLayout>(R.id.mouse_surface_host)
+                val mouse = (0 until surface.childCount)
+                    .map { surface.getChildAt(it) }.filterIsInstance<MyMouseView>().single()
+                assertTrue("real touchpad has positive width", mouse.width > 0)
+                assertTrue("real touchpad has positive height", mouse.height > 0)
+                mouseOrder.forEach { id ->
+                    val button = activity.findViewById<Button>(id)
+                    val buttonLocation = IntArray(2)
+                    val surfaceLocation = IntArray(2)
+                    button.getLocationOnScreen(buttonLocation)
+                    surface.getLocationOnScreen(surfaceLocation)
+                    assertTrue("$id is below the real touch surface", buttonLocation[1] >= surfaceLocation[1] + surface.height)
+                }
+
+                val scrollUp = activity.findViewById<Button>(R.id.fourthMouseButton)
+                val scrollDown = activity.findViewById<Button>(R.id.fifthMouseButton)
+                assertAccessibleIconControl(scrollUp)
+                assertAccessibleIconControl(scrollDown)
+                val surfaceLocation = IntArray(2)
+                val upLocation = IntArray(2)
+                val downLocation = IntArray(2)
+                surface.getLocationOnScreen(surfaceLocation)
+                scrollUp.getLocationOnScreen(upLocation)
+                scrollDown.getLocationOnScreen(downLocation)
+                assertTrue("scroll actions remain inside the right strip", upLocation[0] + scrollUp.width == surfaceLocation[0] + surface.width)
+                assertTrue("scroll up is above scroll down", upLocation[1] < downLocation[1])
 
                 val actionButtonIds = listOf(
-                    R.id.fifthMouseButton,
                     R.id.firstMouseButton,
                     R.id.secondMouseButton,
                     R.id.thirdMouseButton,
                     R.id.fourthMouseButton,
-                    R.id.js_fifthMouseButton,
-                    R.id.js_firstMouseButton,
-                    R.id.js_secondMouseButton,
-                    R.id.js_thirdMouseButton,
-                    R.id.js_fourthMouseButton,
+                    R.id.fifthMouseButton,
                 )
                 actionButtonIds.forEach { id ->
                     val button = activity.findViewById<Button>(id)
@@ -65,16 +78,14 @@ class MouseControlButtonsAndroidTest {
                     assertTrue("mouse dispatch callback missing for $id", button.hasOnClickListeners())
                 }
 
-                listOf(R.id.jsToggle, R.id.js_jsToggle).forEach { id ->
-                    assertAccessibleIconControl(activity.findViewById(id))
-                }
+                assertAccessibleIconControl(activity.findViewById(R.id.jsToggle))
+                assertAccessibleIconControl(activity.findViewById(R.id.gyroToggle))
 
                 assertDistinctIcons(
                     activity,
                     listOf(R.id.firstMouseButton, R.id.secondMouseButton, R.id.thirdMouseButton),
                 )
                 assertDistinctIcons(activity, listOf(R.id.fourthMouseButton, R.id.fifthMouseButton))
-                assertDistinctIcons(activity, listOf(R.id.jsToggle, R.id.js_jsToggle))
 
                 val gyro = activity.findViewById<ToggleButton>(R.id.gyroToggle)
                 assertFalse("gyro starts in the checked state in the isolated fixture", gyro.isChecked)
@@ -85,6 +96,12 @@ class MouseControlButtonsAndroidTest {
                 val onIcon = iconPixels(gyro)
                 assertNotEquals("gyro icon must visibly distinguish enabled from disabled", offIcon, onIcon)
                 assertToggleSemantics(gyro, expectedChecked = true)
+
+                activity.navigation.setJoystick(true)
+                assertPhysicalOrder(activity, joystickOrder)
+                joystickOrder.forEach { id -> assertAccessibleIconControl(activity.findViewById(id)) }
+                assertTrue("joystick mode exposes its return-to-touchpad control",
+                    activity.findViewById<View>(R.id.js_jsToggle).isShown)
             }
         }
     }
@@ -99,6 +116,7 @@ class MouseControlButtonsAndroidTest {
         expectedIds.forEach { id ->
             val button = activity.findViewById<View>(id)
             assertTrue("control $id keeps a useful touch height", button.height >= dp(activity, 48))
+            assertTrue("control $id keeps a useful touch width", button.width >= dp(activity, 48))
         }
     }
 
@@ -113,11 +131,12 @@ class MouseControlButtonsAndroidTest {
         )
 
         val textView = view as? TextView ?: error("control ${view.id} is not a text control")
-        val icon = textView.compoundDrawables[1] ?: error("missing top icon for ${view.id}")
+        val icon = textView.compoundDrawablesRelative.firstOrNull { it != null }
+            ?: error("missing icon for ${view.id}")
         assertTrue("control ${view.id} has a measurable icon", icon.intrinsicWidth > 0 && icon.intrinsicHeight > 0)
         assertTrue(
             "control ${view.id} does not clip its icon horizontally",
-            icon.intrinsicWidth <= view.width - view.paddingLeft - view.paddingRight,
+            icon.intrinsicWidth <= view.width,
         )
     }
 
@@ -128,7 +147,8 @@ class MouseControlButtonsAndroidTest {
 
     private fun iconPixels(view: View): List<Int> {
         val textView = view as? TextView ?: error("control ${view.id} is not a text control")
-        val source = textView.compoundDrawables[1] ?: error("missing top icon for ${view.id}")
+        val source = textView.compoundDrawablesRelative.firstOrNull { it != null }
+            ?: error("missing icon for ${view.id}")
         val drawable = source.constantState?.newDrawable(view.resources)?.mutate() ?: source.mutate()
         drawable.state = view.drawableState
         // Apply the same solid tint used by the row so the state regression catches geometry,

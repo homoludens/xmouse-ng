@@ -2,12 +2,49 @@
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/destination_container" android:layout_width="match_parent" android:layout_height="match_parent">
     <LinearLayout android:id="@+id/touchpad_destination" android:layout_width="match_parent"
-        android:layout_height="match_parent" android:orientation="vertical" android:padding="14dp">
-        <TextView style="@style/TextAppearance.XMouseNg.Heading" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:text="@string/ng_touchpad" />
-        <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+        android:layout_height="match_parent" android:orientation="vertical"
+        android:paddingStart="14dp" android:paddingEnd="14dp" android:paddingTop="2dp" android:paddingBottom="10dp">
+        <LinearLayout android:id="@+id/touchpad_title_row" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal"
+            android:paddingBottom="8dp">
+            <TextView android:id="@+id/touchpad_title" style="@style/TextAppearance.XMouseNg.Heading"
+                android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:text="@string/ng_touchpad" />
+            <ToggleButton android:id="@+id/gyroToggle" android:layout_width="wrap_content"
+                android:layout_height="48dp" android:minWidth="68dp" android:contentDescription="@string/mouse_control_gyro"
+                android:drawableStart="@drawable/ic_mouse_gyro_state" android:drawableTint="@color/mouse_control_icon_tint"
+                android:drawablePadding="4dp" android:gravity="center" android:paddingStart="8dp" android:paddingEnd="8dp"
+                android:textOff="@string/mouse_control_gyro_short" android:textOn="@string/mouse_control_gyro_short"
+                android:textColor="@color/ng_accent" android:textSize="12sp" android:tooltipText="@string/mouse_control_gyro_tooltip"
+                android:background="@drawable/ng_touchpad_mode_button" />
+            <Button android:id="@+id/jsToggle" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                android:layout_width="48dp" android:layout_height="48dp" android:layout_marginStart="6dp"
+                android:minWidth="48dp" android:drawableTop="@drawable/ic_mouse_joystick"
+                android:drawableTint="@color/mouse_control_icon_tint" android:gravity="center" android:padding="2dp"
+                android:contentDescription="@string/mouse_control_show_joystick"
+                android:tooltipText="@string/mouse_control_show_joystick_tooltip" />
+        </LinearLayout>
+        <FrameLayout android:id="@+id/touchpad_mode_host" android:layout_width="match_parent"
+            android:layout_height="0dp" android:layout_weight="1" android:minHeight="176dp">
             <LinearLayout android:id="@+id/mouse" android:layout_width="match_parent"
                 android:layout_height="match_parent" android:orientation="vertical">
+                <FrameLayout android:id="@+id/mouse_surface_host" android:layout_width="match_parent"
+                    android:layout_height="0dp" android:layout_weight="1" android:minHeight="112dp"
+                    android:background="@drawable/ng_touchpad_surface"
+                    android:importantForAccessibility="no">
+                    <Button android:id="@+id/fourthMouseButton" style="@style/Widget.XMouseNg.IconButton"
+                        android:layout_width="48dp" android:layout_height="48dp" android:layout_gravity="top|right"
+                        android:contentDescription="@string/mouse_control_scroll_up"
+                        android:drawableTop="@drawable/ic_mouse_scroll_up" android:drawableTint="@color/mouse_control_icon_tint"
+                        android:gravity="center" android:onClick="xMouseClickMouse" android:padding="2dp"
+                        android:tooltipText="@string/mouse_control_scroll_up_tooltip" />
+                    <Button android:id="@+id/fifthMouseButton" style="@style/Widget.XMouseNg.IconButton"
+                        android:layout_width="48dp" android:layout_height="48dp" android:layout_gravity="bottom|right"
+                        android:contentDescription="@string/mouse_control_scroll_down"
+                        android:drawableTop="@drawable/ic_mouse_scroll_down" android:drawableTint="@color/mouse_control_icon_tint"
+                        android:gravity="center" android:onClick="xMouseClickMouse" android:padding="2dp"
+                        android:tooltipText="@string/mouse_control_scroll_down_tooltip" />
+                </FrameLayout>
                 <include layout="@layout/mouse_buttons" />
             </LinearLayout>
             <LinearLayout android:id="@+id/js" android:layout_width="match_parent"
@@ -15,8 +52,25 @@
                 <include layout="@layout/js_buttons" />
             </LinearLayout>
         </FrameLayout>
+        <LinearLayout android:id="@+id/touchpad_quick_keys" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal">
+            <Button android:id="@+id/touchpad_key_escape" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                android:text="@string/ng_escape" />
+            <Button android:id="@+id/touchpad_key_switch" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                android:layout_marginStart="6dp"
+                android:text="@string/ng_switch" />
+            <Button android:id="@+id/touchpad_key_super" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                android:layout_marginStart="6dp" android:text="@string/ng_super" />
+        </LinearLayout>
         <Button android:id="@+id/type_on_computer" style="@style/Widget.XMouseNg.ControlButton.Soft"
-            android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/ng_typing" />
+            android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="8dp"
+            android:backgroundTint="@color/ng_accent_soft" android:drawableStart="@drawable/ic_ng_keys"
+            android:drawableEnd="@drawable/ic_ng_chevron_right" android:drawableTint="@color/ng_accent"
+            android:drawablePadding="8dp" android:text="@string/ng_typing" android:textColor="@color/ng_accent"
+            android:gravity="center_vertical|start" android:paddingStart="16dp" android:paddingEnd="16dp" />
     </LinearLayout>
     <ScrollView android:id="@+id/keys_destination" android:layout_width="match_parent"
         android:layout_height="match_parent" android:visibility="gone" android:fillViewport="true">

@@ -33,6 +33,7 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.AdapterView;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.RelativeLayout;
 import android.widget.ScrollView;
@@ -139,6 +140,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	private ToggleButton gyroToggle;
 	private ShellNavigation shellNavigation;
 	private View shellRoot;
+	private long typingFocusGeneration;
 	private long computerLoadGeneration;
 	private static final class ComputerEntry {
 		final long id;
@@ -170,7 +172,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	private long hostSelectionGeneration;
 	private long lastShownErrorGeneration = -1L;
 	public IDoTool doTool;
-	LinearLayout mouseLayout;
+	FrameLayout mouseSurfaceHost;
 	LinearLayout keyboardLayout;
 
 	LinearLayout jsLayout;
@@ -365,7 +367,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 
 
 
-		mouseLayout = (LinearLayout) findViewById(R.id.mouse);
+		mouseSurfaceHost = findViewById(R.id.mouse_surface_host);
+		mouseSurfaceHost.setClipToOutline(true);
 		keyboardLayout = (LinearLayout) findViewById(R.id.keyboard);
 
 		jsLayout = (LinearLayout) findViewById(R.id.js);
@@ -376,7 +379,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		jsSwitch=findViewById(R.id.jsToggle);
 
 		mouseControlView = new MyMouseView(this);
-		mouseLayout.addView(mouseControlView);
+		mouseSurfaceHost.addView(mouseControlView, new FrameLayout.LayoutParams(
+				FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 		//keyboardLayout.addView(new MyKeyboardView(getBaseContext(), MainActivity.this));
 
 		joystickControlView = new MyJSView(this);
@@ -414,6 +418,13 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		bindShellKey(R.id.key_escape, "Escape");
 		bindShellKey(R.id.key_switch, "alt+Tab");
 		bindShellKey(R.id.key_super, "super");
+		bindShellKey(R.id.touchpad_key_escape, "Escape", ShellNavigation.InputRole.POINTER);
+		bindShellKey(R.id.touchpad_key_switch, "alt+Tab", ShellNavigation.InputRole.POINTER);
+		bindShellKey(R.id.touchpad_key_super, "super", ShellNavigation.InputRole.POINTER);
+		bindShellKey(R.id.typing_key_escape, "Escape", ShellNavigation.InputRole.TYPING);
+		bindShellKey(R.id.typing_key_tab, "Tab", ShellNavigation.InputRole.TYPING);
+		bindShellKey(R.id.typing_key_backspace, "Backspace", ShellNavigation.InputRole.TYPING);
+		bindShellKey(R.id.typing_key_enter, "Enter", ShellNavigation.InputRole.TYPING);
 
 		ScrollView scrollView = (ScrollView) findViewById(R.id.key_drag_scrollView);
 		mCoolDragAndDropGridView = (CoolDragAndDropGridView) findViewById(R.id.key_drag_DragAndDropGridView);
@@ -512,10 +523,22 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		if (shellRoot == null || shellNavigation == null) return;
 		NativeShellViews.render(shellRoot, shellNavigation);
 		boolean typing = shellNavigation.topOverlay() == ShellNavigation.Overlay.TYPING;
-		if (!typing && ET != null) {
-			ET.clearFocus();
-			((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(ET.getWindowToken(), 0);
-			if (!shellNavigation.overlays().contains(ShellNavigation.Overlay.TYPING)) ET.setText("");
+		if (ET != null) {
+			InputMethodManager inputMethod = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+			if (typing) {
+				long generation = ++typingFocusGeneration;
+				ET.requestFocus();
+				ET.post(() -> {
+					if (generation != typingFocusGeneration || shellNavigation.topOverlay() != ShellNavigation.Overlay.TYPING ||
+							!activityResumed || isFinishing() || isDestroyed()) return;
+					inputMethod.showSoftInput(ET, InputMethodManager.SHOW_IMPLICIT);
+				});
+			} else {
+				typingFocusGeneration++;
+				ET.clearFocus();
+				inputMethod.hideSoftInputFromWindow(ET.getWindowToken(), 0);
+				if (!shellNavigation.overlays().contains(ShellNavigation.Overlay.TYPING)) ET.setText("");
+			}
 		}
 		if (shellNavigation.topOverlay() == ShellNavigation.Overlay.COMPUTERS) renderComputers();
 	}
@@ -2531,13 +2554,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 
 	}
 	private void useKeyboardSendText(IDoTool inputTool) {
-		CharSequence contents = ET.getText();
-		String t = contents.toString();
-		if(inputTool != null && !t.isEmpty()){
-			t = t.replaceAll("'", "'\\\"'\\\"'"); // -> xdotool type ''"'"''
-			t = t.replaceAll("\"", "\\\"");       // -> xdotool type '"'
-
-			inputTool.type("'" + t + "'");
+		String text = ET.getText().toString();
+		if (inputTool != null && !text.isEmpty()) {
+			inputTool.type(ShellTextEncoder.quoteForShell(text));
 			if(setting_keyboard_autoclear){
 				ET.setText("");
 			}
