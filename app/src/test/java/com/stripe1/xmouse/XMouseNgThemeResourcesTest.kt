@@ -56,9 +56,18 @@ class XMouseNgThemeResourcesTest {
         val appTheme = styles.getElementsByTagName("style").let { nodes ->
             (0 until nodes.length)
                 .map { nodes.item(it) as Element }
-                .first { it.getAttribute("name") == "AppTheme" }
+                .first { it.getAttribute("name") == "Base.XMouseNg" }
         }
         assertEquals("Theme.MaterialComponents.DayNight.DarkActionBar", appTheme.getAttribute("parent"))
+
+        // Qualified style bags must not lose the Material/AppCompat parent at runtime.
+        listOf("values", "values-v27", "values-v29", "values-night", "values-night-v27", "values-night-v29")
+            .forEach { qualifier ->
+                val nodes = document("app/src/main/res/$qualifier/styles.xml").getElementsByTagName("style")
+                val qualified = (0 until nodes.length).map { nodes.item(it) as Element }
+                    .first { it.getAttribute("name") == "AppTheme" }
+                assertEquals(qualifier, "Base.XMouseNg", qualified.getAttribute("parent"))
+            }
 
         val lightStatusBar = styleItems(appTheme)
         assertEquals("true", lightStatusBar["android:windowLightStatusBar"])

@@ -8,6 +8,29 @@ import org.gradle.process.CommandLineArgumentProvider
 apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.plugin.compose'
 
+// Values belong in the owner's external Gradle user properties, never this repo.
+def releaseSigningProperties = [
+    'RELEASE_STORE_FILE', 'RELEASE_KEY_ALIAS', 'RELEASE_STORE_PASSWORD', 'RELEASE_KEY_PASSWORD'
+].collectEntries { name -> [name, providers.gradleProperty(name).orNull] }
+def externalReleaseStore = releaseSigningProperties.RELEASE_STORE_FILE?.trim() ?
+    file(releaseSigningProperties.RELEASE_STORE_FILE) : null
+
+def verifyLocalReleaseSigning = tasks.register('verifyLocalReleaseSigning') {
+    group = 'verification'
+    description = 'Require complete external signing configuration before release packaging.'
+    // Do not serialize local signing credentials into a configuration-cache entry.
+    notCompatibleWithConfigurationCache('Release signing uses private local Gradle properties.')
+    doLast {
+        if (releaseSigningProperties.values().any { it == null || it.trim().isEmpty() }) {
+            throw new GradleException('Release signing requires all four external RELEASE_* Gradle properties. No unsigned or debug-key fallback is allowed.')
+        }
+        if (!externalReleaseStore.isFile() ||
+                externalReleaseStore.canonicalFile.toPath().startsWith(rootDir.canonicalFile.toPath())) {
+            throw new GradleException('Release signing requires an existing keystore outside the source repository.')
+        }
+    }
+}
+
 android {
     packaging {
         resources.merges += 'META-INF/LICENSE.md'
@@ -39,12 +62,21 @@ android {
         applicationId "com.stripe1.xmouse"
         minSdk = 26
         targetSdk = 37
-        versionCode 25
-        versionName "2.0.27"
+        versionCode 26
+        versionName "2.1.0"
         testInstrumentationRunner = 'androidx.test.runner.AndroidJUnitRunner'
+    }
+    signingConfigs {
+        release {
+            storeFile = externalReleaseStore
+            keyAlias = releaseSigningProperties.RELEASE_KEY_ALIAS
+            storePassword = releaseSigningProperties.RELEASE_STORE_PASSWORD
+            keyPassword = releaseSigningProperties.RELEASE_KEY_PASSWORD
+        }
     }
     buildTypes {
         release {
+            signingConfig = signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
@@ -62,6 +94,15 @@ android {
         androidTest.kotlin.srcDir 'src/testFixtures/java'
         test.resources.srcDir 'src/androidTest/assets'
     }
+}
+
+// AGP can omit validateSigningRelease when the signing config is incomplete.
+// Gate the release build and packaging too, so that cannot yield an unsigned APK.
+// Debug/test builds remain usable without the private key.
+tasks.matching {
+    it.name in ['preReleaseBuild', 'validateSigningRelease', 'packageRelease', 'packageReleaseBundle']
+}.configureEach {
+    dependsOn verifyLocalReleaseSigning
 }
 
 kotlin {

@@ -96,6 +96,10 @@ public class MyJSView extends View {
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         if (activity == null) return false;
+        // Keep joystick movement out of the short-screen controls' parent scroller.
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN && getParent() != null) {
+            getParent().requestDisallowInterceptTouchEvent(true);
+        }
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 if (gestureToken != null) activity.cancelControlInputGesture(gestureToken);

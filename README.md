@@ -1,6 +1,8 @@
-# XMouse
+# XMouse-NG
 
 Use an Android phone or tablet to control a Linux desktop over SSH.
+
+XMouse-NG **2.1.0 (26)** keeps the original `com.stripe1.xmouse` application identity and Android 8/API 26 minimum. The native interface has **Touchpad**, **Keys**, and **Actions** destinations; the computer header opens Computers, and the settings icon opens Settings. See [release and upgrade guidance](docs/releasing-xmouse-ng.md) for signing compatibility, data preservation, and validation limits.
 
 ## Features
 
@@ -12,38 +14,38 @@ Use an Android phone or tablet to control a Linux desktop over SSH.
 ## Requirements
 
 - Android 8.0 (API 26) or later. Android 7 (API 24–25) and earlier remain on the legacy release. This minimum is not a claim that every supported Android version or device has been tested.
-- A Linux host reachable by SSH, with an OpenSSH server and the existing `xdotool` (X11) or `ydotool` (Wayland) command setup. XMouse sends commands directly over SSH; it needs no XMouse-specific replacement daemon or cloud account.
-- For clipboard sharing, the Linux user needs `wl-copy` on a usable Wayland desktop, or `xclip`/`xsel` on X11. XMouse does not install clipboard tools; a usable desktop session/display must be available.
+- A Linux host reachable by SSH, with an OpenSSH server and the existing `xdotool` (X11) or `ydotool` (Wayland) command setup. XMouse-NG sends commands directly over SSH; it needs no XMouse-specific replacement daemon or cloud account.
+- For clipboard sharing, the Linux user needs `wl-copy` on a usable Wayland desktop, or `xclip`/`xsel` on X11. XMouse-NG does not install clipboard tools; a usable desktop session/display must be available.
 
-Clipboard sharing is a deliberate, one-way action: tap the toolbar button while connected to send the current plain-text clip. XMouse does not monitor the clipboard in the background, send clipboard text as simulated typing, or replay it after a disconnect. Empty, non-text, and over-64-KiB clips are not sent.
+Clipboard sharing is a deliberate, one-way action: tap the toolbar button while connected to send the current plain-text clip. XMouse-NG does not monitor the clipboard in the background, send clipboard text as simulated typing, or replay it after a disconnect. Empty, non-text, and over-64-KiB clips are not sent.
 
 ## Connect to a host
 
-In **Manage Hosts**, enter a hostname or IP address, SSH port, username, and password or key credentials. Host discovery is optional; manually entered endpoints do not need an SSH service advertisement. On Android 17 (API 37), grant **Local network access** when prompted for LAN connections or discovery.
+Open **Computers** from the computer header, then **Add computer** to enter a hostname or IP address, SSH port, username, and password or key credentials. Host discovery is optional; manually entered endpoints do not need an SSH service advertisement. On Android 17 (API 37), grant **Local network access** when prompted for LAN connections or discovery.
 
-On first connection, XMouse shows the SSH host-key fingerprint before sending credentials or commands. Compare the displayed SHA-256 fingerprint with one obtained from the computer owner through an independent, trusted channel, then accept only if it matches. Reject or cancel if you cannot verify it. A changed key blocks the connection; use the separate replacement review only after independently verifying the new fingerprint. Replacing trust does not reconnect—you must connect again.
+On first connection, XMouse-NG shows the SSH host-key fingerprint before sending credentials or commands. Compare the displayed SHA-256 fingerprint with one obtained from the computer owner through an independent, trusted channel, then accept only if it matches. Reject or cancel if you cannot verify it. A changed key blocks the connection; use the separate replacement review only after independently verifying the new fingerprint. Replacing trust does not reconnect—you must connect again.
 
 ## Private keys and restored credentials
 
-For key authentication, enable **Use an SSH Key** in **Settings**. For an encrypted key, set **Optional Key Passphrase** first, then tap **Private Key** and choose the file with Android's document picker. XMouse keeps a protected app-private copy, so the source document can later be moved or removed.
+For key authentication, enable **Use an SSH Key** in **Settings → Advanced**. For an encrypted key, set **Optional Key Passphrase** first, then tap **Private Key** and choose the file with Android's document picker. XMouse-NG keeps a protected app-private copy, so the source document can later be moved or removed.
 
-An old external key path may no longer be readable, and a device-key loss or backup restore may leave host metadata without usable secrets. You may need to select the private key again or re-enter passwords/passphrases. Secret bytes are not included in XMouse's metadata backup, and there is no plaintext credential backup. If XMouse offers a one-time credential re-entry prompt, the value is used only for that connection and is not saved. To save credentials again, update the password in **Manage Hosts**, set the passphrase in **Settings**, or re-import the key in **Settings**, as applicable.
+An old external key path may no longer be readable, and a device-key loss or backup restore may leave host metadata without usable secrets. You may need to select the private key again or re-enter passwords/passphrases. Secret bytes are not included in XMouse-NG's metadata backup, and there is no plaintext credential backup. If XMouse-NG offers a one-time credential re-entry prompt, the value is used only for that connection and is not saved. To save credentials again, edit the computer in **Computers**, or use **Settings → Advanced** for global key/passphrase controls, as applicable. A blank replacement password on an existing computer means unchanged.
 
 ## Keep a session while switching apps
 
-Start a session from XMouse while it is visible. With the device awake and the Android process, network, and SSH host still available, the foreground session can remain active while you switch apps; returning to XMouse reattaches to it. The session notification provides **Open controls** and **Disconnect**. On Android 13 (API 33) and later, notification permission controls whether those actions appear in the notification drawer. If permission is denied, Android still discloses the foreground service in Task Manager, and **Session controls** in XMouse still provides an in-app Disconnect option.
+Start a session from XMouse-NG while it is visible. With the device awake and the Android process, network, and SSH host still available, the foreground session can remain active while you switch apps; returning to XMouse-NG reattaches to it. The session notification provides **Open controls** and **Disconnect**. On Android 13 (API 33) and later, notification permission controls whether those actions appear in the notification drawer. If permission is denied, Android still discloses the foreground service in Task Manager, and **Session controls** in XMouse-NG still provides an in-app Disconnect option.
 
 Use **Disconnect** from the notification or **Session controls** when finished. Screen-off, extended background, process termination, and force-stop can interrupt a session; indefinite connectivity or automatic restart is not promised.
 
 ## Existing keyboard layouts
 
-On upgrade, each valid legacy active layout and each of the three preset CSV files is migrated into its own named layout. The original CSV files remain unchanged as recovery sources. If a source is unreadable or malformed, XMouse warns and retains it rather than silently replacing it with defaults.
+On upgrade, each valid legacy active layout and each of the three preset CSV files is migrated into its own named layout. The original CSV files remain unchanged as recovery sources. If a source is unreadable or malformed, XMouse-NG warns and retains it rather than silently replacing it with defaults.
 
-Open **Manage layouts** from the main menu to create and name layouts, rename or duplicate any profile, select/load it for normal controls, or delete it after confirmation. Profiles are identified independently of their names, so duplicate names are allowed; the manager lists all profiles, including the migrated active layout and all three presets, without a three-layout limit. At least one layout must remain. Choose **Edit Keyboard Layout** from the main menu to edit the currently selected layout.
+Open **Actions → More → Manage layouts** to create and name layouts, rename or duplicate any profile, select/load it for normal controls, or delete it after confirmation. Profiles are identified independently of their names, so duplicate names are allowed; the manager lists all profiles, including the migrated active layout and all three presets, without a three-layout limit. At least one layout must remain. Use **Actions → Edit** for action forms or **More → Advanced editor** for ten-column reorder, drafts, and history. Existing custom widths, colors, and commands remain stored unchanged.
 
 ## Optional: find computers with Avahi
 
-**Manage Hosts → Find computers** discovers only hosts advertising the `_ssh._tcp` DNS-SD service. Running SSH alone does not guarantee that a host advertises this service. Discovery requires the phone and host to share a LAN where multicast DNS-SD is allowed; guest-network isolation, VPNs, or blocked multicast can prevent results. Manual hostname/IP entry remains available.
+**Computers → Find computers** discovers only hosts advertising the `_ssh._tcp` DNS-SD service. Running SSH alone does not guarantee that a host advertises this service. Discovery requires the phone and host to share a LAN where multicast DNS-SD is allowed; guest-network isolation, VPNs, or blocked multicast can prevent results. Manual hostname/IP entry remains available.
 
 On Debian or Ubuntu, install and start Avahi if you want to advertise SSH:
 
@@ -76,7 +78,7 @@ This advertisement helps discovery only; it does not provide credentials or repl
 
 ## Upgrades and rollback
 
-The modern release migrates app data forward. Do not treat installing a legacy APK over migrated data as a safe rollback: no reverse database/data migration is provided.
+Back up app metadata/layout recovery files before upgrading and retain credentials separately; metadata backup does not contain usable secrets. Install in place only over an installation signed with the same compatible release key. A differently signed original/debug build cannot be updated in place with this APK; do not uninstall or clear data just to bypass that rejection. The modern release migrates app data forward. Do not treat installing a legacy APK over migrated data as a safe rollback: no reverse database/data migration is provided. See the [release guide](docs/releasing-xmouse-ng.md) before proceeding.
 
 ## Support
 

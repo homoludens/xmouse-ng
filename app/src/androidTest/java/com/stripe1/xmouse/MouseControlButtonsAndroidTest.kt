@@ -98,6 +98,11 @@ class MouseControlButtonsAndroidTest {
                 assertToggleSemantics(gyro, expectedChecked = true)
 
                 activity.navigation.setJoystick(true)
+            }
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            scenario.onActivity { activity ->
+                val joystickOrder = listOf(R.id.js_fifthMouseButton, R.id.js_firstMouseButton,
+                    R.id.js_secondMouseButton, R.id.js_thirdMouseButton, R.id.js_fourthMouseButton, R.id.js_jsToggle)
                 assertPhysicalOrder(activity, joystickOrder)
                 joystickOrder.forEach { id -> assertAccessibleIconControl(activity.findViewById(id)) }
                 assertTrue("joystick mode exposes its return-to-touchpad control",

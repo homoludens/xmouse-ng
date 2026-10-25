@@ -132,6 +132,7 @@ public final class NativeShellViews {
         for (int start = 0; start < entries.size(); start += columns) {
             LinearLayout row = new LinearLayout(root.getContext());
             row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setBaselineAligned(false);
             LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             rowParams.bottomMargin = dp(root, 8);
@@ -162,7 +163,8 @@ public final class NativeShellViews {
         button.setSingleLine(false);
         button.setMaxLines(3);
         button.setEllipsize(null);
-        button.setTextSize(14);
+        button.setTextSize(12);
+        button.setLetterSpacing(0f);
         button.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
         button.setGravity(Gravity.CENTER);
         button.setPadding(dp(root, 5), dp(root, 8), dp(root, 5), dp(root, 8));

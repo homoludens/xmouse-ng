@@ -31,8 +31,7 @@ class NativeShellAndroidTest {
 
     @Test fun nativeComputerFormLayoutHasPersistentLabelsBlankPasswordToggleAndScrollableNarrowLargeFontTargets() {
         for (dark in listOf(false, true)) {
-            val intent = Intent(ApplicationProvider.getApplicationContext(), MainInsetsFixtureActivity::class.java)
-                .putExtra("fixture.fontScale", 1.5f).putExtra("fixture.dark", dark)
+            val intent = MainInsetsFixtureActivity.configuredIntent(ApplicationProvider.getApplicationContext(), 1.5f, dark)
             ActivityScenario.launch<MainInsetsFixtureActivity>(intent).use { scenario ->
                 scenario.onActivity { activity ->
                     // Layout-only fixture: no repository, host trust, discovery, or SSH is initialized.
@@ -59,6 +58,7 @@ class NativeShellAndroidTest {
                         assertTrue(root.findViewById<View>(id).height >= 48 * density - 1)
                     val scroll = root.getChildAt(1) as android.widget.ScrollView
                     assertTrue(scroll.getChildAt(0).height > scroll.height)
+                    scroll.isSmoothScrollingEnabled = false
                     scroll.fullScroll(View.FOCUS_DOWN)
                     assertTrue(scroll.scrollY > 0)
                 }
@@ -68,12 +68,14 @@ class NativeShellAndroidTest {
 
     @Test fun narrowLargeFontHeaderAndLabeledBottomRoutesRemainReachableInBothThemes() {
         for (dark in listOf(false, true)) {
-            val intent = Intent(ApplicationProvider.getApplicationContext(), MainInsetsFixtureActivity::class.java)
-                .putExtra("fixture.fontScale", 1.5f).putExtra("fixture.dark", dark)
+            val intent = MainInsetsFixtureActivity.configuredIntent(ApplicationProvider.getApplicationContext(), 1.5f, dark)
             ActivityScenario.launch<MainInsetsFixtureActivity>(intent).use { scenario ->
                 instrumentation.waitForIdleSync()
                 scenario.onActivity { activity ->
                     val root = activity.findViewById<ViewGroup>(R.id.native_shell)
+                    assertEquals(1.5f, activity.resources.configuration.fontScale)
+                    assertEquals(if (dark) android.content.res.Configuration.UI_MODE_NIGHT_YES else android.content.res.Configuration.UI_MODE_NIGHT_NO,
+                        activity.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK)
                     val density = activity.resources.displayMetrics.density
                     val width = (320 * density).toInt()
                     val height = (720 * density).toInt()
@@ -106,6 +108,7 @@ class NativeShellAndroidTest {
                     val surface = root.findViewById<FrameLayout>(R.id.mouse_surface_host)
                     val pointer = (0 until surface.childCount).map { surface.getChildAt(it) }
                         .filterIsInstance<MyMouseView>().single()
+                    assertEquals("scroll controls must be drawn and hit-tested above the pointer", 0, surface.indexOfChild(pointer))
                     assertTrue("real pointer host has positive width", pointer.width > 0)
                     assertTrue("real pointer host has positive height", pointer.height > 0)
                     for (id in listOf(R.id.firstMouseButton, R.id.secondMouseButton, R.id.thirdMouseButton)) {
@@ -134,6 +137,7 @@ class NativeShellAndroidTest {
                         val button = root.findViewById<Button>(id)
                         assertTrue("quick key $id is labeled", button.text.isNotBlank())
                         assertTrue("quick key $id is a 48dp target", button.height >= 48 * density - 1)
+                        assertTextFits(button)
                     }
                     assertTrue("typing access remains a 48dp target",
                         root.findViewById<View>(R.id.type_on_computer).height >= 48 * density - 1)
@@ -144,8 +148,7 @@ class NativeShellAndroidTest {
 
     @Test fun keysCategoriesRenderAccessibleCatalogAndRetireBeforeReplacingControls() {
         for (dark in listOf(false, true)) {
-            val intent = Intent(ApplicationProvider.getApplicationContext(), MainInsetsFixtureActivity::class.java)
-                .putExtra("fixture.fontScale", 1.5f).putExtra("fixture.dark", dark)
+            val intent = MainInsetsFixtureActivity.configuredIntent(ApplicationProvider.getApplicationContext(), 1.5f, dark)
             ActivityScenario.launch<MainInsetsFixtureActivity>(intent).use { scenario ->
                 instrumentation.waitForIdleSync()
                 scenario.onActivity { activity ->
@@ -215,6 +218,9 @@ class NativeShellAndroidTest {
                             for (line in 0 until layout.lineCount) {
                                 assertEquals("${button.text} is not ellipsized", 0, layout.getEllipsisCount(line))
                             }
+                            assertTrue("${button.text} text fits vertically", layout.height <=
+                                button.height - button.compoundPaddingTop - button.compoundPaddingBottom)
+                            assertTrue("${button.text} is not clipped by its weighted row", button.height <= (button.parent as View).height)
                         }
                     }
                 }
@@ -224,9 +230,9 @@ class NativeShellAndroidTest {
 
     @Test fun typingUsesLabeledMultilineImeAndReachableExplicitQuickKeys() {
         ActivityScenario.launch(MainInsetsFixtureActivity::class.java).use { scenario ->
+            scenario.onActivity { it.findViewById<View>(R.id.type_on_computer).performClick() }
             instrumentation.waitForIdleSync()
             scenario.onActivity { activity ->
-                activity.findViewById<View>(R.id.type_on_computer).performClick()
                 val root = activity.findViewById<ViewGroup>(R.id.native_shell)
                 val input = activity.findViewById<EditText>(R.id.keyboard_input)
                 assertTrue(input.isShown)
@@ -308,8 +314,7 @@ class NativeShellAndroidTest {
 
     @Test fun actualActionTilesRenderAsTwoColumnsWithCustomWidthsAndThemeContrast() {
         for (dark in listOf(false, true)) {
-            val intent = Intent(ApplicationProvider.getApplicationContext(), MainInsetsFixtureActivity::class.java)
-                .putExtra("fixture.fontScale", 1.5f).putExtra("fixture.dark", dark)
+            val intent = MainInsetsFixtureActivity.configuredIntent(ApplicationProvider.getApplicationContext(), 1.5f, dark)
             ActivityScenario.launch<MainInsetsFixtureActivity>(intent).use { scenario ->
                 scenario.onActivity { activity ->
                     val root = activity.findViewById<ViewGroup>(R.id.native_shell)
@@ -320,7 +325,7 @@ class NativeShellAndroidTest {
                         id = "fixture-actions",
                         name = "Same name",
                         buttons = listOf(
-                            LayoutButton("regular-1", "Regular one", "key alt+F4", 5, "#E0EFE8"),
+                            LayoutButton("regular-1", "Synthetic Alpha", "key alt+F4", 5, "#E0EFE8"),
                             LayoutButton("regular-2", "Regular two", "printf exact", 2, "#80ABCDEF"),
                             LayoutButton("wide", "Wide action", "printf wide", 10, "#212121"),
                             LayoutButton("custom", "Custom span", "printf custom", 7, "#FFFFFF"),
@@ -360,6 +365,14 @@ class NativeShellAndroidTest {
                         assertTrue("tile remains a 48dp+ target", card.height >= 48 * activity.resources.displayMetrics.density - 1)
                         assertTrue("tile accessibility includes its stable ID", card.contentDescription.toString().contains(card.tag.toString()))
                     }
+                    val longTitle = requireNotNull(findText(firstRowCards[0], "Synthetic Alpha"))
+                    assertTrue("the action title fits its text height", longTitle.layout.height <= longTitle.height)
+                    assertEquals("both words remain readable at 320dp/1.5x", longTitle.text.length,
+                        longTitle.layout.getLineEnd(longTitle.layout.lineCount - 1))
+                    for (line in 0 until longTitle.layout.lineCount) {
+                        assertEquals("the representative action title must not be ellipsized", 0,
+                            longTitle.layout.getEllipsisCount(line))
+                    }
                     val onAccent = firstRowCards[0].contentDescription
                     assertTrue(onAccent.toString().contains("alt+F4"))
                     val subtitle = findText(firstRowCards[0], "alt+F4")
@@ -394,6 +407,9 @@ class NativeShellAndroidTest {
                 dialog.listView.performItemClick(null, 4, 4)
                 assertEquals("fixture-profile-4", activity.selectedActionProfile!!.id)
                 assertTrue(activity.findViewById<View>(R.id.actions_layout_picker).contentDescription.toString().contains("fixture-profile-4"))
+            }
+            instrumentation.waitForIdleSync()
+            scenario.onActivity { activity ->
                 assertEquals(ShellNavigation.InputRole.ACTIONS, activity.navigation.inputRole())
             }
         }
@@ -401,8 +417,7 @@ class NativeShellAndroidTest {
 
     @Test fun actionEditorFormKeepsPresetDefaultsAndOptionalRgbScrollableAtNarrowWidth() {
         for (dark in listOf(false, true)) {
-        val intent = Intent(ApplicationProvider.getApplicationContext(), MainInsetsFixtureActivity::class.java)
-            .putExtra("fixture.fontScale", 1.5f).putExtra("fixture.dark", dark)
+        val intent = MainInsetsFixtureActivity.configuredIntent(ApplicationProvider.getApplicationContext(), 1.5f, dark)
         ActivityScenario.launch<MainInsetsFixtureActivity>(intent).use { scenario ->
             scenario.onActivity { activity ->
                 activity.setContentView(R.layout.activity_action_editor)
@@ -446,5 +461,14 @@ class NativeShellAndroidTest {
             if (child is Button) result += child
             if (child is ViewGroup) collectButtons(child, result)
         }
+    }
+
+    private fun assertTextFits(button: Button) {
+        assertTrue("${button.text} must not clip vertically", button.layout.height <=
+            button.height - button.compoundPaddingTop - button.compoundPaddingBottom)
+        for (line in 0 until button.layout.lineCount) assertEquals(0, button.layout.getEllipsisCount(line))
+        val visible = android.graphics.Rect()
+        assertTrue(button.getLocalVisibleRect(visible))
+        assertEquals("${button.text} must not be clipped by its weighted parent row", button.height, visible.height())
     }
 }

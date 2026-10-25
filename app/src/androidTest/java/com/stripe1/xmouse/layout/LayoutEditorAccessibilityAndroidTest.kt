@@ -65,7 +65,9 @@ class LayoutEditorAccessibilityAndroidTest {
 
                 compose.onNodeWithContentDescription("Target, button 1 of 4. Move later")
                     .performScrollTo().performClick()
-                compose.waitUntil(5_000) { repository.loadDraft(saved.id)?.buttons?.getOrNull(1)?.id == "target" }
+                // Returning exactly to the saved order intentionally has no pending draft.
+                compose.waitUntil(5_000) { repository.loadDraft(saved.id) == null }
+                assertEquals(saved, repository.loadProfile(saved.id))
                 compose.onNodeWithContentDescription("Target, button 2 of 4. Move later")
                     .performScrollTo().performClick()
                 compose.waitUntil(5_000) { repository.loadDraft(saved.id)?.buttons?.getOrNull(2)?.id == "target" }

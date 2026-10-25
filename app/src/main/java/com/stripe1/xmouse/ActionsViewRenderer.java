@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -89,6 +90,7 @@ public final class ActionsViewRenderer {
         for (List<ActionTilePresentation> tiles : rows) {
             LinearLayout row = new LinearLayout(context);
             row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setBaselineAligned(false);
             row.setGravity(Gravity.CENTER_VERTICAL);
             LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -166,6 +168,7 @@ public final class ActionsViewRenderer {
 
             LinearLayout controls = new LinearLayout(context);
             controls.setOrientation(LinearLayout.HORIZONTAL);
+            controls.setBaselineAligned(false);
             controls.setGravity(Gravity.CENTER_VERTICAL);
             controls.setPadding(0, dp(context, 4), 0, 0);
             MaterialButton run = scriptButton(context, R.string.ng_run_script);
@@ -209,14 +212,14 @@ public final class ActionsViewRenderer {
                 action.getTitle(), presentation.getSubtitle(), action.getId()));
 
         LinearLayout body = new LinearLayout(context);
-        body.setOrientation(LinearLayout.HORIZONTAL);
-        body.setGravity(Gravity.CENTER_VERTICAL);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setGravity(Gravity.START);
         body.setPadding(dp(context, 12), dp(context, 10), dp(context, 10), dp(context, 10));
         ImageView icon = new ImageView(context);
         icon.setImageResource(R.drawable.ic_ng_actions);
         icon.setImageTintList(ColorStateList.valueOf(foreground));
         LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(context, 22), dp(context, 22));
-        iconParams.setMarginEnd(dp(context, 10));
+        iconParams.bottomMargin = dp(context, 8);
         body.addView(icon, iconParams);
 
         LinearLayout labels = new LinearLayout(context);
@@ -227,14 +230,16 @@ public final class ActionsViewRenderer {
         title.setTextSize(15);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         title.setMaxLines(2);
+        title.setEllipsize(TextUtils.TruncateAt.END);
         labels.addView(title, matchWrap());
         TextView subtitle = new TextView(context);
         subtitle.setText(editMode ? context.getString(R.string.ng_tap_to_edit_action) : presentation.getSubtitle());
         subtitle.setTextColor(foreground);
         subtitle.setTextSize(12);
         subtitle.setMaxLines(2);
+        subtitle.setEllipsize(TextUtils.TruncateAt.END);
         labels.addView(subtitle, matchWrap());
-        body.addView(labels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        body.addView(labels, matchWrap());
         card.addView(body);
         return card;
     }

@@ -1,6 +1,8 @@
 package com.stripe1.xmouse
 
 import android.os.Bundle
+import android.content.Context
+import android.content.Intent
 import android.content.res.Configuration
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -10,6 +12,25 @@ import com.stripe1.xmouse.layout.LayoutProfile
 
 /** Test-only host for measuring the real main-screen XML without starting session or data code. */
 class MainInsetsFixtureActivity : AppCompatActivity() {
+    companion object {
+        private val nextConfiguration = java.util.concurrent.atomic.AtomicReference<Configuration?>()
+
+        /** Install an isolated base context before the framework first reads Activity resources. */
+        fun configuredIntent(context: Context, fontScale: Float, dark: Boolean): Intent {
+            nextConfiguration.set(Configuration(context.resources.configuration).apply {
+                this.fontScale = fontScale
+                uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                    if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+            })
+            return Intent(context, MainInsetsFixtureActivity::class.java).putExtra("fixture.dark", dark)
+        }
+    }
+
+    override fun attachBaseContext(newBase: Context) {
+        val configuration = nextConfiguration.getAndSet(null)
+        super.attachBaseContext(if (configuration == null) newBase else newBase.createConfigurationContext(configuration))
+    }
+
     lateinit var navigation: ShellNavigation
         private set
     val shellEvents = mutableListOf<String>()
@@ -18,13 +39,9 @@ class MainInsetsFixtureActivity : AppCompatActivity() {
     var actionsEditing = false
     var actionPicker: android.app.AlertDialog? = null
     override fun onCreate(savedInstanceState: Bundle?) {
-        if (intent.hasExtra("fixture.fontScale")) {
-            applyOverrideConfiguration(Configuration().apply {
-                fontScale = intent.getFloatExtra("fixture.fontScale", 1f)
-                uiMode = if (intent.getBooleanExtra("fixture.dark", false))
-                    Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
-            })
-        }
+        if (intent.hasExtra("fixture.dark")) delegate.localNightMode =
+            if (intent.getBooleanExtra("fixture.dark", false)) androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES
+            else androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         val root = findViewById<android.view.View>(R.id.native_shell)
@@ -70,6 +87,7 @@ class MainInsetsFixtureActivity : AppCompatActivity() {
         mouseSurface.clipToOutline = true
         mouseSurface.addView(
             MyMouseView(this, null),
+            0,
             FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
         )
         JoystickSurfaceLayout.addTo(

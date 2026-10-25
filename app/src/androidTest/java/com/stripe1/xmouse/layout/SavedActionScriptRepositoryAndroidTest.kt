@@ -13,11 +13,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** Uses only the instrumentation APK's private SQLite file, never the installed app's database. */
+/** Uses a unique path-checked fixture SQLite file, never the application's normal database. */
 @RunWith(AndroidJUnit4::class)
 class SavedActionScriptRepositoryAndroidTest {
     @Test fun actionsListsOnlyActualScriptRowsAndReturnsRawTextOnlyForExecLookup() {
-        val base: Context = InstrumentationRegistry.getInstrumentation().context
+        val base: Context = InstrumentationRegistry.getInstrumentation().targetContext
         val directory = File(base.cacheDir, "script-fixture-${UUID.randomUUID()}")
         val testContext = IsolatedDatabaseContext(base, directory)
         try {

@@ -25,8 +25,7 @@ import org.junit.runner.RunWith
 class NativeSettingsAndroidTest {
     @Test fun savedBindingsChoicesBackAndAdvancedRemainReachableWithInsetsAndLargeFontsInBothThemes() {
         for (dark in listOf(false, true)) {
-            val intent = Intent(ApplicationProvider.getApplicationContext(), MainInsetsFixtureActivity::class.java)
-                .putExtra("fixture.fontScale", 1.5f).putExtra("fixture.dark", dark)
+            val intent = MainInsetsFixtureActivity.configuredIntent(ApplicationProvider.getApplicationContext(), 1.5f, dark)
             ActivityScenario.launch<MainInsetsFixtureActivity>(intent).use { scenario ->
                 scenario.onActivity { activity ->
                     val preferenceName = "native-settings-fixture-${UUID.randomUUID()}"
@@ -89,6 +88,7 @@ class NativeSettingsAndroidTest {
                         }
                         val scroll = root.findViewById<ScrollView>(R.id.settings_scroll)
                         assertTrue(scroll.getChildAt(0).height > scroll.height)
+                        scroll.isSmoothScrollingEnabled = false
                         scroll.fullScroll(View.FOCUS_DOWN); assertTrue(scroll.scrollY > 0)
                         root.findViewById<View>(R.id.settings_advanced).performClick()
                         root.findViewById<View>(R.id.settings_back).performClick()

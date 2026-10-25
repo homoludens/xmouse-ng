@@ -24,7 +24,7 @@
                     android:textColor="@color/ng_text_primary" />
             </LinearLayout>
         </LinearLayout>
-        <LinearLayout android:layout_width="96dp" android:layout_height="wrap_content" android:orientation="vertical">
+        <LinearLayout android:layout_width="112dp" android:layout_height="wrap_content" android:orientation="vertical">
             <LinearLayout android:layout_width="match_parent" android:layout_height="48dp" android:orientation="horizontal">
                 <ImageButton android:id="@+id/header_settings" android:layout_width="48dp" android:layout_height="48dp"
                     android:background="?attr/selectableItemBackgroundBorderless" android:padding="12dp"
@@ -35,7 +35,7 @@
             </LinearLayout>
             <TextView android:id="@+id/connection_status" android:layout_width="match_parent"
                 android:layout_height="wrap_content" android:minHeight="48dp" android:gravity="center"
-                android:padding="2dp" android:textSize="11sp" android:text="@string/ng_disconnected"
+                android:padding="2dp" android:textSize="10sp" android:text="@string/ng_disconnected"
                 android:accessibilityLiveRegion="polite"
                 android:textColor="@color/ng_text_secondary" android:background="?attr/selectableItemBackground"
                 android:clickable="true" android:focusable="true" />

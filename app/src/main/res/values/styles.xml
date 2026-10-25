@@ -1,7 +1,9 @@
 <resources>
 
     <!-- Base application theme. -->
-    <style name="AppTheme" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
+    <!-- Every qualified AppTheme inherits this complete theme. A qualified style
+         without an explicit parent can replace the base bag's Material parent. -->
+    <style name="Base.XMouseNg" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
         <item name="colorPrimary">@color/ng_accent</item>
         <item name="colorPrimaryDark">@color/ng_accent</item>
         <item name="colorAccent">@color/ng_accent</item>
@@ -20,6 +22,8 @@
         <item name="android:navigationBarColor">@color/ng_navigation_bar</item>
         <item name="android:windowLightStatusBar">true</item>
     </style>
+
+    <style name="AppTheme" parent="Base.XMouseNg" />
 
     <style name="AppTheme.NoActionBar">
         <item name="windowActionBar">false</item>
@@ -42,6 +46,10 @@
     <!-- Explicitly applied by the redesigned Views; legacy Button/ToggleButton
          widget classes retain their existing casts and compound-drawable behavior. -->
     <style name="Widget.XMouseNg.ControlButton" parent="Widget.MaterialComponents.Button.OutlinedButton">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:paddingStart">8dp</item>
+        <item name="android:paddingEnd">8dp</item>
         <item name="android:minWidth">@dimen/ng_min_touch_target</item>
         <item name="android:minHeight">@dimen/ng_min_touch_target</item>
         <item name="android:insetTop">0dp</item>
@@ -58,6 +66,10 @@
     </style>
 
     <style name="Widget.XMouseNg.ControlButton.Accent" parent="Widget.MaterialComponents.Button">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:paddingStart">8dp</item>
+        <item name="android:paddingEnd">8dp</item>
         <item name="android:minWidth">@dimen/ng_min_touch_target</item>
         <item name="android:minHeight">@dimen/ng_min_touch_target</item>
         <item name="android:insetTop">0dp</item>

@@ -141,6 +141,8 @@ class SessionForegroundServiceAndroidTest {
     private val oldGyroSettings = mutableMapOf<String, String?>()
     private var oldSettingDelay: Int? = null
     private var savedScriptId = 0
+    private var ownedControlProfileId: String? = null
+    private var previousControlProfileId: String? = null
     private var oldPermissionRequestedPreference: Boolean? = null
     private val device get() = UiDevice.getInstance(instrumentation)
 
@@ -456,6 +458,24 @@ class SessionForegroundServiceAndroidTest {
         assertTrue("native action tile did not receive its click: $title", button.performClick())
     }
 
+    private fun realPointer(activity: MainActivity): MyMouseView {
+        val host = activity.findViewById<ViewGroup>(R.id.mouse_surface_host)
+        return (0 until host.childCount).map { host.getChildAt(it) }.filterIsInstance<MyMouseView>().single()
+    }
+
+    /** Fresh installs are intentionally empty. Dispatch tests own their explicit synthetic controls. */
+    private fun installSavedControlProfile() {
+        val repository = LayoutProfileRepository(File(context.filesDir, LayoutEditorActivity.PROFILE_DIRECTORY))
+        previousControlProfileId = repository.loadSelectedProfile()?.id
+        val profile = LayoutProfile(id = "control-routes-${java.util.UUID.randomUUID()}", name = "Synthetic routes",
+            buttons = listOf(LayoutButton("backspace", "Backspace", "key BackSpace", 5),
+                LayoutButton("volume", "+Volume", "key XF86AudioRaiseVolume", 5),
+                LayoutButton("minimize", "Minimize", "xdotool windowminimize $(xdotool getactivewindow)", 10)))
+        repository.createProfile(profile)
+        repository.selectProfile(profile.id)
+        ownedControlProfileId = profile.id
+    }
+
     private fun addSavedScript(activity: MainActivity, alias: String, command: String): Int {
         val database = MainActivity::class.java.getDeclaredField("db").apply { isAccessible = true }
             .get(activity) as DatabaseHandler
@@ -620,10 +640,10 @@ class SessionForegroundServiceAndroidTest {
         assertTrue("Session controls menu action was not handled", handled.get())
     }
 
-    private fun eventually(timeoutSeconds: Long = 5, predicate: () -> Boolean) {
+    private fun eventually(timeoutSeconds: Long = 5, message: () -> String = { "condition did not become true" }, predicate: () -> Boolean) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
         while (!predicate() && System.nanoTime() < deadline) Thread.sleep(10)
-        assertTrue("condition did not become true", predicate())
+        assertTrue(message(), predicate())
     }
 
     private fun grantNotificationPermissionForDisclosureTest() {
@@ -854,6 +874,13 @@ class SessionForegroundServiceAndroidTest {
         context.stopService(Intent(context, SessionForegroundService::class.java))
         scenario?.close()
         scenario = null
+        ownedControlProfileId?.let { id ->
+            val repository = LayoutProfileRepository(File(context.filesDir, LayoutEditorActivity.PROFILE_DIRECTORY))
+            previousControlProfileId?.let { repository.selectProfile(it) }
+            repository.deleteProfile(id, confirmed = true)
+        }
+        ownedControlProfileId = null
+        previousControlProfileId = null
         owner?.close()
         owner = null
         transportOwner?.close()
@@ -1054,7 +1081,7 @@ class SessionForegroundServiceAndroidTest {
             var current = false
             activityScenario.onActivity { activity ->
                 current = activity !== firstActivity.get() && activitySnapshot(activity)?.connection?.isReady == true &&
-                    activity.findViewById<Toolbar>(R.id.toolbar).subtitle == "Connected"
+                    activity.findViewById<android.widget.TextView>(R.id.connection_status).text.toString() == "● Connected"
             }
             current
         }
@@ -1106,11 +1133,11 @@ class SessionForegroundServiceAndroidTest {
         assertFalse(recordingOwner.controller.current.connection.isReady)
         assertFalse(recordingOwner.controller.current.foregroundRecoveryAvailable)
         activityScenario.onActivity { activity ->
-            assertEquals("Connection failed", activity.findViewById<Toolbar>(R.id.toolbar).subtitle)
+            assertEquals("● Connection failed", activity.findViewById<android.widget.TextView>(R.id.connection_status).text.toString())
         }
         showSessionControlsFromMenu(activityScenario)
         waitForText("Retry")
-        clickText("Disconnect")
+        clickText(context.getString(R.string.session_controls_disconnect))
         eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
         assertEquals(3, recordingOwner.attemptsCreated)
 
@@ -1410,16 +1437,32 @@ class SessionForegroundServiceAndroidTest {
             assertTrue(recordingOwner.backend.commandOrder.isEmpty())
 
             compose.onNodeWithTag("layout-editor-save").performScrollTo().performClick()
+            // The serial repository worker emits closed asynchronously; advance Compose's
+            // test clock so the Activity's LaunchedEffect can actually finish the editor.
+            compose.waitUntil(10_000) {
+                var returned = false
+                instrumentation.runOnMainSync {
+                    returned = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+                        .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED).any { it is MainActivity }
+                }
+                returned
+            }
             eventually { repository.loadProfile(original.id) == draft && repository.loadDraft(original.id) == null }
             assertTrue("saving and returning to normal mode must not itself execute a button",
                 recordingOwner.backend.writes.isEmpty())
 
-            eventually {
+            var returnState = ""
+            eventually(timeoutSeconds = 10, message = { "editor return did not restore saved controls: $returnState" }) {
                 var reloaded = false
                 activityScenario.onActivity { activity ->
                     val button = activity.selectedSavedActionProfile()?.buttons?.singleOrNull { it.title == "Saved action" }
                     reloaded = button?.command == expectedCommand && button.width == created.width &&
                         activity.activeControlInputToken() != null
+                    returnState = "saved=${button?.command == expectedCommand}; width=${button?.width}; focus=${activity.hasWindowFocus()}; " +
+                        "lifecycle=${activity.lifecycle.currentState}; overlays=${activity.shellNavigation().overlays()}; " +
+                        "phase=${activitySnapshot(activity)?.connection?.phase}; resumed=" +
+                        androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+                            .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED).map { it.javaClass.simpleName }
                 }
                 reloaded
             }
@@ -1593,6 +1636,10 @@ class SessionForegroundServiceAndroidTest {
             activityScenario.onActivity { active = it.activePointerInputToken() != null }
             active
         }
+        eventually { owner.backend.writes.toList() == listOf("\r\n") }
+        assertEquals("only the explicitly configured empty startup line precedes navigation", listOf("shell:"), owner.backend.commandOrder.toList())
+        owner.backend.writes.clear()
+        owner.backend.commandOrder.clear()
         val generation = owner.controller.current.generation
         val connection = owner.controller.current.connection
         activityScenario.onActivity { activity ->
@@ -1628,8 +1675,58 @@ class SessionForegroundServiceAndroidTest {
     }
 
     @Test
+    fun scrollableTouchpadDoesNotStealPointerOrJoystickMovement() {
+        grantNotificationPermissionForDisclosureTest()
+        grantLocalNetworkPermissionForConnectionTest()
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity(autoConnect = true, inputBackend = "xdotool", initialCommand = "")
+        eventually { recordingOwner.controller.current.connection.isReady }
+        eventually { recordingOwner.backend.writes.toList() == listOf("\r\n") }
+        val generation = recordingOwner.controller.current.generation
+        for (joystick in listOf(false, true)) {
+            activityScenario.onActivity { activity ->
+                activity.shellNavigation().setJoystick(joystick)
+                val scroll = activity.findViewById<android.widget.ScrollView>(R.id.touchpad_destination)
+                scroll.layoutParams = scroll.layoutParams.apply { height = (250 * activity.resources.displayMetrics.density).toInt() }
+            }
+            instrumentation.waitForIdleSync()
+            eventually {
+                var ready = false
+                activityScenario.onActivity { ready = it.activeControlInputToken() != null }
+                ready
+            }
+            recordingOwner.backend.writes.clear()
+            activityScenario.onActivity { activity ->
+                val scroll = activity.findViewById<android.widget.ScrollView>(R.id.touchpad_destination)
+                assertTrue("the short surface must actually be scrollable", scroll.canScrollVertically(1))
+                val surface: View = if (joystick) {
+                    val host = activity.findViewById<ViewGroup>(R.id.js)
+                    (0 until host.childCount).map { host.getChildAt(it) }.filterIsInstance<MyJSView>().single()
+                } else realPointer(activity)
+                assertTrue("the real input surface must retain height on short screens", surface.height > 0)
+                val bounds = android.graphics.Rect()
+                surface.getDrawingRect(bounds)
+                scroll.offsetDescendantRectToMyCoords(surface, bounds)
+                val x = bounds.centerX().toFloat()
+                val y = bounds.centerY().toFloat()
+                val now = SystemClock.uptimeMillis()
+                dispatchCapturedButtonTouch(scroll, now, now, MotionEvent.ACTION_DOWN, x, y)
+                dispatchCapturedButtonTouch(scroll, now, now + 20, MotionEvent.ACTION_MOVE, x, y - 50)
+                dispatchCapturedButtonTouch(scroll, now, now + 40, MotionEvent.ACTION_MOVE, x, y - 90)
+                dispatchCapturedButtonTouch(scroll, now, now + 60, MotionEvent.ACTION_UP, x, y - 90)
+                assertEquals("pointer/joystick movement must not scroll its parent: joystick=$joystick; bounds=$bounds; viewport=${scroll.height}", 0, scroll.scrollY)
+            }
+            eventually { recordingOwner.backend.writes.any { it.contains("mousemove_relative") } }
+            assertEquals(generation, recordingOwner.controller.current.generation)
+            assertTrue(recordingOwner.controller.current.connection.isReady)
+        }
+    }
+
+    @Test
     fun legacyControlsCustomButtonsAndSavedScriptsUseTheServiceCommandSink() {
         grantNotificationPermissionForDisclosureTest()
+        installSavedControlProfile()
         val startup = "synthetic startup command must run once"
         val rawCustomCommand = "xdotool windowminimize $(xdotool getactivewindow)"
         val scriptAlias = "saved route ${java.util.UUID.randomUUID()}"
@@ -1648,9 +1745,7 @@ class SessionForegroundServiceAndroidTest {
             recordingOwner.backend.writes.count { it == "$startup\r\n" })
 
         activityScenario.onActivity { activity ->
-            val mouseLayout = activity.findViewById<android.widget.LinearLayout>(R.id.mouse)
-            val mouse = (0 until mouseLayout.childCount)
-                .map { mouseLayout.getChildAt(it) }.filterIsInstance<MyMouseView>().single()
+            val mouse = realPointer(activity)
             assertTrue("the touchpad must be laid out", mouse.width > 0)
             val downTime = SystemClock.uptimeMillis()
             val x = mouse.width / 2f
@@ -1733,6 +1828,20 @@ class SessionForegroundServiceAndroidTest {
         // exercising the saved-script dialog. Otherwise the fail-closed transport admission is
         // correctly allowed to drop input that has not yet reached the provider.
         activityScenario.onActivity { it.refreshSavedActions() }
+        eventually {
+            var loaded = false
+            activityScenario.onActivity {
+                loaded = it.findViewById<ViewGroup>(R.id.actions_script_list).findViewWithTag<View>(savedScriptId) != null
+            }
+            loaded
+        }
+        activityScenario.onActivity {
+            it.findViewById<android.widget.ScrollView>(R.id.actions_scroll).apply {
+                isSmoothScrollingEnabled = false
+                fullScroll(View.FOCUS_DOWN)
+            }
+        }
+        instrumentation.waitForIdleSync()
         waitForText(scriptAlias)
         activityScenario.onActivity { it.showSavedScripts() }
         waitForRecentCommand(activityScenario, rawCustomCommand)
@@ -1958,9 +2067,7 @@ class SessionForegroundServiceAndroidTest {
         activityScenario.onActivity { activity ->
             oldActivity.set(activity)
             useImmediateTouchDelayForTest()
-            val mouseLayout = activity.findViewById<android.widget.LinearLayout>(R.id.mouse)
-            val mouse = (0 until mouseLayout.childCount).map { mouseLayout.getChildAt(it) }
-                .filterIsInstance<MyMouseView>().single()
+            val mouse = realPointer(activity)
             mouseReference.set(mouse)
             staleButton.set(activity.findViewById(R.id.firstMouseButton))
             val x = mouse.width / 2f
@@ -1998,8 +2105,7 @@ class SessionForegroundServiceAndroidTest {
             activity.onKeyUp(KeyEvent.KEYCODE_VOLUME_UP, keyUp)
             staleButton.get().performClick()
             activity.findViewById<EditText>(R.id.keyboard_input).setText("stale background keyboard")
-            MainActivity::class.java.getDeclaredMethod("useKeyboardSendText")
-                .apply { isAccessible = true }.invoke(activity)
+            activity.xMouseKeyboardSend(activity.findViewById(R.id.keyboard_send))
         }
         val writesAfterBackgroundEvents = recordingOwner.backend.writes.toList()
         device.pressBack()
@@ -2155,9 +2261,7 @@ class SessionForegroundServiceAndroidTest {
         val now = SystemClock.uptimeMillis()
         activityScenario.onActivity { activity ->
             useImmediateTouchDelayForTest()
-            val mouse = (0 until activity.findViewById<android.widget.LinearLayout>(R.id.mouse).childCount)
-                .map { activity.findViewById<android.widget.LinearLayout>(R.id.mouse).getChildAt(it) }
-                .filterIsInstance<MyMouseView>().single()
+            val mouse = realPointer(activity)
             mouseReference.set(mouse)
             val x = mouse.width / 2f
             dispatchTouch(mouse, now, now, MotionEvent.ACTION_DOWN, x, 40f)

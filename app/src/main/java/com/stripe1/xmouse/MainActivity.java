@@ -432,7 +432,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		jsSwitch=findViewById(R.id.jsToggle);
 
 		mouseControlView = new MyMouseView(this);
-		mouseSurfaceHost.addView(mouseControlView, new FrameLayout.LayoutParams(
+		mouseSurfaceHost.addView(mouseControlView, 0, new FrameLayout.LayoutParams(
 				FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 		//keyboardLayout.addView(new MyKeyboardView(getBaseContext(), MainActivity.this));
 
@@ -732,6 +732,10 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	}
 
 	private void showOwnedDialog(AlertDialog dialog) {
+		showOwnedDialog(dialog, null);
+	}
+
+	private void showOwnedDialog(AlertDialog dialog, Runnable afterDismiss) {
 		shellNavigation.open(ShellNavigation.Overlay.ACTION_EDIT);
 		shellDialogs.add(dialog);
 		dialog.setOnDismissListener(dismissed -> {
@@ -739,12 +743,20 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 			if (shellDialogs.isEmpty() && !actionsEditMode && !actionProfileSelectionPending) {
 				shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
 			}
+			if (afterDismiss != null) {
+				final long generation = actionsExecutionGeneration;
+				mainHandler.post(() -> {
+					if (generation == actionsExecutionGeneration && activityResumed &&
+							!isFinishing() && !isDestroyed() && shellNavigation.topOverlay() == null) afterDismiss.run();
+				});
+			}
 		});
 		dialog.show();
 	}
 
 	public void showSavedScripts() {
 		List<SavedActionScript> scripts = new ArrayList<>(savedActionScripts);
+		final int[] selectedScript = { 0 };
 		String[] titles = new String[scripts.size()];
 		for (int i = 0; i < scripts.size(); i++) titles[i] = scripts.get(i).getName();
 		AlertDialog.Builder builder = new AlertDialog.Builder(this).setTitle(R.string.ng_scripts)
@@ -754,11 +766,13 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		else if (scriptsLoadFailed) builder.setMessage(R.string.ng_script_read_failed);
 		else if (titles.length == 0) builder.setMessage(R.string.ng_no_scripts);
 		else builder.setItems(titles, (dialog, which) -> {
-			int id = scripts.get(which).getId();
-			// Start after this owned selection dialog has retired/dismissed, not behind its overlay.
-			mainHandler.post(() -> runSavedScript(id));
+			selectedScript[0] = scripts.get(which).getId();
 		});
-		showOwnedDialog(builder.create());
+		// Native Dialog dismissal is asynchronous: enqueue only from the actual dismissal
+		// callback, after its input gate has closed, and reject intervening navigation.
+		showOwnedDialog(builder.create(), () -> {
+			if (selectedScript[0] > 0) runSavedScript(selectedScript[0]);
+		});
 	}
 
 	public void runSavedScript(int id) {

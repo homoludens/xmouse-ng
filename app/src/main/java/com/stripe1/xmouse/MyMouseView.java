@@ -277,6 +277,11 @@ public class MyMouseView extends View {
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         if (activity == null) return false;
+        // Short screens can scroll the surrounding controls, but a gesture begun on
+        // the pointer belongs to this surface until UP/CANCEL, not to that ScrollView.
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN && getParent() != null) {
+            getParent().requestDisallowInterceptTouchEvent(true);
+        }
         float x = event.getX();
         float y = event.getY();
         curr = new PointF(event.getX(), event.getY());

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="AppTheme">
+    <style name="AppTheme" parent="Base.XMouseNg">
         <item name="android:navigationBarColor">@color/ng_background</item>
         <item name="android:windowLightNavigationBar">true</item>
     </style>
