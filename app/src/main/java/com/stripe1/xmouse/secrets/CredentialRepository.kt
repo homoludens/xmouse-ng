@@ -11,6 +11,7 @@ import com.stripe1.xmouse.DatabaseHandler
 import com.stripe1.xmouse.connection.Endpoint
 import com.stripe1.xmouse.connection.EndpointHost
 import com.stripe1.xmouse.connection.EndpointLocator
+import com.stripe1.xmouse.connection.ComputerDraft
 import java.io.Closeable
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -188,6 +189,7 @@ class CredentialRepository internal constructor(
         expected: CredentialHost?, alias: String, host: String?, user: String, port: String,
         password: ByteArray, endpoint: Endpoint,
     ): Long {
+        ComputerDraft.requireUsername(user)
         requireWritable()
         expected?.takeUnless { it.credentialReentryRequired }?.let { readPassword(it).fill(0) }
         val reference = verifiedReplacement(password)
@@ -227,6 +229,37 @@ class CredentialRepository internal constructor(
         }
         clearHostReentryMarker(savedId)
         return savedId
+    }
+
+    /** Explicit unchanged-password intent. No prepare/migration, secret reads/writes or preference
+     * changes: even a restore/re-entry marker or unavailable device key must survive this edit.
+     * Only an existing, unchanged metadata snapshot may be updated. */
+    fun updateHostMetadata(expected: CredentialHost, alias: String, endpoint: Endpoint, user: String): Long {
+        offMain()
+        ComputerDraft.requireUsername(user)
+        if (hosts().firstOrNull { it.id == expected.id } != expected) throw CredentialRepositoryException()
+        val values = ContentValues().apply {
+            put("Alias", alias); put("Username", user); put("Port", endpoint.port.toString())
+            when (val locator = endpoint.locator) {
+                is EndpointLocator.Manual -> {
+                    put("Host", locator.host.original)
+                    put(DatabaseHandler.LOCATOR_TYPE, DatabaseHandler.LOCATOR_MANUAL)
+                    putNull(DatabaseHandler.SERVICE_INSTANCE_NAME); putNull(DatabaseHandler.SERVICE_TYPE)
+                    putNull(DatabaseHandler.SERVICE_DOMAIN); putNull(DatabaseHandler.STABLE_TARGET_HOSTNAME)
+                }
+                is EndpointLocator.DiscoveredService -> {
+                    locator.stableTargetHostname?.original?.let { put("Host", it) } ?: putNull("Host")
+                    put(DatabaseHandler.LOCATOR_TYPE, DatabaseHandler.LOCATOR_DISCOVERED_SERVICE)
+                    put(DatabaseHandler.SERVICE_INSTANCE_NAME, locator.instanceName)
+                    put(DatabaseHandler.SERVICE_TYPE, locator.serviceType); put(DatabaseHandler.SERVICE_DOMAIN, locator.domain)
+                    locator.stableTargetHostname?.original?.let { put(DatabaseHandler.STABLE_TARGET_HOSTNAME, it) }
+                        ?: putNull(DatabaseHandler.STABLE_TARGET_HOSTNAME)
+                }
+            }
+        }
+        if (database.writableDatabase.update("contacts", values, "id=? AND PasswordCredentialRef IS ?",
+                arrayOf(expected.id.toString(), expected.passwordReference)) != 1) throw CredentialRepositoryException()
+        return expected.id
     }
 
     private fun readServiceLocator(
@@ -305,8 +338,13 @@ class CredentialRepository internal constructor(
 
     /** Capture after prepare, on this worker. Includes profile ID and fresh opaque secret references. */
     fun authenticationSelection(): AuthenticationSelection {
+        return authenticationSelection(selectedHost())
+    }
+
+    /** Candidate snapshot: never selects/saves the candidate, prepares migration, or imports a key. */
+    fun authenticationSelection(host: CredentialHost): AuthenticationSelection {
         offMain()
-        return AuthenticationSelection(selectedHost(), preferences.getBoolean("pref_usekeyauth", false),
+        return AuthenticationSelection(host, preferences.getBoolean("pref_usekeyauth", false),
             preferences.getString(LegacyCredentialReferences.GLOBAL_PASSPHRASE, null),
             preferences.contains("pref_key_passphrase"),
             preferences.getBoolean(CredentialMetadataBackup.PASSPHRASE_REENTRY, false),
@@ -316,6 +354,22 @@ class CredentialRepository internal constructor(
     }
 
     fun authenticate(selection: AuthenticationSelection, prompts: CredentialPrompts, completion: AuthenticationCallback) {
+        authenticate(selection, prompts, completion, false)
+    }
+
+    /** Read-only attempt material. Null replacement means the captured saved password reference;
+     * an explicit empty array is a new computer's empty password, not a metadata replacement.
+     * Legacy key import belongs to Settings/normal connection, never an unsaved test. */
+    fun authenticateProbe(selection: AuthenticationSelection, replacement: ByteArray?, prompts: CredentialPrompts,
+                          completion: AuthenticationCallback) {
+        offMain()
+        if (!selection.useKey && replacement != null) {
+            completion.complete(AuthenticationMaterial(selection.host, false, replacement.copyOf(), byteArrayOf(), byteArrayOf()), null)
+        } else authenticate(selection, prompts, completion, true)
+    }
+
+    private fun authenticate(selection: AuthenticationSelection, prompts: CredentialPrompts,
+                             completion: AuthenticationCallback, readOnly: Boolean) {
         offMain()
         val host = selection.host
         val useKey = selection.useKey
@@ -340,6 +394,11 @@ class CredentialRepository internal constructor(
                         else completeKeyAuthentication(host, credential, key, completion)
                     }
                 } else {
+                    if (readOnly) {
+                        credential.fill(0)
+                        completion.complete(null, "Private key unavailable. Open Settings > Private Key; existing configuration was kept.")
+                        return@readAttempt
+                    }
                     try {
                         // The approved importer validates/encrypts readable legacy bytes before use.
                         // Do not substitute a newly selected/imported key for this captured attempt.

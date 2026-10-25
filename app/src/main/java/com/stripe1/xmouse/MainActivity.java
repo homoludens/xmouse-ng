@@ -11,6 +11,7 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.ServiceConnection;
+import android.content.res.ColorStateList;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -47,6 +48,7 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.widget.Toolbar;
 import androidx.fragment.app.FragmentManager;
+import com.google.android.material.button.MaterialButton;
 
 import com.stripe1.xmouse.secrets.AndroidCredentials;
 import com.stripe1.xmouse.secrets.CredentialUi;
@@ -145,7 +147,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	private static final class ComputerEntry {
 		final long id;
 		final String name;
-		ComputerEntry(long id, String name) { this.id = id; this.name = name; }
+		final String endpoint;
+		ComputerEntry(long id, String name, String endpoint) { this.id = id; this.name = name; this.endpoint = endpoint; }
 	}
 	private List<ComputerEntry> cachedComputers = new ArrayList<>();
 	private boolean externalScreenPending;
@@ -408,6 +411,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		findViewById(R.id.header_settings).setOnClickListener(v -> openSettings());
 		findViewById(R.id.connection_status).setOnClickListener(v -> showSessionControls());
 		findViewById(R.id.computers_manage).setOnClickListener(v -> openLegacyManager(0));
+		findViewById(R.id.computers_add).setOnClickListener(v -> openExternalScreen(ComputerEditorActivity.intent(this, 0)));
+		findViewById(R.id.computers_find).setOnClickListener(v -> openExternalScreen(
+				new Intent(this, ListEditActivity.class).putExtra("findComputers", true)));
 		findViewById(R.id.computers_connect).setOnClickListener(v -> {
 			if (hasActiveOrPendingSession()) disconnectForegroundSessionFromUi();
 			else requestForegroundSessionFromUi();
@@ -595,7 +601,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		repository.execute(() -> {
 			try {
 				List<ComputerEntry> hosts = new ArrayList<>();
-				for (CredentialHost host : repository.hosts()) hosts.add(new ComputerEntry(host.getId(), computerName(host)));
+				for (CredentialHost host : repository.hosts()) hosts.add(new ComputerEntry(host.getId(), computerName(host),
+						host.displayEndpoint() + " · SSH port " + host.getPort()));
 				String selectedName = computerName(repository.selectedHost());
 				mainHandler.post(() -> {
 					if (generation != computerLoadGeneration || isFinishing() || isDestroyed()) return;
@@ -624,15 +631,37 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		LinearLayout list = findViewById(R.id.computers_list);
 		list.removeAllViews();
 		for (ComputerEntry host : cachedComputers) {
-			Button button = new Button(this);
-			button.setText(host.name);
-			button.setMinHeight((int) (48 * getResources().getDisplayMetrics().density));
+			LinearLayout row = new LinearLayout(this);
+			Button button = computerButton(host.name);
+			button.setContentDescription("Connect to " + host.name + ", " + host.endpoint);
 			button.setOnClickListener(v -> {
 				shellNavigation.closeTop();
 				selectHostAndConnect((int) host.id);
 			});
-			list.addView(button, new LinearLayout.LayoutParams(-1, -2));
+			row.addView(button, new LinearLayout.LayoutParams(0, -2, 1));
+			Button edit = computerButton("Edit");
+			edit.setContentDescription("Edit " + host.name);
+			edit.setOnClickListener(v -> openExternalScreen(ComputerEditorActivity.intent(this, host.id)));
+			row.addView(edit, new LinearLayout.LayoutParams(-2, -2));
+			list.addView(row, new LinearLayout.LayoutParams(-1, -2));
+			TextView endpoint = new TextView(this);
+			endpoint.setText(host.endpoint);
+			endpoint.setTextColor(getColor(R.color.ng_text_secondary));
+			endpoint.setPadding(8, 0, 8, 12);
+			list.addView(endpoint, new LinearLayout.LayoutParams(-1, -2));
 		}
+	}
+
+	private MaterialButton computerButton(String title) {
+		float density = getResources().getDisplayMetrics().density;
+		MaterialButton button = new MaterialButton(this);
+		button.setText(title); button.setAllCaps(false); button.setSingleLine(false); button.setEllipsize(null);
+		button.setMinHeight((int) (48 * density)); button.setMinWidth((int) (48 * density));
+		button.setCornerRadius((int) (12 * density)); button.setStrokeWidth((int) density);
+		button.setStrokeColor(ColorStateList.valueOf(getColor(R.color.ng_border)));
+		button.setBackgroundTintList(ColorStateList.valueOf(getColor(R.color.ng_surface_soft)));
+		button.setTextColor(getColor(R.color.ng_text_primary));
+		return button;
 	}
 
 	private void openSettings() { openExternalScreen(new Intent(this, SettingsActivity.class)); }

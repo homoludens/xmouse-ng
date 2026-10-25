@@ -26,6 +26,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.KeyPair
 import com.stripe1.xmouse.DatabaseHandler
+import com.stripe1.xmouse.ComputerEditorActivity
+import com.google.android.material.textfield.TextInputLayout
 import com.stripe1.xmouse.ListEditActivity
 import com.stripe1.xmouse.MainActivity
 import com.stripe1.xmouse.R
@@ -388,7 +390,125 @@ class CredentialRepositoryAndroidTest {
         f.assertNoPlaintext()
     }
 
+    @Test fun metadataOnlyComputerEditPreservesCiphertextReferenceAndBackupFlagsWithoutAnySecretAccess() = fixture { f ->
+        assertTrue(f.repository.prepare())
+        val expected = f.repository.hosts().first()
+        val files = f.encryptedFiles(); val prefs = f.preferences.all
+        var reads = 0; var writes = 0
+        val protected = object : SecretStore by f.store {
+            override fun read(id: SecretId): ByteArray? { reads++; error("Metadata must not decrypt") }
+            override fun write(id: SecretId, plaintext: ByteArray) { writes++; error("Metadata must not replace") }
+        }
+        val repository = CredentialRepository(f.helper, f.preferences, protected)
+        repository.updateHostMetadata(expected, "Renamed", Endpoint.manual("renamed.local", 2222), "new-user")
+        val edited = repository.hosts().first()
+        assertEquals(expected.passwordReference, edited.passwordReference)
+        assertEquals(expected.credentialReentryRequired, edited.credentialReentryRequired)
+        assertEquals(expected.legacyPasswordPresent, edited.legacyPasswordPresent)
+        assertEquals("2222", edited.port); assertEquals("new-user", edited.user)
+        assertEquals(0, reads); assertEquals(0, writes); assertEquals(files, f.encryptedFiles()); assertEquals(prefs, f.preferences.all)
+        assertArrayEquals(f.passwords.getValue(expected.id).toByteArray(), f.repository.readPassword(edited))
+        expect<CredentialRepositoryException> { repository.updateHostMetadata(expected, "Stale", Endpoint.manual("stale.local", 22), "u") }
+    }
+
+    @Test fun unsavedCandidateProtectedAuthenticationAndInvalidSavesNeverChangeHostRowsReferencesOrPreferences() = fixture { f ->
+        assertTrue(f.repository.prepare())
+        f.preferences.edit(commit = true) { putBoolean("pref_usekeyauth", false) }
+        val saved = f.repository.hosts().first()
+        val candidate = saved.copy(alias = "Unsaved", host = "candidate.local", port = "2222", user = "candidate-user")
+        val rows = f.rows("contacts"); val files = f.encryptedFiles(); val prefs = f.preferences.all
+        val done = CountDownLatch(1); val material = AtomicReference<AuthenticationMaterial?>()
+        f.repository.execute {
+            f.repository.authenticateProbe(f.repository.authenticationSelection(candidate), null, { _, request -> request.cancel() }) { result, _ ->
+                material.set(result); done.countDown()
+            }
+        }
+        assertTrue(done.await(10, TimeUnit.SECONDS))
+        material.get()!!.use { assertEquals(candidate, it.host); assertArrayEquals(f.passwords.getValue(saved.id).toByteArray(), it.password) }
+        for (user in listOf("", " user", "user ")) expect<IllegalArgumentException> {
+            f.repository.saveHost(saved, "invalid", "candidate.local", user, "22", byteArrayOf())
+        }
+        expect<IllegalArgumentException> { f.repository.saveHost(null, "invalid", "candidate.local", "u", "65536", byteArrayOf()) }
+        assertEquals(rows, f.rows("contacts")); assertEquals(files, f.encryptedFiles()); assertEquals(prefs, f.preferences.all)
+    }
+
+    @Test fun nativeComputerEditorUsesPersistentLabelsBlankPasswordAdvancedValidationRecreationAndConfirmedDelete() = uiFixture { f ->
+        assertTrue(f.repository.prepare())
+        val host = f.repository.hosts().first(); val files = f.encryptedFiles()
+        ActivityScenario.launch<ComputerEditorActivity>(ComputerEditorActivity.intent(target, host.id)).use { scenario ->
+            barrier()
+            scenario.onActivity { activity ->
+                assertEquals("Hostname or IP address", activity.findViewById<TextInputLayout>(R.id.computer_host_field).hint.toString())
+                assertEquals("Username", activity.findViewById<TextInputLayout>(R.id.computer_user_field).hint.toString())
+                val password = activity.findViewById<EditText>(R.id.new_host_password)
+                assertEquals("", password.text.toString()); assertFalse(password.isSaveEnabled)
+                assertTrue(activity.findViewById<TextInputLayout>(R.id.computer_password_field).helperText.toString().contains("unchanged"))
+                assertEquals(host.port, activity.findViewById<EditText>(R.id.new_host_port).text.toString())
+                activity.findViewById<View>(R.id.computer_advanced).performClick()
+                assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.computer_port_field).visibility)
+                enter(activity.findViewById(R.id.new_host_username), " user ")
+                activity.findViewById<View>(R.id.computer_save).performClick()
+                assertNotNull(activity.findViewById<TextInputLayout>(R.id.computer_user_field).error)
+                enter(activity.findViewById(R.id.new_host_username), "new-user")
+                enter(activity.findViewById(R.id.new_host_port), "65536")
+                activity.findViewById<View>(R.id.computer_save).performClick()
+                assertNotNull(activity.findViewById<TextInputLayout>(R.id.computer_port_field).error)
+                enter(activity.findViewById(R.id.new_host_port), "2222")
+                enter(activity.findViewById(R.id.new_host_alias), "Native edited")
+                enter(password, "NOT_REAL_not_bundled")
+            }
+            assertEquals(host, f.repository.hosts().first())
+            scenario.recreate(); barrier()
+            scenario.onActivity { activity ->
+                assertEquals("", activity.findViewById<EditText>(R.id.new_host_password).text.toString())
+                assertEquals("Native edited", activity.findViewById<EditText>(R.id.new_host_alias).text.toString())
+                activity.findViewById<View>(R.id.computer_save).performClick()
+            }
+            barrier(); barrier()
+        }
+        val edited = f.repository.hosts().first()
+        assertEquals("2222", edited.port); assertEquals("new-user", edited.user); assertEquals(host.passwordReference, edited.passwordReference)
+        assertEquals(files, f.encryptedFiles())
+        ActivityScenario.launch<ComputerEditorActivity>(ComputerEditorActivity.intent(target, host.id)).use { scenario ->
+            barrier()
+            scenario.onActivity { activity ->
+                activity.findViewById<View>(R.id.computer_delete).performClick()
+                val confirmation = field(activity, "deleteDialog") as AlertDialog
+                assertTrue(confirmation.isShowing); confirmation.getButton(AlertDialog.BUTTON_NEGATIVE).performClick()
+            }
+            assertEquals(edited, f.repository.hosts().first())
+            scenario.onActivity { activity ->
+                activity.findViewById<View>(R.id.computer_delete).performClick()
+                (field(activity, "deleteDialog") as AlertDialog).getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            }
+            barrier(); barrier()
+        }
+        assertFalse(f.repository.hosts().any { it.id == host.id }); assertEquals(files, f.encryptedFiles())
+    }
+
+    @Test fun nativeDiscoveredComputerFormRetainsLogicalServiceAndPortWithoutSavingOnOpenOrBack() = uiFixture { f ->
+        val candidate = SshServiceDiscovery.Candidate(
+            SshServiceDiscovery.Identity("fixture-network", "office", "_ssh._tcp", "local"),
+            EndpointLocator.DiscoveredService("Office", "_ssh._tcp", "local"), 2222,
+            listOf(InetAddress.getByName("192.0.2.23")),
+        )
+        val rows = f.rows("contacts"); val prefs = f.preferences.all
+        ActivityScenario.launch<ComputerEditorActivity>(ComputerEditorActivity.discoveredIntent(target, candidate)).use { scenario ->
+            barrier()
+            scenario.onActivity { activity ->
+                assertEquals("Office", activity.findViewById<EditText>(R.id.new_host_alias).text.toString())
+                assertEquals("", activity.findViewById<EditText>(R.id.new_host_ip).text.toString())
+                assertEquals("2222", activity.findViewById<EditText>(R.id.new_host_port).text.toString())
+                assertEquals("", activity.findViewById<EditText>(R.id.new_host_username).text.toString())
+                assertEquals("", activity.findViewById<EditText>(R.id.new_host_password).text.toString())
+                activity.onBackPressedDispatcher.onBackPressed()
+            }
+        }
+        assertEquals(rows, f.rows("contacts")); assertEquals(prefs, f.preferences.all)
+    }
+
     @Test fun actualHostScreenPreservesManualEndpointNamesAndRejectsInvalidEdits() = uiFixture { f ->
+        assertTrue(f.repository.prepare())
         val endpoints = listOf("192.0.2.42", "2001:db8::42", "workstation.example", "desktop.local")
         val initialCount = f.passwords.size
         ActivityScenario.launch<ListEditActivity>(Intent(target, ListEditActivity::class.java)).use { scenario ->
@@ -400,7 +520,7 @@ class CredentialRepositoryAndroidTest {
                 assertEquals("Delete", dialog.getButton(AlertDialog.BUTTON_NEGATIVE).text.toString())
                 assertEquals("Cancel", dialog.getButton(AlertDialog.BUTTON_NEUTRAL).text.toString())
                 val input = dialog.findViewById<EditText>(R.id.new_host_password)
-                assertEquals(f.passwords.getValue(7), input.text.toString())
+                assertEquals("", input.text.toString())
                 assertFalse(input.isSaveEnabled)
                 enter(input, "NOT_REAL_ui_edit")
                 dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
@@ -480,7 +600,7 @@ class CredentialRepositoryAndroidTest {
             scenario.onActivity { it.xMouseManage(0) }; barrier()
             scenario.onActivity { activity ->
                 val dialog = editor(activity)
-                assertEquals("NOT_REAL_ui_edit", dialog.findViewById<EditText>(R.id.new_host_password).text.toString())
+                assertEquals("", dialog.findViewById<EditText>(R.id.new_host_password).text.toString())
                 enter(dialog.findViewById(R.id.new_host_password), "NOT_REAL_cancelled")
                 dialog.getButton(AlertDialog.BUTTON_NEUTRAL).performClick()
             }
@@ -498,6 +618,15 @@ class CredentialRepositoryAndroidTest {
 
     @Test fun actualHostDiscoveryShowsEmptyAndTypedErrorsAndKeepsSelectionTransient() = uiFixture { f ->
         val factory = RecordingDiscoveryFactory()
+        val editorIntents = mutableListOf<Intent>()
+        val editorMonitor = object : Instrumentation.ActivityMonitor() {
+            override fun onStartActivity(intent: Intent): Instrumentation.ActivityResult? {
+                if (intent.component?.className != ComputerEditorActivity::class.java.name) return null
+                editorIntents += Intent(intent)
+                return Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null)
+            }
+        }
+        instrumentation.addMonitor(editorMonitor)
         ListEditActivity.setDiscoveryFactoryForTests(factory)
         ListEditActivity.setPermissionRequiredForTests(false)
         try {
@@ -543,11 +672,9 @@ class CredentialRepositoryAndroidTest {
                         .contains("Local network access was denied"))
                     assertEquals("Manual entry", dialog.getButton(AlertDialog.BUTTON_NEUTRAL).text.toString())
                     dialog.getButton(AlertDialog.BUTTON_NEUTRAL).performClick()
-                    val editor = editor(activity)
-                    assertEquals("", editor.findViewById<EditText>(R.id.new_host_ip).text.toString())
-                    assertEquals("", editor.findViewById<EditText>(R.id.new_host_username).text.toString())
-                    assertEquals("", editor.findViewById<EditText>(R.id.new_host_password).text.toString())
-                    editor.getButton(AlertDialog.BUTTON_NEGATIVE).performClick()
+                    assertEquals(1, editorIntents.size)
+                    assertFalse(editorIntents.last().hasExtra("computer_id"))
+                    assertFalse(editorIntents.last().hasExtra("service_name"))
                     assertEquals(1, factory.sessions.single().closes)
                 }
 
@@ -570,16 +697,14 @@ class CredentialRepositoryAndroidTest {
                 barrier()
                 scenario.onActivity { activity ->
                     assertFalse(discoveryDialogOrNull(activity)?.isShowing == true)
-                    val candidate = field(activity, "transientDiscoveryCandidate") as SshServiceDiscovery.Candidate
-                    assertEquals(selected, candidate)
-                    val dialog = editor(activity)
-                    assertEquals("Office", dialog.findViewById<EditText>(R.id.new_host_alias).text.toString())
-                    assertEquals("192.0.2.23", dialog.findViewById<EditText>(R.id.new_host_ip).text.toString())
-                    assertEquals("2222", dialog.findViewById<EditText>(R.id.new_host_port).text.toString())
-                    assertEquals("", dialog.findViewById<EditText>(R.id.new_host_username).text.toString())
-                    assertEquals("", dialog.findViewById<EditText>(R.id.new_host_password).text.toString())
+                    assertNull(field(activity, "transientDiscoveryCandidate"))
+                    assertEquals(2, editorIntents.size)
+                    val route = editorIntents.last()
+                    assertEquals("Office", route.getStringExtra("service_name"))
+                    assertEquals("2222", route.getStringExtra("computer_port"))
+                    assertNull(route.getStringExtra("stable_host")) // Never persist last DHCP address.
+                    assertFalse(route.extras.toString().contains("192.0.2.23"))
                     assertFalse(SessionForegroundService.hasRetainedSession(activity))
-                    dialog.getButton(AlertDialog.BUTTON_NEGATIVE).performClick()
                 }
                 barrier()
                 assertEquals(savedRows, f.rows("contacts"))
@@ -595,6 +720,7 @@ class CredentialRepositoryAndroidTest {
                 }
             }
         } finally {
+            instrumentation.removeMonitor(editorMonitor)
             ListEditActivity.setDiscoveryFactoryForTests(null)
             ListEditActivity.setPermissionRequiredForTests(null)
         }
@@ -633,7 +759,7 @@ class CredentialRepositoryAndroidTest {
         }
     }
 
-    @Test fun restoredCredentialsAllowAttemptOnlyAuthSettingsReplacementAndConfirmedEmptyHostReplacement() = uiFixture { restored ->
+    @Test fun restoredCredentialsAllowAttemptOnlyAuthSettingsReplacementAndBlankHostPasswordPreservation() = uiFixture { restored ->
         Fixture().use { source ->
             source.preferences.edit(commit = true) { putBoolean("pref_usekeyauth", false) }
             val snapshotRef = AtomicReference<ByteArray?>()
@@ -716,15 +842,11 @@ class CredentialRepositoryAndroidTest {
                         val dialog = editor(activity)
                         val password = dialog.findViewById<EditText>(R.id.new_host_password)
                         assertEquals("", password.text.toString())
-                        assertEquals("Enter the saved password again", password.hint.toString())
-                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
-                        val confirmation = field(activity, "emptyPasswordConfirmation") as AlertDialog
-                        assertTrue(confirmation.isShowing)
-                        confirmation.getButton(AlertDialog.BUTTON_NEGATIVE).performClick()
+                        assertTrue(password.hint.toString().contains("unchanged"))
                         dialog.getButton(AlertDialog.BUTTON_NEUTRAL).performClick()
                     }
                     barrier()
-                    assertTrue("Canceling empty-password confirmation keeps re-entry required",
+                    assertTrue("Canceling metadata edit keeps re-entry required",
                         "7" in restored.preferences.getStringSet(CredentialMetadataBackup.HOST_REENTRY_IDS, emptySet()).orEmpty())
                     assertNull(restored.repository.hosts().first { it.id == 7L }.passwordReference)
 
@@ -734,17 +856,24 @@ class CredentialRepositoryAndroidTest {
                         val dialog = editor(activity)
                         assertEquals("", dialog.findViewById<EditText>(R.id.new_host_password).text.toString())
                         dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
-                        val confirmation = field(activity, "emptyPasswordConfirmation") as AlertDialog
-                        assertTrue(confirmation.isShowing)
-                        confirmation.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
                     }
                     barrier(); barrier()
-                    assertFalse("Confirmed empty replacement clears the restore marker",
+                    assertTrue("Blank password Save preserves the restore marker",
+                        "7" in restored.preferences.getStringSet(CredentialMetadataBackup.HOST_REENTRY_IDS, emptySet()).orEmpty())
+                    assertNull(restored.repository.hosts().first { it.id == 7L }.passwordReference)
+                    scenario.onActivity { activity -> activity.xMouseManage(0) }; barrier()
+                    scenario.onActivity { activity ->
+                        val dialog = editor(activity)
+                        enter(dialog.findViewById(R.id.new_host_password), "NOT_REAL_restored_replacement")
+                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                    }
+                    barrier(); barrier()
+                    assertFalse("Explicit nonblank replacement clears the restore marker",
                         "7" in restored.preferences.getStringSet(CredentialMetadataBackup.HOST_REENTRY_IDS, emptySet()).orEmpty())
                     val savedHost = restored.repository.hosts().first { it.id == 7L }
                     assertFalse(savedHost.credentialReentryRequired)
                     val savedPassword = restored.onRepositoryWorker(restored.repository) { restored.repository.readPassword(savedHost) }
-                    try { assertArrayEquals(byteArrayOf(), savedPassword) } finally { savedPassword.fill(0) }
+                    try { assertArrayEquals("NOT_REAL_restored_replacement".toByteArray(), savedPassword) } finally { savedPassword.fill(0) }
                 }
             } finally { snapshot.fill(0) }
         }
@@ -784,9 +913,9 @@ class CredentialRepositoryAndroidTest {
     }
 
     @Test fun actualMainPreferencesAndHostNavigationKeepFallbackIndependentAndPersistSelection() = uiFixture { f ->
-        // Blank endpoint intentionally prevents any network/SSH work in this UI storage test.
+        // The installed navigation-only owner prevents all network/SSH work; the saved form is valid.
         assertTrue(f.repository.prepare())
-        val blank = f.repository.saveHost(null, "storage-only", "", "", "22", "NOT_REAL_navigation".toByteArray())
+        val blank = f.repository.saveHost(null, "storage-only", "storage-only.invalid", "fixture-user", "22", "NOT_REAL_navigation".toByteArray())
         val fallback = f.preferences.getString(LegacyCredentialReferences.DEFAULT_PASSWORD, null)
         val owners = (target.applicationContext as XMouseApplication).sessionOwners
         owners.clearIdleOwnerForTests()
@@ -802,7 +931,7 @@ class CredentialRepositoryAndroidTest {
                     activity.selectHostAndConnect(blank.toInt())
                 }
                 barrier()
-                scenario.onActivity { activity -> activity.getPreferences(); assertEquals("", MainActivity.setting_host) }
+                scenario.onActivity { activity -> activity.getPreferences(); assertEquals("storage-only.invalid", MainActivity.setting_host) }
                 assertEquals(blank.toString(), f.preferences.getString("hostPreferenceList", null))
                 assertEquals(fallback, f.preferences.getString(LegacyCredentialReferences.DEFAULT_PASSWORD, null))
                 assertArrayEquals("NOT_REAL_default".toByteArray(), f.store.read(SecretId(fallback!!)))
@@ -812,7 +941,7 @@ class CredentialRepositoryAndroidTest {
                 owner.selectionCompleted.await(5, TimeUnit.SECONDS))
             instrumentation.waitForIdleSync()
             assertEquals(1, owner.selectionCalls.get())
-            assertEquals("blank storage fixture must not create any SSH attempt", 0, owner.attemptCreations.get())
+            assertEquals("navigation-only fixture must not create any SSH attempt", 0, owner.attemptCreations.get())
             assertNull(owner.controller.current.desiredHost)
             assertEquals(ConnectionState.Phase.DISCONNECTED, owner.controller.current.connection.phase)
             assertFalse(SessionForegroundService.hasPendingStart(target))
@@ -849,7 +978,7 @@ class CredentialRepositoryAndroidTest {
         }
     }
 
-    @Test fun actualMigrationFailureKeepsHostMetadataAndNonsecretSettingsAvailableButSaveDisabled() = uiFixture { f ->
+    @Test fun actualMigrationFailureKeepsMetadataAvailableButRejectsCredentialReplacement() = uiFixture { f ->
         val rows = f.rows("contacts")
         val broken = object : SecretStore by f.store {
             override fun write(id: SecretId, plaintext: ByteArray) { throw SecretStoreException(SecretStoreException.Reason.STORAGE_FAILURE) }
@@ -861,7 +990,14 @@ class CredentialRepositoryAndroidTest {
             scenario.onActivity { activity ->
                 val dialog = editor(activity)
                 assertEquals(rows.first()[2], dialog.findViewById<EditText>(R.id.new_host_alias).text.toString())
-                assertFalse(dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled)
+                assertEquals("", dialog.findViewById<EditText>(R.id.new_host_password).text.toString())
+                enter(dialog.findViewById(R.id.new_host_password), "NOT_REAL_cannot_save")
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            }
+            barrier(); barrier()
+            scenario.onActivity { activity ->
+                val dialog = editor(activity)
+                assertTrue(dialog.isShowing)
                 dialog.getButton(AlertDialog.BUTTON_NEUTRAL).performClick()
             }
         }

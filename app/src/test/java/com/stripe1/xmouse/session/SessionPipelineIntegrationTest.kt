@@ -182,8 +182,7 @@ class SessionPipelineIntegrationTest {
             worker.execute {
                 reads.incrementAndGet()
                 if (!current.asBoolean) callback.complete(null, null) else {
-                    val host = SessionFixtures.host(selection.host.host!!, selection.host.id,
-                        selection.host.passwordReference!!, selection.host.port!!.toInt())
+                    val host = SessionHost(selection.host.endpoint(), selection)
                     callback.complete(SessionFixtures.material(host), null)
                 }
             }
@@ -246,6 +245,84 @@ class SessionPipelineIntegrationTest {
     private fun approvedKey(keyPair: KeyPair): ApprovedHostKey {
         val encoded = PublicKeyEntry.toString(keyPair.public).substringAfter(' ')
         return ApprovedHostKey.parse(java.util.Base64.getDecoder().decode(encoded))
+    }
+
+    @Test fun unsavedProbeUsesRealTrustFirstAndAuthChannelReadinessWithoutCommandsOrControlSessionReplacement() {
+        Server().use { server -> Fixture().use { control -> Fixture().use { f ->
+            val host = server.profile().copy(initialCommand = null)
+            control.connect(host); control.prompt().accept(); control.await { control.controller.current.connection.isReady }
+            val healthy = server.ssh.activeSessions.single()
+            val results = mutableListOf<Pair<ConnectionFailure?, Boolean>>()
+            val observer = object : ConnectionProbe.Listener {
+                override fun phase(phase: ConnectionState.Phase) { }
+                override fun finished(failure: ConnectionFailure?, cancelled: Boolean) { results += failure to cancelled }
+            }
+            val probe = ConnectionProbe(f.factory, Executor { f.queue.post(it) }); probe.attach(observer)
+            assertTrue(probe.start(host))
+            val trust = f.prompt()
+            assertEquals(host.endpoint.identity, trust.endpoint.identity)
+            assertEquals(1, server.authentications.get()) // Only the independent control session authenticated.
+            assertTrue(results.isEmpty())
+            trust.accept(); f.await { results.isNotEmpty() }
+            assertEquals(null to false, results.single())
+            assertEquals(2, server.authentications.get())
+            f.await { server.ssh.activeSessions.size == 1 }
+            assertSame(healthy, server.ssh.activeSessions.single())
+            assertTrue(control.controller.current.connection.isReady)
+            assertTrue(server.shellCommands.isEmpty()); assertTrue(server.execCommands.isEmpty())
+            assertTrue(control.controller.executeShellCommand("NOT_REAL_control_after_probe"))
+            control.await { server.shellCommands.contains("NOT_REAL_control_after_probe") }
+            probe.detach()
+        } } }
+    }
+
+    @Test fun unsavedProbeChangedKeyAndCancelledUnknownKeySendNoCredentialsAndCannotAttachLateConsent() {
+        Server().use { server ->
+            for (changed in listOf(false, true)) Fixture().use { f ->
+                val host = server.profile().copy(initialCommand = null)
+                val repository = HostKeyRepository(f.directory, TrustFileIo())
+                val prior = approvedKey(Server.newKeyPair())
+                if (changed) repository.approve(host.endpoint.identity, prior, java.util.function.BooleanSupplier { true })
+                val results = mutableListOf<Pair<ConnectionFailure?, Boolean>>()
+                val observer = object : ConnectionProbe.Listener {
+                    override fun phase(phase: ConnectionState.Phase) { }
+                    override fun finished(failure: ConnectionFailure?, cancelled: Boolean) { results += failure to cancelled }
+                }
+                val probe = ConnectionProbe(f.factory, Executor { f.queue.post(it) }); probe.attach(observer); probe.start(host)
+                if (!changed) {
+                    val request = f.prompt(); probe.cancel(); request.accept()
+                }
+                f.await { results.isNotEmpty() }
+                if (changed) {
+                    assertEquals(ConnectionFailure.Trust(ConnectionFailure.TrustReason.KEY_MISMATCH), results.single().first)
+                    assertTrue(repository.find(host.endpoint.identity)!!.matches(prior))
+                    assertTrue(f.prompts.none { it is SessionInteractions.Prompt.Mismatch })
+                } else {
+                    assertEquals(null to true, results.single()); assertNull(repository.find(host.endpoint.identity))
+                }
+                assertEquals(0, server.authentications.get()); assertEquals(0, server.commands.get())
+                assertTrue(server.shellCommands.isEmpty()); assertTrue(server.execCommands.isEmpty())
+                probe.detach()
+            }
+        }
+    }
+
+    @Test fun unsavedProbeActualAuthenticationRejectionIsNotSuccess() {
+        Server().use { server -> Fixture().use { f ->
+            val candidate = server.profile().copy(initialCommand = null).let { host ->
+                host.copy(authentication = host.authentication.copy(host = host.authentication.host.copy(user = "NOT_REAL_wrong_account")))
+            }
+            // Fixture material takes the captured selection; only this unsaved username differs.
+            val results = mutableListOf<ConnectionFailure?>()
+            val observer = object : ConnectionProbe.Listener {
+                override fun phase(phase: ConnectionState.Phase) { }
+                override fun finished(failure: ConnectionFailure?, cancelled: Boolean) { results += failure }
+            }
+            val probe = ConnectionProbe(f.factory, Executor { f.queue.post(it) }); probe.attach(observer); probe.start(candidate)
+            f.prompt().accept(); f.await { results.isNotEmpty() }
+            assertNotNull(results.single()); assertEquals(ConnectionFailure.Category.AUTHENTICATION, results.single()!!.category)
+            assertTrue(server.shellCommands.isEmpty()); assertTrue(server.execCommands.isEmpty()); probe.detach()
+        } }
     }
 
     @Test fun actualPipelineReusesOneAuthenticatedSessionAcrossRepeatRequestsAndObserverRecreationThenSwitchesProfile() {

@@ -73,6 +73,32 @@ class SshTransportTest {
         assertEquals("bash --noprofile", f.backend.channels.single().command)
     }
 
+    @Test fun providerChannelTimeoutAndEarlyRejectionHaveTypedSetupResultsWithoutReadingProviderMessages() {
+        for (timedOut in listOf(false, true)) {
+            val recording = RecordingSshBackend()
+            val backend = object : SshBackend by recording {
+                override fun create(request: SshConnectionRequest, authentication: com.stripe1.xmouse.secrets.AuthenticationMaterial): SshBackend.Session {
+                    val session = recording.create(request, authentication)
+                    return object : SshBackend.Session by session {
+                        override fun openChannel(type: String): SshBackend.Channel {
+                            val channel = session.openChannel(type)
+                            return object : SshBackend.Channel by channel {
+                                override fun connect(timeoutMillis: Int) { throw SshBackend.ChannelSetupException(timedOut) }
+                            }
+                        }
+                    }
+                }
+            }
+            val worker = SshTransport.newWorker(); val transport = SshTransport(backend, worker)
+            try {
+                val result = Result<Void>()
+                transport.connect(RecordingSshBackend.request(), RecordingSshBackend.authentication(), result)
+                assertEquals(if (timedOut) SshTransport.Failure.CHANNEL_TIMEOUT else SshTransport.Failure.CHANNEL_CLOSED, result.await().failure)
+                assertFalse(transport.isConnected); assertTrue(recording.writes.isEmpty())
+            } finally { transport.close(); assertTrue(worker.awaitTermination(5, TimeUnit.SECONDS)) }
+        }
+    }
+
     @Test fun execRetainsRequestedOutputSemanticsAndClosesTemporaryChannel() = Fixture().use { f ->
         f.connect()
         val result = Result<String>()

@@ -18,6 +18,10 @@
                 android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/action_connect" />
             <Button android:id="@+id/computers_manage" style="@style/Widget.XMouseNg.ControlButton.Soft"
                 android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/ng_manage_computers" />
+            <Button android:id="@+id/computers_add" style="@style/Widget.XMouseNg.ControlButton.Accent"
+                android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Add computer" />
+            <Button android:id="@+id/computers_find" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Find computers" />
         </LinearLayout>
     </ScrollView>
     <ScrollView android:id="@+id/typing_content" android:layout_width="match_parent"

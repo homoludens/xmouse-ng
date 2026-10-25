@@ -60,6 +60,10 @@
                 android:value="com.stripe1.xmouse.MainActivity" />
         </activity>
         <activity
+            android:name=".ComputerEditorActivity"
+            android:exported="false"
+            android:theme="@style/AppTheme.NoActionBar" />
+        <activity
             android:name=".ListEditActivity"
             android:label="@string/title_activity_list_edit"
             android:parentActivityName=".MainActivity"

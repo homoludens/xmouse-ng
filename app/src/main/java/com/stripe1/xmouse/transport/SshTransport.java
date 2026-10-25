@@ -172,6 +172,7 @@ public final class SshTransport implements CommandTransport, AutoCloseable {
                     }
                 } catch (PrivateKeyImportException ignored) { failure = Failure.PRIVATE_KEY; }
                 catch (SshBackend.AuthenticationRejectedException ignored) { failure = Failure.AUTHENTICATION; }
+                catch (SshBackend.ChannelSetupException rejected) { failure = rejected.timedOut ? Failure.CHANNEL_TIMEOUT : Failure.CHANNEL_CLOSED; }
                 catch (Outcome outcome) { failure = outcome.failure; }
                 catch (SshAddressResolver.AccessDeniedException ignored) { failure = Failure.PERMISSION; }
                 catch (SshAddressResolver.NetworkChangedException ignored) { failure = Failure.RESOLUTION; }

@@ -226,7 +226,19 @@ public final class JschSshBackend implements SshBackend {
         }
         @Override public OutputStream input() throws Exception { return channel.getOutputStream(); }
         @Override public InputStream output() throws Exception { return channel.getInputStream(); }
-        @Override public void connect(int timeoutMillis) throws Exception { channel.connect(timeoutMillis); }
+        @Override public void connect(int timeoutMillis) throws Exception {
+            long start = System.nanoTime();
+            try { channel.connect(timeoutMillis); }
+            catch (JSchException ignored) {
+                // JSch's channel deadline is often an untyped "not opened" exception. Its own
+                // finite timer may beat the transport future by a scheduler tick. Classify using
+                // elapsed monotonic time only, allowing one millisecond of provider clock rounding;
+                // an early explicit channel rejection is NOT labelled a timeout.
+                boolean timedOut = System.nanoTime() - start >=
+                        java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(Math.max(1, timeoutMillis - 1));
+                throw new SshBackend.ChannelSetupException(timedOut);
+            }
+        }
         @Override public boolean isClosed() { return channel.isClosed(); }
         @Override public int exitStatus() { return channel.getExitStatus(); }
         @Override public void close() { channel.disconnect(); }

@@ -128,7 +128,7 @@ public class ListEditActivityDialogTest {
                 if (!script) {
                     verify(username).setText(record.getUsername());
                     verify(port).setText(record.getPort());
-                    // Protected prefill is asynchronous; no plaintext lives in the list model.
+                    // Only metadata is prefilled; no plaintext is read into the form or list model.
                     verify(password).setSaveEnabled(false);
                 }
             } else {

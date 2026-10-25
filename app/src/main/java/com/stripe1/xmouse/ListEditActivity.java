@@ -75,7 +75,6 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
     private CredentialRepository credentials;
     private int generation;
     private AlertDialog editing;
-    private AlertDialog emptyPasswordConfirmation;
     private AlertDialog discoveryDialog;
     private ListView discoveryResults;
     private TextView discoveryStatus;
@@ -86,6 +85,8 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
     private SshServiceDiscovery.Candidate transientDiscoveryCandidate;
     private int discoveryGeneration;
     private String discoveryError;
+    private boolean permissionInFlight;
+    private int permissionGeneration = -1;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -99,21 +100,25 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
         database = new DatabaseHandler(getApplicationContext());
         credentials = AndroidCredentials.get(this);
         type = getIntent().getIntExtra("intVariableType", 0) == 0 ? ActivityType.type_host : ActivityType.type_script;
-        setTitle(type == ActivityType.type_host ? "Manage Hosts" : "Manage Scripts");
-        ((FloatingActionButton) findViewById(R.id.fab)).setOnClickListener(view -> xMouseManage(null));
+        setTitle(type == ActivityType.type_host ? "Computers" : "Manage Scripts");
+        ((FloatingActionButton) findViewById(R.id.fab)).setOnClickListener(view -> {
+            if (type == ActivityType.type_host) startActivity(ComputerEditorActivity.intent(this, 0));
+            else xMouseManage(null);
+        });
         mList = findViewById(R.id.myListView);
         findComputersButton = findViewById(R.id.find_computers);
         findComputersButton.setVisibility(type == ActivityType.type_host ? View.VISIBLE : View.GONE);
         findComputersButton.setOnClickListener(view -> {
             if (type == ActivityType.type_host) showFindComputers();
         });
+        if (savedInstanceState == null && type == ActivityType.type_host && getIntent().getBooleanExtra("findComputers", false))
+            showFindComputers();
     }
 
     @Override protected void onStart() { super.onStart(); loadCurrentHostList(); }
     @Override protected void onStop() {
         generation++;
         closeDiscoveryDialog();
-        if (emptyPasswordConfirmation != null) emptyPasswordConfirmation.dismiss();
         if (editing != null) editing.dismiss();
         super.onStop();
     }
@@ -158,7 +163,7 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(view -> {
             closeDiscoveryDialog();
             transientDiscoveryCandidate = null;
-            xMouseManage(null);
+            startActivity(ComputerEditorActivity.intent(this, 0));
         });
         startDiscoveryOrRequestPermission();
     }
@@ -182,6 +187,12 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
     private void startDiscoveryOrRequestPermission() {
         if (discoveryDialog == null || !discoveryDialog.isShowing()) return;
         if (Build.VERSION.SDK_INT >= LocalNetworkPermissionCoordinator.REQUIRED_API && permissionRequired()) {
+            if (permissionInFlight) {
+                renderDiscoveryState("Finish the previous permission request, then Retry.");
+                return;
+            }
+            permissionInFlight = true;
+            permissionGeneration = discoveryGeneration;
             discoveryError = null;
             renderDiscoveryState(getString(R.string.ssh_discovery_permission_requesting));
             localNetworkPermissionLauncher.launch(LocalNetworkPermissionCoordinator.PERMISSION);
@@ -191,7 +202,8 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
     }
 
     private void onLocalNetworkPermissionResult(boolean granted) {
-        if (discoveryDialog == null || !discoveryDialog.isShowing()) return;
+        permissionInFlight = false;
+        if (permissionGeneration != discoveryGeneration || discoveryDialog == null || !discoveryDialog.isShowing()) return;
         if (granted) {
             startDiscoverySession();
         } else {
@@ -296,8 +308,8 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
 
     private void selectDiscoveredCandidate(SshServiceDiscovery.Candidate candidate) {
         closeDiscoveryDialog();
-        transientDiscoveryCandidate = candidate;
-        xMouseManage(null, candidate);
+        transientDiscoveryCandidate = null;
+        startActivity(ComputerEditorActivity.discoveredIntent(this, candidate));
     }
 
     private void closeDiscoveryDialog() {
@@ -321,16 +333,17 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
         if (type == ActivityType.type_host) {
             final int token = generation;
             credentials.execute(() -> {
-                boolean ready = credentials.prepare();
                 List<HostItem> items = new LinkedList<>();
                 try {
                     for (CredentialHost host : credentials.hosts()) {
                         HostItem item = new HostItem();
-                        item.setCredentialHost(host); item.setAlias(host.getAlias()); item.setIP(host.displayEndpoint());
+                        item.setCredentialHost(host);
+                        item.setAlias(host.getAlias() == null || host.getAlias().trim().isEmpty() ? host.displayEndpoint() : host.getAlias());
+                        item.setIP(host.displayEndpoint());
                         item.setUsername(host.getUser()); item.setPort(host.getPort()); item.setDbId((int) host.getId());
                         items.add(item);
                     }
-                    runOnUiThread(() -> { if (current(token)) { showItems(items); if (!ready) failure(); } });
+                    runOnUiThread(() -> { if (current(token)) showItems(items); });
                 } catch (Exception ignored) { runOnUiThread(() -> { if (current(token)) failure(); }); }
             });
         } else {
@@ -401,30 +414,7 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
             if (editing == dialog) editing = null;
             if (transientDiscoveryCandidate == candidate) transientDiscoveryCandidate = null;
         });
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(script || existing == null);
-        if (!script && existing != null) {
-            credentials.execute(() -> {
-                byte[] password = null;
-                try {
-                    if (!credentials.prepare()) throw new com.stripe1.xmouse.secrets.CredentialRepositoryException();
-                    boolean reentry = existing != null && existing.getCredentialHost().getCredentialReentryRequired();
-                    password = existing == null || reentry ? new byte[0] : credentials.readPassword(existing.getCredentialHost());
-                    final byte[] loaded = password;
-                    runOnUiThread(() -> {
-                        try {
-                            if (current(token) && dialog.isShowing()) {
-                                passwordBox.setText(new String(loaded, StandardCharsets.UTF_8));
-                                if (reentry) passwordBox.setHint("Enter the saved password again");
-                                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
-                            }
-                        } finally { Arrays.fill(loaded, (byte) 0); }
-                    });
-                } catch (Exception ignored) {
-                    if (password != null) Arrays.fill(password, (byte) 0);
-                    runOnUiThread(() -> { if (current(token) && dialog.isShowing()) failure(); });
-                }
-            });
-        }
+        if (!script && existing != null) passwordBox.setHint("Leave blank to keep the saved password unchanged");
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
             String alias = nameBox.getText().toString(); String endpoint = hostBox.getText().toString();
             if (script) {
@@ -437,38 +427,29 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
                 dialog.dismiss(); loadCurrentHostList();
             } else {
                 String user = userBox.getText().toString(); String port = portBox.getText().toString();
+                if (!com.stripe1.xmouse.connection.ComputerDraft.validUsername(user)) {
+                    userBox.setError("Enter a username without leading or trailing whitespace"); return;
+                }
                 EndpointLocator.DiscoveredService serviceLocator = serviceLocatorForSave(existing, candidate, endpoint);
                 if (serviceLocator == null ? !validHostInput(hostBox, portBox) : !validPortInput(portBox)) return;
-                if (existing != null && existing.getCredentialHost().getCredentialReentryRequired()
-                        && passwordBox.getText().length() == 0) {
-                    AlertDialog confirmation = new AlertDialog.Builder(this)
-                            .setTitle("Save an empty password?")
-                            .setMessage("This host's saved password was not included in the backup. Confirm to replace it with an empty password.")
-                            .setPositiveButton("Save empty password", (confirmationDialog, which) -> {
-                                 if (current(token) && dialog.isShowing()) {
-                                     saveHost(dialog, token, existing, alias, endpoint, user, port, new byte[0], serviceLocator);
-                                 }
-                            })
-                            .setNegativeButton("Keep editing", null)
-                            .create();
-                    emptyPasswordConfirmation = confirmation;
-                    confirmation.setOnDismissListener(ignored -> {
-                        if (emptyPasswordConfirmation == confirmation) emptyPasswordConfirmation = null;
-                    });
-                    confirmation.show();
-                    return;
-                }
-                byte[] password = passwordBox.getText().toString().getBytes(StandardCharsets.UTF_8);
+                byte[] password = existing != null && passwordBox.length() == 0 ? null : passwordBox.getText().toString().getBytes(StandardCharsets.UTF_8);
                 saveHost(dialog, token, existing, alias, endpoint, user, port, password, serviceLocator);
             }
         });
         dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(view -> {
             if (existing == null) { dialog.dismiss(); return; }
             if (script) { database.deleteRow(DatabaseHandler.SCRIPT_TABLE_NAME, Integer.parseInt(existing.getUsername())); dialog.dismiss(); loadCurrentHostList(); }
-            else credentials.execute(() -> {
-                try { credentials.deleteHost(existing.getCredentialHost()); runOnUiThread(() -> { if (current(token)) { dialog.dismiss(); loadCurrentHostList(); } }); }
-                catch (Exception ignored) { runOnUiThread(() -> { if (current(token)) failure(); }); }
-            });
+            else new AlertDialog.Builder(this).setTitle("Delete computer?")
+                    .setMessage("Remove this saved computer? Protected credentials and active control sessions are not reset.")
+                    .setNegativeButton("Cancel", null).setPositiveButton("Delete", (confirmation, which) -> {
+                        if (!current(token) || !dialog.isShowing()) return;
+                        credentials.execute(() -> {
+                        try {
+                            if (!credentials.isWritable() && !credentials.prepare()) throw new com.stripe1.xmouse.secrets.CredentialRepositoryException();
+                            credentials.deleteHost(existing.getCredentialHost());
+                            runOnUiThread(() -> { if (current(token)) { dialog.dismiss(); loadCurrentHostList(); } });
+                        } catch (Exception ignored) { runOnUiThread(() -> { if (current(token)) failure(); }); }
+                    }); }).show();
         });
     }
 
@@ -509,17 +490,22 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
         credentials.execute(() -> {
             boolean saved;
             try {
-                if (!credentials.isWritable() && !credentials.prepare()) throw new com.stripe1.xmouse.secrets.CredentialRepositoryException();
-                if (serviceLocator == null) {
+                if (existing != null && password == null) {
+                    Endpoint candidateEndpoint = serviceLocator == null ? Endpoint.manual(endpoint, port)
+                            : new Endpoint(serviceLocator, Endpoint.parsePort(port));
+                    credentials.updateHostMetadata(existing.getCredentialHost(), alias, candidateEndpoint, user);
+                } else if (serviceLocator == null) {
+                    if (!credentials.isWritable() && !credentials.prepare()) throw new com.stripe1.xmouse.secrets.CredentialRepositoryException();
                     credentials.saveHost(existing == null ? null : existing.getCredentialHost(), alias, endpoint, user, port, password);
                 } else {
+                    if (!credentials.isWritable() && !credentials.prepare()) throw new com.stripe1.xmouse.secrets.CredentialRepositoryException();
                     credentials.saveDiscoveredHost(existing == null ? null : existing.getCredentialHost(),
                             alias, serviceLocator, user, port, password);
                 }
                 saved = true;
             }
             catch (Exception ignored) { saved = false; }
-            finally { Arrays.fill(password, (byte) 0); }
+            finally { if (password != null) Arrays.fill(password, (byte) 0); }
             final boolean success = saved;
             runOnUiThread(() -> {
                 if (current(token) && dialog.isShowing()) {
@@ -530,5 +516,8 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
         });
     }
     @Override public void performCallback() { }
-    @Override public void performCallback2(Integer i) { xMouseManage(i); }
+    @Override public void performCallback2(Integer i) {
+        if (type == ActivityType.type_host) startActivity(ComputerEditorActivity.intent(this, mHostItems.get(i).getCredentialHost().getId()));
+        else xMouseManage(i);
+    }
 }

@@ -18,6 +18,13 @@ public interface SshBackend {
         public AuthenticationRejectedException() { super(); }
     }
 
+    /** Safe channel-setup outcome; contains no provider message, endpoint, or authentication data. */
+    final class ChannelSetupException extends Exception {
+        private static final long serialVersionUID = 1L;
+        public final boolean timedOut;
+        public ChannelSetupException(boolean timedOut) { this.timedOut = timedOut; }
+    }
+
     default SshConnectionRequest resolve(SshConnectionRequest request) throws Exception { return request; }
     default SshConnectionRequest resolve(SshConnectionRequest request, BooleanSupplier current) throws Exception {
         if (!current.getAsBoolean()) throw new CancellationException();

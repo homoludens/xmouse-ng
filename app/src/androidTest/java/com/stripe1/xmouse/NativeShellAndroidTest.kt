@@ -24,6 +24,43 @@ import org.junit.runner.RunWith
 class NativeShellAndroidTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
 
+    @Test fun nativeComputerFormLayoutHasPersistentLabelsBlankPasswordToggleAndScrollableNarrowLargeFontTargets() {
+        for (dark in listOf(false, true)) {
+            val intent = Intent(ApplicationProvider.getApplicationContext(), MainInsetsFixtureActivity::class.java)
+                .putExtra("fixture.fontScale", 1.5f).putExtra("fixture.dark", dark)
+            ActivityScenario.launch<MainInsetsFixtureActivity>(intent).use { scenario ->
+                scenario.onActivity { activity ->
+                    // Layout-only fixture: no repository, host trust, discovery, or SSH is initialized.
+                    activity.setContentView(R.layout.activity_computer_editor)
+                    val root = activity.findViewById<ViewGroup>(R.id.computer_editor_root)
+                    val density = activity.resources.displayMetrics.density
+                    val width = (320 * density).toInt(); val height = (420 * density).toInt()
+                    root.findViewById<View>(R.id.computer_port_field).visibility = View.VISIBLE
+                    root.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
+                    root.layout(0, 0, width, height)
+                    for ((id, label) in listOf(R.id.computer_name_field to "Display name (optional)",
+                        R.id.computer_host_field to "Hostname or IP address", R.id.computer_user_field to "Username",
+                        R.id.computer_password_field to "Password", R.id.computer_port_field to "SSH port")) {
+                        val field = root.findViewById<com.google.android.material.textfield.TextInputLayout>(id)
+                        assertEquals(label, field.hint.toString()); assertFalse(field.isExpandedHintEnabled)
+                        assertTrue(field.width <= width)
+                    }
+                    val password = root.findViewById<EditText>(R.id.new_host_password)
+                    assertEquals("", password.text.toString()); assertFalse(password.isSaveEnabled)
+                    assertEquals(com.google.android.material.textfield.TextInputLayout.END_ICON_PASSWORD_TOGGLE,
+                        root.findViewById<com.google.android.material.textfield.TextInputLayout>(R.id.computer_password_field).endIconMode)
+                    assertEquals("22", root.findViewById<EditText>(R.id.new_host_port).text.toString())
+                    for (id in listOf(R.id.computer_test, R.id.computer_save, R.id.computer_advanced, R.id.computer_auth_settings))
+                        assertTrue(root.findViewById<View>(id).height >= 48 * density - 1)
+                    val scroll = root.getChildAt(1) as android.widget.ScrollView
+                    assertTrue(scroll.getChildAt(0).height > scroll.height)
+                    scroll.fullScroll(View.FOCUS_DOWN)
+                    assertTrue(scroll.scrollY > 0)
+                }
+            }
+        }
+    }
+
     @Test fun narrowLargeFontHeaderAndLabeledBottomRoutesRemainReachableInBothThemes() {
         for (dark in listOf(false, true)) {
             val intent = Intent(ApplicationProvider.getApplicationContext(), MainInsetsFixtureActivity::class.java)
