@@ -2,6 +2,7 @@ package com.stripe1.xmouse;
 
 import android.content.res.ColorStateList;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -11,6 +12,7 @@ import android.widget.TextView;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.button.MaterialButtonToggleGroup;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
+import com.google.android.material.shape.ShapeAppearanceModel;
 import java.util.List;
 
 /** Shared production/isolated-fixture rendering. Input is retired by ShellNavigation before render. */
@@ -28,7 +30,34 @@ public final class NativeShellViews {
     }
 
     public static void bind(View root, ShellNavigation navigation, KeyButtonBinder keyButtonBinder) {
+        // Keep the reference's compact header at normal scale; give status its own row
+        // only when narrow widths or enlarged text need the additional room.
+        android.content.res.Configuration configuration = root.getResources().getConfiguration();
+        LinearLayout headerControls = root.findViewById(R.id.header_controls);
+        boolean compact = configuration.screenWidthDp < 360 || configuration.fontScale > 1.2f;
+        ((TextView) root.findViewById(R.id.computer_name)).setMaxLines(compact ? 2 : 1);
+        TextView status = root.findViewById(R.id.connection_status);
+        status.setTextSize(compact ? 10 : 11);
+        status.setMaxWidth(dp(root, compact ? 112 : 100));
+        headerControls.setOrientation(compact ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
+        if (compact) {
+            ViewGroup.LayoutParams params = headerControls.getLayoutParams();
+            params.width = dp(root, 112);
+            headerControls.setLayoutParams(params);
+        }
         BottomNavigationView bottom = root.findViewById(R.id.bottom_navigation);
+        // A flat navigation surface must not acquire Material's dark elevation overlay.
+        bottom.setBackground(new ColorDrawable(root.getContext().getColor(R.color.ng_surface)));
+        bottom.setStateListAnimator(null);
+        bottom.setElevation(0f);
+        bottom.setItemIconSize(dp(root, 20));
+        bottom.setItemActiveIndicatorEnabled(true);
+        bottom.setItemActiveIndicatorWidth(dp(root, 58));
+        bottom.setItemActiveIndicatorHeight(dp(root, 31));
+        bottom.setItemActiveIndicatorColor(ColorStateList.valueOf(root.getContext().getColor(R.color.ng_accent_soft)));
+        bottom.setItemActiveIndicatorShapeAppearance(ShapeAppearanceModel.builder().setAllCornerSizes(dp(root, 18)).build());
+        bottom.setItemPaddingTop(dp(root, 7));
+        bottom.setItemPaddingBottom(dp(root, 7));
         bottom.setOnItemSelectedListener(item -> {
             navigation.select(destination(item.getItemId()));
             return navigation.topOverlay() == null;
@@ -116,26 +145,29 @@ public final class NativeShellViews {
                 TextView heading = new TextView(root.getContext());
                 heading.setText(section.label());
                 heading.setTextAppearance(R.style.TextAppearance_XMouseNg_KeySection);
-                heading.setPadding(0, dp(root, sectionIndex == 0 ? 8 : 14), 0, dp(root, 6));
+                heading.setPadding(0, dp(root, sectionIndex == 0 ? 20 : 15), 0, dp(root, 10));
                 content.addView(heading, new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             }
-            addSectionGrid(root, content, section, binder);
+            int columns = state.keyCategory() == KeyCatalog.Category.COMMON &&
+                    root.getResources().getConfiguration().screenWidthDp >= 360 &&
+                    root.getResources().getConfiguration().fontScale <= 1.2f ? 3 : section.columns();
+            addSectionGrid(root, content, section, columns, binder);
         }
         content.setTag(state.keyCategory());
     }
 
-    private static void addSectionGrid(View root, LinearLayout content, KeyCatalog.Section section,
+    private static void addSectionGrid(View root, LinearLayout content, KeyCatalog.Section section, int columns,
                                        KeyButtonBinder binder) {
         List<KeyCatalog.Entry> entries = section.entries();
-        int columns = section.columns();
+        int gap = root.getResources().getDimensionPixelSize(R.dimen.ng_grid_gap);
         for (int start = 0; start < entries.size(); start += columns) {
             LinearLayout row = new LinearLayout(root.getContext());
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setBaselineAligned(false);
             LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            rowParams.bottomMargin = dp(root, 8);
+            rowParams.bottomMargin = gap;
             content.addView(row, rowParams);
 
             int end = Math.min(start + columns, entries.size());
@@ -145,8 +177,14 @@ public final class NativeShellViews {
                 binder.bind(button, entry.command());
                 LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(
                         0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-                if (i > start) buttonParams.setMarginStart(dp(root, 6));
+                if (i > start) buttonParams.setMarginStart(gap);
                 row.addView(button, buttonParams);
+            }
+            // A short last row retains the same cell widths as the rows above it.
+            for (int i = end - start; i < columns; i++) {
+                LinearLayout.LayoutParams spacer = new LinearLayout.LayoutParams(0, 1, 1f);
+                spacer.setMarginStart(gap);
+                row.addView(new View(root.getContext()), spacer);
             }
         }
     }
@@ -154,10 +192,10 @@ public final class NativeShellViews {
     private static MaterialButton createKeyButton(View root, KeyCatalog.Entry entry) {
         MaterialButton button = new MaterialButton(root.getContext());
         boolean destructive = entry.destructive();
-        int background = root.getContext().getColor(destructive ? R.color.ng_danger_soft : R.color.ng_surface_soft);
+        int background = root.getContext().getColor(destructive ? R.color.ng_danger_soft : R.color.ng_surface);
         int foreground = root.getContext().getColor(destructive ? R.color.ng_danger : R.color.ng_text_primary);
         int border = root.getContext().getColor(destructive ? R.color.ng_danger_soft : R.color.ng_border);
-        button.setText(entry.label());
+        button.setText("key alt+Tab".equals(entry.command()) ? "Switch" : entry.label());
         button.setContentDescription(entry.label());
         button.setAllCaps(false);
         button.setSingleLine(false);
@@ -168,7 +206,9 @@ public final class NativeShellViews {
         button.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
         button.setGravity(Gravity.CENTER);
         button.setPadding(dp(root, 5), dp(root, 8), dp(root, 5), dp(root, 8));
-        button.setMinHeight(dp(root, 48));
+        button.setMinHeight(dp(root, 58));
+        button.setStateListAnimator(null);
+        button.setElevation(0f);
         button.setInsetTop(0);
         button.setInsetBottom(0);
         button.setCornerRadius(dp(root, 12));
@@ -176,8 +216,38 @@ public final class NativeShellViews {
         button.setStrokeColor(ColorStateList.valueOf(border));
         button.setBackgroundTintList(ColorStateList.valueOf(background));
         button.setTextColor(foreground);
+        int icon = keyIcon(entry.command());
+        if (icon != 0) {
+            button.setIconResource(icon);
+            button.setIconTint(ColorStateList.valueOf(foreground));
+            button.setIconSize(dp(root, 18));
+            button.setIconPadding(dp(root, 5));
+            button.setIconGravity(MaterialButton.ICON_GRAVITY_TEXT_TOP);
+        }
         button.setId(legacyId(entry.command()));
         return button;
+    }
+
+    private static int keyIcon(String command) {
+        switch (command) {
+            case "key super": return R.drawable.ic_ng_window;
+            case "key alt+Tab": return R.drawable.ic_ng_switch;
+            case "xdotool windowminimize $(xdotool getactivewindow)": return R.drawable.ic_ng_minimize;
+            case "xdotool windowsize $(xdotool getactivewindow) 100% 100%": return R.drawable.ic_ng_maximize;
+            case "key alt+F4": return R.drawable.ic_ng_close;
+            case "key ctrl+c": return R.drawable.ic_ng_copy;
+            case "key ctrl+x": return R.drawable.ic_ng_cut;
+            case "key ctrl+v": return R.drawable.ic_ng_paste;
+            case "key ctrl+z": return R.drawable.ic_ng_undo;
+            case "key ctrl+y": return R.drawable.ic_ng_redo;
+            case "key ctrl+a": return R.drawable.ic_ng_select_all;
+            case "key ctrl+n": return R.drawable.ic_ng_file_new;
+            case "key ctrl+o": return R.drawable.ic_ng_folder;
+            case "key ctrl+s": return R.drawable.ic_ng_save;
+            case "key ctrl+f": return R.drawable.ic_ng_find;
+            case "key ctrl+p": return R.drawable.ic_ng_print;
+            default: return 0;
+        }
     }
 
     private static int legacyId(String command) {

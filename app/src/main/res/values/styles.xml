@@ -40,6 +40,8 @@
 
     <style name="TextAppearance.XMouseNg.Heading" parent="TextAppearance.MaterialComponents.Headline5">
         <item name="android:textSize">23sp</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:includeFontPadding">false</item>
         <item name="android:textColor">@color/ng_text_primary</item>
     </style>
 
@@ -48,12 +50,19 @@
     <style name="Widget.XMouseNg.ControlButton" parent="Widget.MaterialComponents.Button.OutlinedButton">
         <item name="android:textAllCaps">false</item>
         <item name="android:letterSpacing">0</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textStyle">normal</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="android:elevation">0dp</item>
         <item name="android:paddingStart">8dp</item>
         <item name="android:paddingEnd">8dp</item>
         <item name="android:minWidth">@dimen/ng_min_touch_target</item>
         <item name="android:minHeight">@dimen/ng_min_touch_target</item>
         <item name="android:insetTop">0dp</item>
         <item name="android:insetBottom">0dp</item>
+        <item name="iconSize">18dp</item>
         <item name="cornerRadius">@dimen/ng_radius_control</item>
         <item name="strokeWidth">1dp</item>
         <item name="strokeColor">@color/ng_border</item>
@@ -63,11 +72,35 @@
 
     <style name="Widget.XMouseNg.ControlButton.Soft" parent="Widget.XMouseNg.ControlButton">
         <item name="backgroundTint">@color/ng_surface_soft</item>
+        <item name="strokeWidth">0dp</item>
+    </style>
+
+    <style name="Widget.XMouseNg.ControlButton.Pill" parent="Widget.XMouseNg.ControlButton">
+        <item name="cornerRadius">24dp</item>
+        <item name="backgroundTint">@android:color/transparent</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textColor">@color/ng_accent</item>
+        <item name="iconTint">@color/ng_accent</item>
+        <item name="iconSize">16dp</item>
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingEnd">12dp</item>
+    </style>
+
+    <style name="Widget.XMouseNg.ControlButton.Text" parent="Widget.XMouseNg.ControlButton">
+        <item name="strokeWidth">0dp</item>
+        <item name="backgroundTint">@android:color/transparent</item>
+        <item name="android:textColor">@color/ng_accent</item>
+        <item name="iconTint">@color/ng_accent</item>
     </style>
 
     <style name="Widget.XMouseNg.ControlButton.Accent" parent="Widget.MaterialComponents.Button">
         <item name="android:textAllCaps">false</item>
         <item name="android:letterSpacing">0</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textStyle">normal</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="android:elevation">0dp</item>
         <item name="android:paddingStart">8dp</item>
         <item name="android:paddingEnd">8dp</item>
         <item name="android:minWidth">@dimen/ng_min_touch_target</item>
@@ -92,20 +125,31 @@
         <item name="android:insetTop">0dp</item>
         <item name="android:insetBottom">0dp</item>
         <item name="cornerRadius">12dp</item>
-        <item name="strokeWidth">1dp</item>
-        <item name="strokeColor">@color/ng_key_category_stroke</item>
+        <item name="strokeWidth">0dp</item>
         <item name="backgroundTint">@color/ng_key_category_background</item>
         <item name="android:textColor">@color/ng_key_category_text</item>
         <item name="android:textAllCaps">false</item>
-        <item name="android:textSize">13sp</item>
-        <item name="android:paddingStart">12dp</item>
-        <item name="android:paddingEnd">12dp</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textStyle">normal</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="android:paddingStart">8dp</item>
+        <item name="android:paddingEnd">8dp</item>
     </style>
 
     <style name="TextAppearance.XMouseNg.KeySection" parent="TextAppearance.MaterialComponents.Body2">
         <item name="android:textColor">@color/ng_text_secondary</item>
-        <item name="android:textSize">13sp</item>
-        <item name="android:textStyle">bold</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textStyle">normal</item>
+    </style>
+
+    <style name="TextAppearance.XMouseNg.Navigation" parent="TextAppearance.MaterialComponents.Caption">
+        <item name="android:textSize">11sp</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textStyle">normal</item>
+        <item name="android:letterSpacing">0</item>
     </style>
 
     <style name="Widget.XMouseNg.IconButton" parent="Widget.XMouseNg.ControlButton.Soft">
@@ -113,6 +157,12 @@
         <item name="android:minHeight">@dimen/ng_min_touch_target</item>
         <item name="iconSize">@dimen/ng_icon_size</item>
         <item name="iconTint">@color/ng_text_secondary</item>
+    </style>
+
+    <style name="Widget.XMouseNg.IconButton.Transparent" parent="Widget.XMouseNg.IconButton">
+        <item name="backgroundTint">@android:color/transparent</item>
+        <item name="iconSize">16dp</item>
+        <item name="strokeWidth">0dp</item>
     </style>
 
     <style name="Widget.XMouseNg.TextInputLayout" parent="Widget.MaterialComponents.TextInputLayout.OutlinedBox">

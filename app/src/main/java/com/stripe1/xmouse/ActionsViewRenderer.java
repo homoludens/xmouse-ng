@@ -87,14 +87,15 @@ public final class ActionsViewRenderer {
         }
 
         List<List<ActionTilePresentation>> rows = com.stripe1.xmouse.layout.ActionPresentation.INSTANCE.tileRows(profile);
+        int gap = context.getResources().getDimensionPixelSize(R.dimen.ng_action_gap);
         for (List<ActionTilePresentation> tiles : rows) {
             LinearLayout row = new LinearLayout(context);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setBaselineAligned(false);
-            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setGravity(Gravity.TOP);
             LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            rowParams.bottomMargin = dp(context, 8);
+            rowParams.bottomMargin = gap;
             container.addView(row, rowParams);
 
             for (int index = 0; index < tiles.size(); index++) {
@@ -104,17 +105,17 @@ public final class ActionsViewRenderer {
                 LinearLayout.LayoutParams tileParams;
                 if (presentation.getSize() == ActionTileSize.WIDE) {
                     tileParams = new LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
                 } else {
                     tileParams = new LinearLayout.LayoutParams(0,
-                            ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                            ViewGroup.LayoutParams.MATCH_PARENT, 1f);
                 }
-                if (index > 0) tileParams.setMarginStart(dp(context, 8));
+                if (index > 0) tileParams.setMarginStart(gap);
                 row.addView(tile, tileParams);
             }
             if (tiles.size() == 1 && tiles.get(0).getSize() == ActionTileSize.REGULAR) {
                 View spacer = new View(context);
-                row.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
+                row.addView(spacer, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
             }
         }
     }
@@ -156,21 +157,31 @@ public final class ActionsViewRenderer {
             cardParams.bottomMargin = dp(context, 8);
 
             LinearLayout content = new LinearLayout(context);
-            content.setOrientation(LinearLayout.VERTICAL);
+            content.setOrientation(LinearLayout.HORIZONTAL);
+            content.setGravity(Gravity.CENTER_VERTICAL);
+            content.setBaselineAligned(false);
             content.setPadding(dp(context, 12), dp(context, 8), dp(context, 12), dp(context, 8));
+            LinearLayout labels = new LinearLayout(context);
+            labels.setOrientation(LinearLayout.VERTICAL);
             TextView name = new TextView(context);
             name.setText(script.getName());
             name.setTextColor(context.getColor(R.color.ng_text_primary));
-            name.setTextSize(16);
-            name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            name.setTextSize(14);
+            name.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
             name.setContentDescription(context.getString(R.string.ng_script_named, script.getName()));
-            content.addView(name, matchWrap());
+            labels.addView(name, matchWrap());
+            TextView subtitle = new TextView(context);
+            subtitle.setText(R.string.ng_script_ssh_label);
+            subtitle.setTextSize(11);
+            subtitle.setTextColor(context.getColor(R.color.ng_text_secondary));
+            labels.addView(subtitle, matchWrap());
+            content.addView(labels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
             LinearLayout controls = new LinearLayout(context);
             controls.setOrientation(LinearLayout.HORIZONTAL);
             controls.setBaselineAligned(false);
             controls.setGravity(Gravity.CENTER_VERTICAL);
-            controls.setPadding(0, dp(context, 4), 0, 0);
+            controls.setPadding(dp(context, 8), 0, 0, 0);
             MaterialButton run = scriptButton(context, R.string.ng_run_script);
             run.setEnabled(!editMode);
             run.setTag(script.getId());
@@ -180,12 +191,12 @@ public final class ActionsViewRenderer {
             edit.setTag(script.getId());
             edit.setContentDescription(context.getString(R.string.ng_edit_named_script, script.getName()));
             edit.setOnClickListener(view -> { if (listener != null) listener.onEdit(view, script); });
-            controls.addView(run, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-            LinearLayout.LayoutParams editParams = new LinearLayout.LayoutParams(0,
-                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            editParams.setMarginStart(dp(context, 8));
+            controls.addView(run, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            LinearLayout.LayoutParams editParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            editParams.setMarginStart(dp(context, 4));
             controls.addView(edit, editParams);
-            content.addView(controls, matchWrap());
+            content.addView(controls, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             card.addView(content);
             container.addView(card, cardParams);
         }
@@ -206,7 +217,7 @@ public final class ActionsViewRenderer {
         card.setCardElevation(0f);
         card.setClickable(true);
         card.setFocusable(true);
-        card.setMinimumHeight(dp(context, 82));
+        card.setMinimumHeight(dp(context, 104));
         card.setTag(action.getId());
         card.setContentDescription(context.getString(R.string.ng_action_tile_accessibility,
                 action.getTitle(), presentation.getSubtitle(), action.getId()));
@@ -214,12 +225,12 @@ public final class ActionsViewRenderer {
         LinearLayout body = new LinearLayout(context);
         body.setOrientation(LinearLayout.VERTICAL);
         body.setGravity(Gravity.START);
-        body.setPadding(dp(context, 12), dp(context, 10), dp(context, 10), dp(context, 10));
+        body.setPadding(dp(context, 15), dp(context, 15), dp(context, 15), dp(context, 15));
         ImageView icon = new ImageView(context);
         icon.setImageResource(R.drawable.ic_ng_actions);
         icon.setImageTintList(ColorStateList.valueOf(foreground));
-        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(context, 22), dp(context, 22));
-        iconParams.bottomMargin = dp(context, 8);
+        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(context, 20), dp(context, 20));
+        iconParams.bottomMargin = dp(context, 14);
         body.addView(icon, iconParams);
 
         LinearLayout labels = new LinearLayout(context);
@@ -227,18 +238,20 @@ public final class ActionsViewRenderer {
         TextView title = new TextView(context);
         title.setText(action.getTitle());
         title.setTextColor(foreground);
-        title.setTextSize(15);
-        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        title.setTextSize(13);
+        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         title.setMaxLines(2);
         title.setEllipsize(TextUtils.TruncateAt.END);
         labels.addView(title, matchWrap());
         TextView subtitle = new TextView(context);
         subtitle.setText(editMode ? context.getString(R.string.ng_tap_to_edit_action) : presentation.getSubtitle());
         subtitle.setTextColor(foreground);
-        subtitle.setTextSize(12);
+        subtitle.setTextSize(11);
         subtitle.setMaxLines(2);
         subtitle.setEllipsize(TextUtils.TruncateAt.END);
-        labels.addView(subtitle, matchWrap());
+        LinearLayout.LayoutParams subtitleParams = matchWrap();
+        subtitleParams.topMargin = dp(context, 3);
+        labels.addView(subtitle, subtitleParams);
         body.addView(labels, matchWrap());
         card.addView(body);
         return card;
@@ -277,11 +290,20 @@ public final class ActionsViewRenderer {
                 com.google.android.material.R.attr.materialButtonOutlinedStyle);
         button.setText(label);
         button.setAllCaps(false);
+        button.setMinWidth(dp(context, 48));
+        button.setMinimumWidth(dp(context, 48));
+        button.setPadding(dp(context, 8), dp(context, 8), dp(context, 8), dp(context, 8));
+        button.setTextSize(13);
+        button.setLetterSpacing(0f);
+        button.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
+        button.setStateListAnimator(null);
+        button.setElevation(0f);
         button.setMinHeight(dp(context, 48));
         button.setInsetTop(0);
         button.setInsetBottom(0);
         button.setCornerRadius(dp(context, 12));
         button.setStrokeColor(ColorStateList.valueOf(context.getColor(R.color.ng_border)));
+        button.setStrokeWidth(0);
         button.setBackgroundTintList(ColorStateList.valueOf(context.getColor(R.color.ng_surface_soft)));
         button.setTextColor(context.getColor(R.color.ng_text_primary));
         return button;

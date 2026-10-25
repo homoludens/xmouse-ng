@@ -16,9 +16,10 @@ class MainInsetsFixtureActivity : AppCompatActivity() {
         private val nextConfiguration = java.util.concurrent.atomic.AtomicReference<Configuration?>()
 
         /** Install an isolated base context before the framework first reads Activity resources. */
-        fun configuredIntent(context: Context, fontScale: Float, dark: Boolean): Intent {
+        fun configuredIntent(context: Context, fontScale: Float, dark: Boolean, widthDp: Int? = null): Intent {
             nextConfiguration.set(Configuration(context.resources.configuration).apply {
                 this.fontScale = fontScale
+                if (widthDp != null) screenWidthDp = widthDp
                 uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
                     if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
             })
@@ -28,7 +29,12 @@ class MainInsetsFixtureActivity : AppCompatActivity() {
 
     override fun attachBaseContext(newBase: Context) {
         val configuration = nextConfiguration.getAndSet(null)
-        super.attachBaseContext(if (configuration == null) newBase else newBase.createConfigurationContext(configuration))
+        super.attachBaseContext(newBase)
+        if (configuration != null) applyOverrideConfiguration(Configuration().apply {
+            fontScale = configuration.fontScale
+            screenWidthDp = configuration.screenWidthDp
+            uiMode = configuration.uiMode
+        })
     }
 
     lateinit var navigation: ShellNavigation

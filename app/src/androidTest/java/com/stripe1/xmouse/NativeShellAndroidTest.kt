@@ -208,7 +208,7 @@ class NativeShellAndroidTest {
                         collectButtons(content, buttons)
                         val expected = KeyCatalog.sections(category).flatMap { it.entries() }.map { it.label() }
                         assertEquals("rendered labels for ${category.label()}", expected,
-                            buttons.map { it.text.toString() })
+                            buttons.map { it.contentDescription.toString() })
                         for (button in buttons) {
                             assertTrue("${button.text} is an accessible 48dp touch target",
                                 button.height >= 48 * density - 1)
@@ -362,7 +362,7 @@ class NativeShellAndroidTest {
                     assertTrue("custom span is disclosed in subtitle",
                         findText(customRowCards.single(), "Custom size (7/10)") != null)
                     for (card in firstRowCards + wideRowCards + customRowCards) {
-                        assertTrue("tile remains a 48dp+ target", card.height >= 48 * activity.resources.displayMetrics.density - 1)
+                        assertTrue("tile ${card.tag} (${card.height}px) remains a 48dp+ target", card.height >= 48 * activity.resources.displayMetrics.density - 1)
                         assertTrue("tile accessibility includes its stable ID", card.contentDescription.toString().contains(card.tag.toString()))
                     }
                     val longTitle = requireNotNull(findText(firstRowCards[0], "Synthetic Alpha"))

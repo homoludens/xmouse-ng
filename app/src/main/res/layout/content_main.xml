@@ -6,10 +6,11 @@
         android:layout_height="match_parent" android:fillViewport="true">
     <LinearLayout android:layout_width="match_parent"
         android:layout_height="wrap_content" android:orientation="vertical"
-        android:paddingStart="14dp" android:paddingEnd="14dp" android:paddingTop="2dp" android:paddingBottom="10dp">
+        android:paddingStart="@dimen/ng_page_gutter" android:paddingEnd="@dimen/ng_page_gutter"
+        android:paddingTop="0dp" android:paddingBottom="@dimen/ng_page_bottom">
         <LinearLayout android:id="@+id/touchpad_title_row" android:layout_width="match_parent"
             android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal"
-            android:paddingBottom="8dp">
+            android:minHeight="51dp" android:layout_marginBottom="@dimen/ng_page_heading_gap">
             <TextView android:id="@+id/touchpad_title" style="@style/TextAppearance.XMouseNg.Heading"
                 android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
                 android:text="@string/ng_touchpad" />
@@ -19,11 +20,12 @@
                 android:drawablePadding="4dp" android:gravity="center" android:paddingStart="8dp" android:paddingEnd="8dp"
                 android:textOff="@string/mouse_control_gyro_short" android:textOn="@string/mouse_control_gyro_short"
                 android:textColor="@color/ng_accent" android:textSize="12sp" android:textAllCaps="false" android:tooltipText="@string/mouse_control_gyro_tooltip"
+                android:fontFamily="sans-serif" android:stateListAnimator="@null" android:elevation="0dp"
                 android:background="@drawable/ng_touchpad_mode_button" />
-            <Button android:id="@+id/jsToggle" style="@style/Widget.XMouseNg.ControlButton.Soft"
+            <Button android:id="@+id/jsToggle" style="@style/Widget.XMouseNg.IconButton.Transparent"
                 android:layout_width="48dp" android:layout_height="48dp" android:layout_marginStart="6dp"
-                android:minWidth="48dp" android:drawableTop="@drawable/ic_mouse_joystick"
-                android:drawableTint="@color/mouse_control_icon_tint" android:gravity="center" android:padding="2dp"
+                android:minWidth="48dp" app:icon="@drawable/ic_mouse_joystick" app:iconSize="20dp"
+                app:iconGravity="textStart" app:iconPadding="0dp" android:gravity="center" android:padding="14dp"
                 android:contentDescription="@string/mouse_control_show_joystick"
                 android:tooltipText="@string/mouse_control_show_joystick_tooltip" />
         </LinearLayout>
@@ -34,18 +36,19 @@
                 <FrameLayout android:id="@+id/mouse_surface_host" android:layout_width="match_parent"
                     android:layout_height="0dp" android:layout_weight="1" android:minHeight="112dp"
                     android:background="@drawable/ng_touchpad_surface"
+                    android:foreground="@drawable/ng_touchpad_outline"
                     android:importantForAccessibility="no">
-                    <Button android:id="@+id/fourthMouseButton" style="@style/Widget.XMouseNg.IconButton"
+                    <Button android:id="@+id/fourthMouseButton" style="@style/Widget.XMouseNg.IconButton.Transparent"
                         android:layout_width="48dp" android:layout_height="48dp" android:layout_gravity="top|right"
                         android:contentDescription="@string/mouse_control_scroll_up"
-                        android:drawableTop="@drawable/ic_mouse_scroll_up" android:drawableTint="@color/mouse_control_icon_tint"
-                        android:gravity="center" android:onClick="xMouseClickMouse" android:padding="2dp"
+                        app:icon="@drawable/ic_ng_chevron_up" app:iconGravity="textStart" app:iconPadding="0dp"
+                        android:gravity="center" android:onClick="xMouseClickMouse" android:padding="16dp"
                         android:tooltipText="@string/mouse_control_scroll_up_tooltip" />
-                    <Button android:id="@+id/fifthMouseButton" style="@style/Widget.XMouseNg.IconButton"
+                    <Button android:id="@+id/fifthMouseButton" style="@style/Widget.XMouseNg.IconButton.Transparent"
                         android:layout_width="48dp" android:layout_height="48dp" android:layout_gravity="bottom|right"
                         android:contentDescription="@string/mouse_control_scroll_down"
-                        android:drawableTop="@drawable/ic_mouse_scroll_down" android:drawableTint="@color/mouse_control_icon_tint"
-                        android:gravity="center" android:onClick="xMouseClickMouse" android:padding="2dp"
+                        app:icon="@drawable/ic_ng_chevron_down" app:iconGravity="textStart" app:iconPadding="0dp"
+                        android:gravity="center" android:onClick="xMouseClickMouse" android:padding="16dp"
                         android:tooltipText="@string/mouse_control_scroll_down_tooltip" />
                 </FrameLayout>
                 <include layout="@layout/mouse_buttons" />
@@ -56,68 +59,75 @@
             </LinearLayout>
         </FrameLayout>
         <LinearLayout android:id="@+id/touchpad_quick_keys" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal"
+            android:layout_height="wrap_content" android:layout_marginTop="14dp" android:orientation="horizontal"
             android:baselineAligned="false">
             <Button android:id="@+id/touchpad_key_escape" style="@style/Widget.XMouseNg.ControlButton.Soft"
-                android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="0.75"
                 android:text="@string/ng_escape" android:textSize="12sp" />
             <Button android:id="@+id/touchpad_key_switch" style="@style/Widget.XMouseNg.ControlButton.Soft"
-                android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-                android:layout_marginStart="6dp"
+                android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1.25"
+                android:layout_marginStart="7dp" app:icon="@drawable/ic_ng_switch" app:iconTint="@color/ng_text_primary" app:iconSize="16dp" app:iconGravity="textStart" app:iconPadding="6dp"
                 android:text="@string/ng_switch" android:textSize="12sp" />
             <Button android:id="@+id/touchpad_key_super" style="@style/Widget.XMouseNg.ControlButton.Soft"
                 android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-                android:layout_marginStart="6dp" android:text="@string/ng_super" android:textSize="12sp" />
+                android:layout_marginStart="7dp" app:icon="@drawable/ic_ng_window" app:iconTint="@color/ng_text_primary" app:iconSize="16dp" app:iconGravity="textStart" app:iconPadding="6dp"
+                android:text="@string/ng_super" android:textSize="12sp" />
         </LinearLayout>
+        <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="14dp">
         <Button android:id="@+id/type_on_computer" style="@style/Widget.XMouseNg.ControlButton.Soft"
-            android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="52dp" android:layout_marginTop="8dp"
-            android:backgroundTint="@color/ng_accent_soft" android:drawableStart="@drawable/ic_ng_keys"
-            android:drawableEnd="@drawable/ic_ng_chevron_right" android:drawableTint="@color/ng_accent"
-            android:drawablePadding="8dp" android:text="@string/ng_typing" android:textColor="@color/ng_accent"
-            android:gravity="center_vertical|start" android:paddingStart="16dp" android:paddingEnd="16dp" />
+            android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="52dp"
+            android:backgroundTint="@color/ng_accent_soft" app:backgroundTint="@color/ng_accent_soft"
+            app:icon="@drawable/ic_ng_keys" app:iconTint="@color/ng_accent" app:iconSize="16dp" app:iconPadding="9dp"
+            android:text="@string/ng_typing" android:textColor="@color/ng_accent"
+            android:gravity="center_vertical|start" android:paddingStart="16dp" android:paddingEnd="40dp" />
+            <ImageView android:layout_width="16dp" android:layout_height="16dp" android:layout_gravity="end|center_vertical"
+                android:layout_marginEnd="16dp" android:src="@drawable/ic_ng_chevron_right" app:tint="@color/ng_accent"
+                android:importantForAccessibility="no" android:contentDescription="@null" />
+        </FrameLayout>
     </LinearLayout>
     </ScrollView>
     <ScrollView android:id="@+id/keys_destination" android:layout_width="match_parent"
         android:layout_height="match_parent" android:visibility="gone" android:fillViewport="true">
         <LinearLayout android:id="@+id/keys_content" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:orientation="vertical" android:paddingStart="14dp"
-            android:paddingEnd="14dp" android:paddingTop="8dp" android:paddingBottom="14dp">
+            android:layout_height="wrap_content" android:orientation="vertical" android:paddingStart="@dimen/ng_page_gutter"
+            android:paddingEnd="@dimen/ng_page_gutter" android:paddingBottom="@dimen/ng_page_bottom">
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:minHeight="51dp" android:layout_marginBottom="@dimen/ng_page_heading_gap"
                 android:gravity="center_vertical" android:orientation="horizontal">
                 <TextView android:id="@+id/keys_title" style="@style/TextAppearance.XMouseNg.Heading"
                     android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
                     android:text="@string/ng_keys" />
-                <Button android:id="@+id/keys_type" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                <Button android:id="@+id/keys_type" style="@style/Widget.XMouseNg.ControlButton.Pill"
                     android:layout_width="wrap_content" android:layout_height="48dp" android:minWidth="48dp"
-                    android:drawableStart="@drawable/ic_ng_keys" android:drawableTint="@color/ng_accent"
-                    android:drawablePadding="6dp" android:paddingStart="12dp" android:paddingEnd="12dp"
+                    app:icon="@drawable/ic_ng_keys" app:iconPadding="6dp" app:iconGravity="textStart"
                     android:text="@string/ng_type_short" android:textAllCaps="false"
                     android:textColor="@color/ng_accent" android:contentDescription="@string/ng_typing"
                     android:tooltipText="@string/ng_typing" />
             </LinearLayout>
             <HorizontalScrollView android:id="@+id/keys_category_scroll" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:layout_marginTop="8dp" android:fillViewport="false"
+                android:layout_height="wrap_content" android:fillViewport="true"
                 android:scrollbars="none" android:clipToPadding="false">
                 <com.google.android.material.button.MaterialButtonToggleGroup
                     android:id="@+id/keys_category_group" android:layout_width="wrap_content"
-                    android:layout_height="wrap_content" app:checkedButton="@id/keys_category_common"
+                    android:layout_height="wrap_content" android:padding="4dp" android:background="@drawable/ng_control_soft"
+                    app:checkedButton="@id/keys_category_common"
                     app:selectionRequired="true" app:singleSelection="true">
                     <com.google.android.material.button.MaterialButton android:id="@+id/keys_category_common"
                         style="@style/Widget.XMouseNg.KeyCategory" android:layout_width="wrap_content"
-                        android:layout_height="wrap_content" android:text="Common" />
+                        android:layout_height="wrap_content" android:layout_weight="1" android:text="Common" />
                     <com.google.android.material.button.MaterialButton android:id="@+id/keys_category_navigate"
                         style="@style/Widget.XMouseNg.KeyCategory" android:layout_width="wrap_content"
-                        android:layout_height="wrap_content" android:text="Navigate" />
+                        android:layout_height="wrap_content" android:layout_weight="1" android:text="Navigate" />
                     <com.google.android.material.button.MaterialButton android:id="@+id/keys_category_media"
                         style="@style/Widget.XMouseNg.KeyCategory" android:layout_width="wrap_content"
-                        android:layout_height="wrap_content" android:text="Media" />
+                        android:layout_height="wrap_content" android:layout_weight="1" android:text="Media" />
                     <com.google.android.material.button.MaterialButton android:id="@+id/keys_category_function"
                         style="@style/Widget.XMouseNg.KeyCategory" android:layout_width="wrap_content"
-                        android:layout_height="wrap_content" android:text="F1–F12" />
+                        android:layout_height="wrap_content" android:layout_weight="1" android:text="F1–F12" />
                 </com.google.android.material.button.MaterialButtonToggleGroup>
             </HorizontalScrollView>
             <LinearLayout android:id="@+id/keys_catalog_content" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:orientation="vertical" android:paddingTop="4dp" />
+                android:layout_height="wrap_content" android:orientation="vertical" />
         </LinearLayout>
     </ScrollView>
     <LinearLayout android:id="@+id/actions_destination" android:layout_width="match_parent"
@@ -127,38 +137,47 @@
             android:clipToPadding="false">
             <LinearLayout android:id="@+id/actions_content" android:layout_width="match_parent"
                 android:layout_height="wrap_content" android:orientation="vertical"
-                android:paddingStart="14dp" android:paddingEnd="14dp" android:paddingTop="8dp"
-                android:paddingBottom="18dp">
+                android:paddingStart="@dimen/ng_page_gutter" android:paddingEnd="@dimen/ng_page_gutter"
+                android:paddingBottom="@dimen/ng_page_bottom">
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:minHeight="51dp" android:layout_marginBottom="@dimen/ng_page_heading_gap"
                     android:gravity="center_vertical" android:orientation="horizontal">
                     <TextView style="@style/TextAppearance.XMouseNg.Heading" android:layout_width="0dp"
                         android:layout_height="wrap_content" android:layout_weight="1" android:text="@string/ng_actions" />
-                    <Button android:id="@+id/actions_edit" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                    <Button android:id="@+id/actions_edit" style="@style/Widget.XMouseNg.ControlButton.Text"
                         android:layout_width="wrap_content" android:layout_height="48dp"
                         android:text="@string/ng_edit_actions_short" />
-                    <Button android:id="@+id/actions_more" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                    <Button android:id="@+id/actions_more" style="@style/Widget.XMouseNg.ControlButton.Text"
                         android:layout_width="wrap_content" android:layout_height="48dp" android:layout_marginStart="6dp"
                         android:text="@string/ng_actions_more" />
                 </LinearLayout>
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginBottom="18dp" android:gravity="center_vertical" android:orientation="horizontal">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:layout_marginEnd="12dp" android:text="@string/ng_layout_label" android:textSize="12sp"
+                        android:textColor="@color/ng_text_secondary" android:labelFor="@id/actions_layout_picker" />
                 <com.google.android.material.button.MaterialButton android:id="@+id/actions_layout_picker"
-                    style="@style/Widget.XMouseNg.ControlButton.Soft" android:layout_width="match_parent"
-                    android:layout_height="wrap_content" android:minHeight="48dp" android:layout_marginTop="8dp"
-                    android:drawableEnd="@drawable/ic_ng_chevron_down" android:drawableTint="@color/ng_text_secondary"
+                    style="@style/Widget.XMouseNg.ControlButton" android:layout_width="wrap_content" android:layout_weight="1"
+                    android:layout_height="wrap_content" android:minHeight="48dp"
+                    app:icon="@drawable/ic_ng_chevron_down" app:iconGravity="end" app:iconTint="@color/ng_text_secondary" app:iconSize="16dp"
                     android:gravity="center_vertical|start" android:paddingStart="14dp" android:paddingEnd="14dp"
                     android:text="@string/ng_actions_choose_layout" android:textAlignment="viewStart" />
+                </LinearLayout>
                 <LinearLayout android:id="@+id/actions_tiles" android:layout_width="match_parent"
-                    android:layout_height="wrap_content" android:layout_marginTop="10dp"
+                    android:layout_height="wrap_content"
                     android:orientation="vertical" />
-                <Button android:id="@+id/actions_add" style="@style/Widget.XMouseNg.ControlButton.Accent"
-                    android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="2dp"
-                    android:drawableStart="@drawable/ic_ng_add" android:drawableTint="@color/ng_on_accent"
-                    android:drawablePadding="8dp" android:gravity="center" android:text="@string/ng_add_action" />
+                <androidx.appcompat.widget.AppCompatButton android:id="@+id/actions_add"
+                    android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="48dp" android:minWidth="48dp"
+                    android:layout_marginTop="12dp" android:background="@drawable/ng_add_action_outline"
+                    android:textSize="13sp" android:fontFamily="sans-serif" android:textAllCaps="false" android:textColor="@color/ng_accent"
+                    android:stateListAnimator="@null" android:elevation="0dp" android:padding="12dp"
+                    android:gravity="center" android:text="@string/ng_add_action_with_icon" />
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="20dp" android:gravity="center_vertical" android:orientation="horizontal">
-                    <TextView android:id="@+id/actions_scripts" style="@style/TextAppearance.XMouseNg.Heading"
+                    <TextView android:id="@+id/actions_scripts" style="@style/TextAppearance.XMouseNg.KeySection"
                         android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
                         android:text="@string/ng_scripts" />
-                    <Button android:id="@+id/actions_add_script" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                    <Button android:id="@+id/actions_add_script" style="@style/Widget.XMouseNg.ControlButton.Text"
                         android:layout_width="wrap_content" android:layout_height="48dp"
                         android:text="@string/ng_add_script" />
                 </LinearLayout>

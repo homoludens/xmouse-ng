@@ -42,4 +42,7 @@
     <string name="ng_load_preset_two">Load layout 2</string>
     <string name="ng_load_preset_three">Load layout 3</string>
     <string name="ng_add_action">Add action</string>
+    <string name="ng_add_action_with_icon">＋  Add action</string>
+    <string name="ng_layout_label">Layout</string>
+    <string name="ng_script_ssh_label">SSH script</string>
 </resources>

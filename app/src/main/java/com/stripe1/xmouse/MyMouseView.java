@@ -96,13 +96,13 @@ public class MyMouseView extends View {
         stripTrackPaint.setColor(c.getColor(R.color.ng_border));
         stripTrackPaint.setStrokeCap(Paint.Cap.ROUND);
         hintTitlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        hintTitlePaint.setColor(c.getColor(R.color.ng_text_primary));
+        hintTitlePaint.setColor(c.getColor(R.color.ng_text_secondary));
         hintTitlePaint.setTextAlign(Paint.Align.CENTER);
         hintTitlePaint.setTextSize(sp(14));
         hintDetailPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         hintDetailPaint.setColor(c.getColor(R.color.ng_text_secondary));
         hintDetailPaint.setTextAlign(Paint.Align.CENTER);
-        hintDetailPaint.setTextSize(sp(12));
+        hintDetailPaint.setTextSize(sp(11));
         hintIconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         hintIconPaint.setColor(c.getColor(R.color.ng_accent));
         hintIconPaint.setStyle(Paint.Style.STROKE);
