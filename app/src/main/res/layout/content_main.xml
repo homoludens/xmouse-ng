@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/destination_container" android:layout_width="match_parent" android:layout_height="match_parent">
     <LinearLayout android:id="@+id/touchpad_destination" android:layout_width="match_parent"
         android:layout_height="match_parent" android:orientation="vertical"
@@ -75,15 +76,44 @@
     <ScrollView android:id="@+id/keys_destination" android:layout_width="match_parent"
         android:layout_height="match_parent" android:visibility="gone" android:fillViewport="true">
         <LinearLayout android:id="@+id/keys_content" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:orientation="vertical" android:padding="14dp">
-            <TextView style="@style/TextAppearance.XMouseNg.Heading" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:text="@string/ng_keys" />
-            <Button android:id="@+id/key_escape" style="@style/Widget.XMouseNg.ControlButton.Soft"
-                android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/ng_escape" />
-            <Button android:id="@+id/key_switch" style="@style/Widget.XMouseNg.ControlButton.Soft"
-                android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/ng_switch" />
-            <Button android:id="@+id/key_super" style="@style/Widget.XMouseNg.ControlButton.Soft"
-                android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/ng_super" />
+            android:layout_height="wrap_content" android:orientation="vertical" android:paddingStart="14dp"
+            android:paddingEnd="14dp" android:paddingTop="8dp" android:paddingBottom="14dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:gravity="center_vertical" android:orientation="horizontal">
+                <TextView android:id="@+id/keys_title" style="@style/TextAppearance.XMouseNg.Heading"
+                    android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                    android:text="@string/ng_keys" />
+                <Button android:id="@+id/keys_type" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                    android:layout_width="wrap_content" android:layout_height="48dp" android:minWidth="48dp"
+                    android:drawableStart="@drawable/ic_ng_keys" android:drawableTint="@color/ng_accent"
+                    android:drawablePadding="6dp" android:paddingStart="12dp" android:paddingEnd="12dp"
+                    android:text="@string/ng_type_short" android:textAllCaps="false"
+                    android:textColor="@color/ng_accent" android:contentDescription="@string/ng_typing"
+                    android:tooltipText="@string/ng_typing" />
+            </LinearLayout>
+            <HorizontalScrollView android:id="@+id/keys_category_scroll" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:layout_marginTop="8dp" android:fillViewport="false"
+                android:scrollbars="none" android:clipToPadding="false">
+                <com.google.android.material.button.MaterialButtonToggleGroup
+                    android:id="@+id/keys_category_group" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" app:checkedButton="@id/keys_category_common"
+                    app:selectionRequired="true" app:singleSelection="true">
+                    <com.google.android.material.button.MaterialButton android:id="@+id/keys_category_common"
+                        style="@style/Widget.XMouseNg.KeyCategory" android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" android:text="Common" />
+                    <com.google.android.material.button.MaterialButton android:id="@+id/keys_category_navigate"
+                        style="@style/Widget.XMouseNg.KeyCategory" android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" android:text="Navigate" />
+                    <com.google.android.material.button.MaterialButton android:id="@+id/keys_category_media"
+                        style="@style/Widget.XMouseNg.KeyCategory" android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" android:text="Media" />
+                    <com.google.android.material.button.MaterialButton android:id="@+id/keys_category_function"
+                        style="@style/Widget.XMouseNg.KeyCategory" android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" android:text="F1–F12" />
+                </com.google.android.material.button.MaterialButtonToggleGroup>
+            </HorizontalScrollView>
+            <LinearLayout android:id="@+id/keys_catalog_content" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:orientation="vertical" android:paddingTop="4dp" />
         </LinearLayout>
     </ScrollView>
     <LinearLayout android:id="@+id/actions_destination" android:layout_width="match_parent"

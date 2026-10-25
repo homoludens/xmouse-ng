@@ -13,6 +13,7 @@
     <string name="ng_status_action">%1$s. Open session controls</string>
     <string name="ng_close">Close</string>
     <string name="ng_typing">Type on computer</string>
+    <string name="ng_type_short">Type</string>
     <string name="ng_typing_label">Text to send</string>
     <string name="ng_typing_hint">Enter text, then press Send</string>
     <string name="ng_send">Send</string>

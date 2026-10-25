@@ -20,11 +20,13 @@ public final class ShellNavigation {
 
     private final Listener listener;
     private Destination destination = Destination.TOUCHPAD;
+    private KeyCatalog.Category keyCategory = KeyCatalog.Category.COMMON;
     private boolean joystick;
     private final List<Overlay> overlays = new ArrayList<>();
 
     public ShellNavigation(Listener listener) { this.listener = listener; }
     public Destination destination() { return destination; }
+    public KeyCatalog.Category keyCategory() { return keyCategory; }
     public boolean joystick() { return joystick; }
     public Overlay topOverlay() { return overlays.isEmpty() ? null : overlays.get(overlays.size() - 1); }
     public List<Overlay> overlays() { return Collections.unmodifiableList(new ArrayList<>(overlays)); }
@@ -46,6 +48,12 @@ public final class ShellNavigation {
     public void select(Destination next) {
         if (next == destination || !overlays.isEmpty()) return;
         change(() -> destination = next);
+    }
+
+    /** Replacing Keys controls is an input boundary even though the destination remains selected. */
+    public void selectKeyCategory(KeyCatalog.Category next) {
+        if (next == null || next == keyCategory || destination != Destination.KEYS || !overlays.isEmpty()) return;
+        change(() -> keyCategory = next);
     }
 
     public void setJoystick(boolean enabled) {

@@ -11,6 +11,7 @@ import androidx.appcompat.app.AppCompatActivity
 class MainInsetsFixtureActivity : AppCompatActivity() {
     lateinit var navigation: ShellNavigation
         private set
+    val shellEvents = mutableListOf<String>()
     override fun onCreate(savedInstanceState: Bundle?) {
         if (intent.hasExtra("fixture.fontScale")) {
             applyOverrideConfiguration(Configuration().apply {
@@ -23,9 +24,9 @@ class MainInsetsFixtureActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         val root = findViewById<android.view.View>(R.id.native_shell)
         navigation = ShellNavigation(object : ShellNavigation.Listener {
-            override fun retireInput() = Unit
-            override fun render() = NativeShellViews.render(root, navigation)
-            override fun refreshInput() = Unit
+            override fun retireInput() { shellEvents += "retire" }
+            override fun render() { shellEvents += "render"; NativeShellViews.render(root, navigation) }
+            override fun refreshInput() { shellEvents += "refresh" }
         })
         NativeShellViews.bind(root, navigation)
         if (savedInstanceState != null) navigation.restore(

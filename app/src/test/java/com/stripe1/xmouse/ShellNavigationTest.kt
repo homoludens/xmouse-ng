@@ -23,6 +23,35 @@ class ShellNavigationTest {
             "retire:ACTIONS", "render:POINTER", "acquire:POINTER"), f.events)
     }
 
+    @Test fun changingKeyCategoryRetiresOldKeysBeforeRenderingAndRefreshesTheKeysRole() {
+        val f = Fixture()
+        f.state.select(Destination.KEYS)
+        f.events.clear()
+
+        f.state.selectKeyCategory(KeyCatalog.Category.MEDIA)
+
+        assertEquals(KeyCatalog.Category.MEDIA, f.state.keyCategory())
+        assertEquals(InputRole.KEYS, f.state.inputRole())
+        assertEquals(listOf("retire:KEYS", "render:KEYS", "acquire:KEYS"), f.events)
+        f.events.clear()
+        f.state.selectKeyCategory(KeyCatalog.Category.MEDIA)
+        assertTrue("selecting the current category keeps the active gesture", f.events.isEmpty())
+    }
+
+    @Test fun keyCategoryCannotChangeFromAHiddenOrOverlaidKeysSurface() {
+        val f = Fixture()
+        f.state.selectKeyCategory(KeyCatalog.Category.FUNCTION)
+        assertEquals(KeyCatalog.Category.COMMON, f.state.keyCategory())
+        f.state.select(Destination.KEYS)
+        f.state.open(Overlay.COMPUTERS)
+        f.events.clear()
+
+        f.state.selectKeyCategory(KeyCatalog.Category.MEDIA)
+
+        assertEquals(KeyCatalog.Category.COMMON, f.state.keyCategory())
+        assertTrue(f.events.isEmpty())
+    }
+
     @Test fun computerSettingsAndEditorLayersSuspendInputAndDoNotChangeDestination() {
         val f = Fixture()
         f.state.select(Destination.ACTIONS)

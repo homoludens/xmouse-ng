@@ -340,7 +340,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 			@Override public void render() { renderShell(); }
 			@Override public void refreshInput() { updateControlInputSurface(); }
 		});
-		NativeShellViews.bind(shellRoot, shellNavigation);
+        NativeShellViews.bind(shellRoot, shellNavigation, this::bindKeyCatalogCommand);
 		if (savedInstanceState != null) {
 			ArrayList<String> overlays = savedInstanceState.getStringArrayList("shell.overlays");
 			shellNavigation.restore(savedInstanceState.getString("shell.destination"),
@@ -415,9 +415,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		findViewById(R.id.actions_layouts).setOnClickListener(v -> openLayoutProfileManager());
 		findViewById(R.id.actions_edit).setOnClickListener(v -> openLayoutEditor());
 		findViewById(R.id.actions_scripts).setOnClickListener(v -> showSavedScripts());
-		bindShellKey(R.id.key_escape, "Escape");
-		bindShellKey(R.id.key_switch, "alt+Tab");
-		bindShellKey(R.id.key_super, "super");
 		bindShellKey(R.id.touchpad_key_escape, "Escape", ShellNavigation.InputRole.POINTER);
 		bindShellKey(R.id.touchpad_key_switch, "alt+Tab", ShellNavigation.InputRole.POINTER);
 		bindShellKey(R.id.touchpad_key_super, "super", ShellNavigation.InputRole.POINTER);
@@ -521,7 +518,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 
 	private void renderShell() {
 		if (shellRoot == null || shellNavigation == null) return;
-		NativeShellViews.render(shellRoot, shellNavigation);
+		NativeShellViews.render(shellRoot, shellNavigation, this::bindKeyCatalogCommand);
 		boolean typing = shellNavigation.topOverlay() == ShellNavigation.Overlay.TYPING;
 		if (ET != null) {
 			InputMethodManager inputMethod = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
@@ -558,12 +555,35 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 
 	/** Reusable key/quick-key hook for Keys, Touchpad, and Typing; never borrow another role. */
 	public void bindShellKey(int viewId, String key, ShellNavigation.InputRole role) {
-		installInputButtonCapture(viewId, role);
-		findViewById(viewId).setOnClickListener(view -> {
+		bindShellKey(findViewById(viewId), key, role);
+	}
+
+	public void bindShellKey(View button, String key, ShellNavigation.InputRole role) {
+		installInputButtonCapture(button, role);
+		button.setOnClickListener(view -> {
 			InputGestureToken gesture = takeButtonActivationGesture(view);
 			Object token = gesture != null ? gesture : canUseActiveSurfaceForButtonClick(view) ? inputTokenFor(role) : null;
 			IDoTool tool = isInputTokenActive(token) ? createDoToolForInput(token) : null;
 			if (tool != null) tool.key(key);
+			if (gesture != null && commandTransport != null) commandTransport.finishInputGesture(gesture);
+		});
+	}
+
+	private void bindKeyCatalogCommand(View button, String command) {
+		if (command.startsWith("key ")) {
+			bindShellKey(button, command.substring("key ".length()), ShellNavigation.InputRole.KEYS);
+			return;
+		}
+		installInputButtonCapture(button, ShellNavigation.InputRole.KEYS);
+		button.setOnClickListener(view -> {
+			InputGestureToken gesture = takeButtonActivationGesture(view);
+			Object token = gesture != null ? gesture :
+					(canUseActiveSurfaceForButtonClick(view) ? inputTokenFor(ShellNavigation.InputRole.KEYS) : null);
+			if (isInputTokenActive(token)) {
+				IDoTool tool = createDoToolForInput(token);
+				CommandTransport transport = commandTransportForInput(token);
+				if (tool != null && transport != null) CustomCommandDispatcher.execCommand(command, tool, transport);
+			}
 			if (gesture != null && commandTransport != null) commandTransport.finishInputGesture(gesture);
 		});
 	}
@@ -966,6 +986,11 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	/** Same cancellation/accessibility policy for all destination buttons, including future typing keys. */
 	public void installInputButtonCapture(int viewId, ShellNavigation.InputRole role) {
 		View button = findViewById(viewId);
+		if (button == null) return;
+		installInputButtonCapture(button, role);
+	}
+
+	private void installInputButtonCapture(View button, ShellNavigation.InputRole role) {
 		if (button == null) return;
 		button.setOnTouchListener((view, event) -> {
 			switch (event.getActionMasked()) {

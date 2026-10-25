@@ -6,12 +6,15 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.button.MaterialButtonToggleGroup
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -92,6 +95,86 @@ class NativeShellAndroidTest {
                     }
                     assertTrue("typing access remains a 48dp target",
                         root.findViewById<View>(R.id.type_on_computer).height >= 48 * density - 1)
+                }
+            }
+        }
+    }
+
+    @Test fun keysCategoriesRenderAccessibleCatalogAndRetireBeforeReplacingControls() {
+        for (dark in listOf(false, true)) {
+            val intent = Intent(ApplicationProvider.getApplicationContext(), MainInsetsFixtureActivity::class.java)
+                .putExtra("fixture.fontScale", 1.5f).putExtra("fixture.dark", dark)
+            ActivityScenario.launch<MainInsetsFixtureActivity>(intent).use { scenario ->
+                instrumentation.waitForIdleSync()
+                scenario.onActivity { activity ->
+                    val root = activity.findViewById<ViewGroup>(R.id.native_shell)
+                    val density = activity.resources.displayMetrics.density
+                    val width = (320 * density).toInt()
+                    val height = (720 * density).toInt()
+                    fun measureShell() {
+                        root.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                            View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
+                        root.layout(0, 0, width, height)
+                    }
+                    measureShell()
+
+                    val bottom = root.findViewById<BottomNavigationView>(R.id.bottom_navigation)
+                    bottom.selectedItemId = R.id.nav_keys
+                    measureShell()
+                    val keysType = root.findViewById<Button>(R.id.keys_type)
+                    assertEquals("Type", keysType.text.toString())
+                    assertTrue("compact Type action is a 48dp target", keysType.height >= 48 * density - 1)
+                    keysType.performClick()
+                    assertEquals(ShellNavigation.Overlay.TYPING, activity.navigation.topOverlay())
+                    assertEquals(ShellNavigation.InputRole.TYPING, activity.navigation.inputRole())
+                    root.findViewById<Button>(R.id.overlay_close).performClick()
+                    assertEquals(ShellNavigation.InputRole.KEYS, activity.navigation.inputRole())
+                    measureShell()
+                    val tabs = root.findViewById<MaterialButtonToggleGroup>(R.id.keys_category_group)
+                    val categoryScroll = root.findViewById<HorizontalScrollView>(R.id.keys_category_scroll)
+                    assertTrue("category strip remains horizontally scrollable at 320dp and large fonts",
+                        tabs.width >= categoryScroll.width)
+                    assertEquals(listOf("Common", "Navigate", "Media", "F1–F12"),
+                        (0 until tabs.childCount).map { (tabs.getChildAt(it) as MaterialButton).text.toString() })
+
+                    val commonEscape = root.findViewById<Button>(R.id.key_escape)
+                    assertTrue(commonEscape.isShown)
+                    activity.shellEvents.clear()
+                    root.findViewById<MaterialButton>(R.id.keys_category_media).performClick()
+                    measureShell()
+                    assertEquals(KeyCatalog.Category.MEDIA, activity.navigation.keyCategory())
+                    assertEquals(listOf("retire", "render", "refresh"), activity.shellEvents)
+                    assertFalse("the old category controls are detached before the new KEYS capability is used",
+                        commonEscape.isShown)
+                    assertTrue(root.findViewById<MaterialButton>(R.id.keys_category_media).isChecked)
+
+                    for (category in KeyCatalog.categories()) {
+                        val categoryId = when (category) {
+                            KeyCatalog.Category.COMMON -> R.id.keys_category_common
+                            KeyCatalog.Category.NAVIGATE -> R.id.keys_category_navigate
+                            KeyCatalog.Category.MEDIA -> R.id.keys_category_media
+                            KeyCatalog.Category.FUNCTION -> R.id.keys_category_function
+                        }
+                        root.findViewById<MaterialButton>(categoryId).performClick()
+                        measureShell()
+                        assertEquals(category, activity.navigation.keyCategory())
+                        val content = root.findViewById<ViewGroup>(R.id.keys_catalog_content)
+                        val buttons = mutableListOf<Button>()
+                        collectButtons(content, buttons)
+                        val expected = KeyCatalog.sections(category).flatMap { it.entries() }.map { it.label() }
+                        assertEquals("rendered labels for ${category.label()}", expected,
+                            buttons.map { it.text.toString() })
+                        for (button in buttons) {
+                            assertTrue("${button.text} is an accessible 48dp touch target",
+                                button.height >= 48 * density - 1)
+                            assertTrue("${button.text} remains attached and visible", button.isShown)
+                            val layout = button.layout
+                            assertNotNull("${button.text} has a measured text layout", layout)
+                            for (line in 0 until layout.lineCount) {
+                                assertEquals("${button.text} is not ellipsized", 0, layout.getEllipsisCount(line))
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -178,6 +261,14 @@ class NativeShellAndroidTest {
                 try { assertTrue(grid.onInterceptTouchEvent(up)) } finally { up.recycle() }
                 assertEquals("release before first drag MOVE also closes the edit layer", 2, cancellations)
             }
+        }
+    }
+
+    private fun collectButtons(parent: ViewGroup, result: MutableList<Button>) {
+        for (i in 0 until parent.childCount) {
+            val child = parent.getChildAt(i)
+            if (child is Button) result += child
+            if (child is ViewGroup) collectButtons(child, result)
         }
     }
 }

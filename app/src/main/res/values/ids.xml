@@ -1,0 +1,6 @@
+<resources>
+    <!-- Kept stable for the original Keys fixture hooks; the catalog renders these dynamically. -->
+    <item name="key_escape" type="id" />
+    <item name="key_switch" type="id" />
+    <item name="key_super" type="id" />
+</resources>
