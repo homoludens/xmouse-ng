@@ -123,6 +123,7 @@ public class CustomKeyboardButtonAdapter extends ArrayAdapter<CustomKeyboardButt
 
 			@Override
 			public void onClick(View v) {
+				if (!v.isShown() || !v.isAttachedToWindow()) return;
 				if (mContext instanceof MainActivity) {
 					MainActivity activity = (MainActivity) mContext;
 					com.stripe1.xmouse.session.InputGestureToken gesture = inputGestures.remove(v);

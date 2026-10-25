@@ -146,4 +146,18 @@ class ShellNavigationTest {
         f.state.closeTop()
         assertEquals(InputRole.POINTER, f.state.inputRole())
     }
+
+    @Test fun savedActionsRefreshRetiresBeforeReplacingControlsEvenUnderEditOrExternalLayers() {
+        val f = Fixture()
+        f.state.select(Destination.ACTIONS)
+        for (overlay in listOf(null, Overlay.ACTION_EDIT, Overlay.EXTERNAL)) {
+            if (overlay != null) f.state.open(overlay)
+            f.events.clear()
+            f.state.replaceContent { f.events += "replace:saved-profile-only" }
+            val role = if (overlay == null) InputRole.ACTIONS else InputRole.NONE
+            assertEquals(listOf("retire:$role", "replace:saved-profile-only", "render:$role", "acquire:$role"), f.events)
+            assertEquals(overlay, f.state.topOverlay())
+            if (overlay != null) f.state.close(overlay)
+        }
+    }
 }

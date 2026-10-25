@@ -7,6 +7,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -15,6 +16,10 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.button.MaterialButtonToggleGroup
+import com.google.android.material.card.MaterialCardView
+import com.stripe1.xmouse.layout.ActionPresentation
+import com.stripe1.xmouse.layout.LayoutButton
+import com.stripe1.xmouse.layout.LayoutProfile
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -299,6 +304,140 @@ class NativeShellAndroidTest {
                 assertEquals("release before first drag MOVE also closes the edit layer", 2, cancellations)
             }
         }
+    }
+
+    @Test fun actualActionTilesRenderAsTwoColumnsWithCustomWidthsAndThemeContrast() {
+        for (dark in listOf(false, true)) {
+            val intent = Intent(ApplicationProvider.getApplicationContext(), MainInsetsFixtureActivity::class.java)
+                .putExtra("fixture.fontScale", 1.5f).putExtra("fixture.dark", dark)
+            ActivityScenario.launch<MainInsetsFixtureActivity>(intent).use { scenario ->
+                scenario.onActivity { activity ->
+                    val root = activity.findViewById<ViewGroup>(R.id.native_shell)
+                    val width = (320 * activity.resources.displayMetrics.density).toInt()
+                    val height = (720 * activity.resources.displayMetrics.density).toInt()
+                    activity.findViewById<BottomNavigationView>(R.id.bottom_navigation).selectedItemId = R.id.nav_actions
+                    val profile = LayoutProfile(
+                        id = "fixture-actions",
+                        name = "Same name",
+                        buttons = listOf(
+                            LayoutButton("regular-1", "Regular one", "key alt+F4", 5, "#E0EFE8"),
+                            LayoutButton("regular-2", "Regular two", "printf exact", 2, "#80ABCDEF"),
+                            LayoutButton("wide", "Wide action", "printf wide", 10, "#212121"),
+                            LayoutButton("custom", "Custom span", "printf custom", 7, "#FFFFFF"),
+                        ),
+                    )
+                    assertEquals(listOf("fixture-actions", "other-id"), ActionPresentation.layoutChoices(listOf(
+                        profile,
+                        LayoutProfile(id = "other-id", name = "Same name"),
+                    )).map { it.id })
+                    assertEquals(listOf("Same name", "Same name"), ActionPresentation.layoutChoices(listOf(
+                        profile,
+                        LayoutProfile(id = "other-id", name = "Same name"),
+                    )).map { it.name })
+
+                    val tiles = activity.findViewById<LinearLayout>(R.id.actions_tiles)
+                    ActionsViewRenderer.renderTiles(activity, tiles, profile, false, null)
+                    root.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                        View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
+                    root.layout(0, 0, width, height)
+
+                    assertEquals(3, tiles.childCount)
+                    val rows = (0 until tiles.childCount).map { tiles.getChildAt(it) as LinearLayout }
+                    val firstRowCards = (0 until rows[0].childCount).mapNotNull { rows[0].getChildAt(it) as? MaterialCardView }
+                    val wideRowCards = (0 until rows[1].childCount).mapNotNull { rows[1].getChildAt(it) as? MaterialCardView }
+                    val customRowCards = (0 until rows[2].childCount).mapNotNull { rows[2].getChildAt(it) as? MaterialCardView }
+                    assertEquals(2, firstRowCards.size)
+                    assertEquals(1, wideRowCards.size)
+                    assertEquals(1, customRowCards.size)
+                    assertEquals("regular-1", firstRowCards[0].tag)
+                    assertEquals("regular-2", firstRowCards[1].tag)
+                    assertEquals("wide", wideRowCards.single().tag)
+                    assertEquals("custom", customRowCards.single().tag)
+                    assertTrue("wide tile spans its full row", wideRowCards.single().width >= firstRowCards[0].width * 2)
+                    assertTrue("custom span is disclosed in subtitle",
+                        findText(customRowCards.single(), "Custom size (7/10)") != null)
+                    for (card in firstRowCards + wideRowCards + customRowCards) {
+                        assertTrue("tile remains a 48dp+ target", card.height >= 48 * activity.resources.displayMetrics.density - 1)
+                        assertTrue("tile accessibility includes its stable ID", card.contentDescription.toString().contains(card.tag.toString()))
+                    }
+                    val onAccent = firstRowCards[0].contentDescription
+                    assertTrue(onAccent.toString().contains("alt+F4"))
+                    val subtitle = findText(firstRowCards[0], "alt+F4")
+                    assertNotNull(subtitle)
+                    assertTrue("tile text uses legible dark or light foreground",
+                        subtitle!!.currentTextColor == android.graphics.Color.BLACK || subtitle.currentTextColor == android.graphics.Color.WHITE)
+                }
+            }
+        }
+    }
+
+    @Test fun actionsEmptyEditDoneAndIdBasedPickerShareProductionRenderingWithoutCommands() {
+        ActivityScenario.launch(MainInsetsFixtureActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                activity.findViewById<BottomNavigationView>(R.id.bottom_navigation).selectedItemId = R.id.nav_actions
+                val tiles = activity.findViewById<LinearLayout>(R.id.actions_tiles)
+                assertNotNull(findText(tiles, activity.getString(R.string.ng_actions_empty)))
+                activity.actionProfiles = (0..5).map { LayoutProfile(id = "fixture-profile-$it", name = "Same name") }
+                activity.selectedActionProfile = activity.actionProfiles.first()
+                activity.renderActionsFixture()
+                val edit = activity.findViewById<Button>(R.id.actions_edit)
+                edit.performClick()
+                assertEquals("Done", edit.text.toString())
+                assertEquals(ShellNavigation.InputRole.NONE, activity.navigation.inputRole())
+                edit.performClick()
+                assertEquals("Edit", edit.text.toString())
+                assertEquals(ShellNavigation.InputRole.ACTIONS, activity.navigation.inputRole())
+                activity.findViewById<View>(R.id.actions_layout_picker).performClick()
+                val dialog = activity.actionPicker!!
+                assertEquals(6, dialog.listView.adapter.count)
+                assertTrue(dialog.listView.adapter.getItem(4).toString().contains("fixture-profile-4"))
+                dialog.listView.performItemClick(null, 4, 4)
+                assertEquals("fixture-profile-4", activity.selectedActionProfile!!.id)
+                assertTrue(activity.findViewById<View>(R.id.actions_layout_picker).contentDescription.toString().contains("fixture-profile-4"))
+                assertEquals(ShellNavigation.InputRole.ACTIONS, activity.navigation.inputRole())
+            }
+        }
+    }
+
+    @Test fun actionEditorFormKeepsPresetDefaultsAndOptionalRgbScrollableAtNarrowWidth() {
+        for (dark in listOf(false, true)) {
+        val intent = Intent(ApplicationProvider.getApplicationContext(), MainInsetsFixtureActivity::class.java)
+            .putExtra("fixture.fontScale", 1.5f).putExtra("fixture.dark", dark)
+        ActivityScenario.launch<MainInsetsFixtureActivity>(intent).use { scenario ->
+            scenario.onActivity { activity ->
+                activity.setContentView(R.layout.activity_action_editor)
+                val root = activity.findViewById<ViewGroup>(R.id.action_editor_root)
+                val density = activity.resources.displayMetrics.density
+                val width = (320 * density).toInt()
+                val height = (420 * density).toInt()
+                root.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
+                root.layout(0, 0, width, height)
+                assertEquals("", root.findViewById<EditText>(R.id.action_custom_color).text.toString())
+                assertEquals(View.GONE, root.findViewById<View>(R.id.action_custom_color_field).visibility)
+                assertTrue(root.findViewById<View>(R.id.action_editor_save).height >= 48 * density - 1)
+                assertTrue(root.findViewById<View>(R.id.action_color_advanced_toggle).height >= 48 * density - 1)
+                assertEquals(3, root.findViewById<android.widget.RadioGroup>(R.id.action_size_group).childCount)
+                for (id in listOf(R.id.action_type_shortcut, R.id.action_type_advanced,
+                    R.id.action_size_regular, R.id.action_size_wide, R.id.action_color_white,
+                    R.id.action_editor_open_advanced, R.id.action_editor_new_script)) {
+                    assertTrue("form target $id remains 48dp", root.findViewById<View>(id).height >= 48 * density - 1)
+                }
+                val scroll = root.findViewById<android.widget.ScrollView>(R.id.action_editor_scroll)
+                assertTrue("long action forms remain scrollable with the IME", scroll.getChildAt(0).height > scroll.height)
+                // Layout-only fixture does not install Activity listeners or open repositories.
+                root.findViewById<View>(R.id.action_custom_color_field).visibility = View.VISIBLE
+                assertEquals(View.VISIBLE, root.findViewById<View>(R.id.action_custom_color_field).visibility)
+            }
+        }
+        }
+    }
+
+    private fun findText(parent: View, text: String): TextView? {
+        if (parent is TextView && parent.text.toString().contains(text)) return parent
+        if (parent !is ViewGroup) return null
+        for (index in 0 until parent.childCount) findText(parent.getChildAt(index), text)?.let { return it }
+        return null
     }
 
     private fun collectButtons(parent: ViewGroup, result: MutableList<Button>) {

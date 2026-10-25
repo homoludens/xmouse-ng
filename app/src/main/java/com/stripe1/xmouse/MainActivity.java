@@ -75,17 +75,22 @@ import com.stripe1.xmouse.layout.LegacyLayoutReader;
 import com.stripe1.xmouse.layout.LegacyLayoutProfileMigrator;
 import com.stripe1.xmouse.layout.LayoutButton;
 import com.stripe1.xmouse.layout.LayoutEditorActivity;
+import com.stripe1.xmouse.layout.ActionEditorActivity;
+import com.stripe1.xmouse.layout.FreshActionsProfileInitializer;
 import com.stripe1.xmouse.layout.LayoutProfile;
 import com.stripe1.xmouse.layout.LayoutProfileManagerActivity;
 import com.stripe1.xmouse.layout.LayoutProfileActivation;
 import com.stripe1.xmouse.layout.LayoutProfileRepository;
 import com.stripe1.xmouse.layout.LayoutProfileRuntime;
+import com.stripe1.xmouse.layout.SavedActionScript;
+import com.stripe1.xmouse.layout.SavedActionScriptRepository;
 
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStreamReader;
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
@@ -94,6 +99,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.WeakHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity implements MyInterface,
 		CoolDragAndDropGridView.DragAndDropListener,
@@ -153,6 +160,42 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	private List<ComputerEntry> cachedComputers = new ArrayList<>();
 	private boolean externalScreenPending;
 	private final java.util.Set<AlertDialog> shellDialogs = new java.util.HashSet<>();
+	private final ExecutorService actionsIoWorker = Executors.newSingleThreadExecutor(task -> {
+		Thread thread = new Thread(task, "xmouse-actions-io");
+		thread.setDaemon(true);
+		return thread;
+	});
+	private long actionsDataGeneration;
+	private long actionSelectionGeneration;
+	private long actionsExecutionGeneration;
+	private List<LayoutProfile> actionProfiles = new ArrayList<>();
+	private List<SavedActionScript> savedActionScripts = new ArrayList<>();
+	private LayoutProfile selectedActionProfile;
+	private boolean actionsLoading;
+	private boolean actionsLoadFailed;
+	private boolean scriptsLoading = true;
+	private boolean scriptsLoadFailed;
+	private boolean actionsEditMode;
+	private boolean actionProfileSelectionPending;
+	private boolean returningFromActionEditor;
+	private boolean returningFromScriptsManager;
+	private boolean databaseExistedAtLaunch;
+	private boolean preferencesExistedAtLaunch;
+	private static final class ActionsSnapshot {
+		final List<LayoutProfile> profiles;
+		final LayoutProfile selectedProfile;
+		final List<SavedActionScript> scripts;
+		final String profileError;
+		final boolean scriptsFailed;
+		ActionsSnapshot(List<LayoutProfile> profiles, LayoutProfile selectedProfile,
+				List<SavedActionScript> scripts, String profileError, boolean scriptsFailed) {
+			this.profiles = profiles;
+			this.selectedProfile = selectedProfile;
+			this.scripts = scripts;
+			this.profileError = profileError;
+			this.scriptsFailed = scriptsFailed;
+		}
+	}
 	private MyMouseView mouseControlView;
 	private MyJSView joystickControlView;
 	private boolean activityResumed;
@@ -324,6 +367,12 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
+		databaseExistedAtLaunch = getDatabasePath("contactsManager").exists();
+		preferencesExistedAtLaunch = !PreferenceManager.getDefaultSharedPreferences(this).getAll().isEmpty();
+		if (savedInstanceState != null && savedInstanceState.containsKey("actions.existingDataAtLaunch")) {
+			databaseExistedAtLaunch = savedInstanceState.getBoolean("actions.existingDataAtLaunch");
+			preferencesExistedAtLaunch = false;
+		}
 		suppressLegacyAutoConnectOnResume = isNotificationOpenIntent(getIntent());
 		localNetworkPermissionCoordinator = LocalNetworkPermissionCoordinator.forContext(getApplicationContext());
 		notificationPermissionLauncher = registerForActivityResult(
@@ -353,6 +402,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 			@Override public void handleOnBackPressed() {
 				if (shellNavigation.topOverlay() == ShellNavigation.Overlay.ACTION_EDIT && shellDialogs.isEmpty()) {
 					if (mCoolDragAndDropGridView != null) mCoolDragAndDropGridView.cancelLegacyDragAndDrop();
+					actionsEditMode = false;
 					shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
 					return;
 				}
@@ -418,9 +468,11 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 			if (hasActiveOrPendingSession()) disconnectForegroundSessionFromUi();
 			else requestForegroundSessionFromUi();
 		});
-		findViewById(R.id.actions_layouts).setOnClickListener(v -> openLayoutProfileManager());
-		findViewById(R.id.actions_edit).setOnClickListener(v -> openLayoutEditor());
-		findViewById(R.id.actions_scripts).setOnClickListener(v -> showSavedScripts());
+		findViewById(R.id.actions_layout_picker).setOnClickListener(v -> showActionLayoutPicker());
+		findViewById(R.id.actions_edit).setOnClickListener(v -> toggleActionsEditMode());
+		findViewById(R.id.actions_more).setOnClickListener(v -> showActionsMoreMenu());
+		findViewById(R.id.actions_add).setOnClickListener(v -> openActionEditor(null));
+		findViewById(R.id.actions_add_script).setOnClickListener(v -> openScriptManager(null, true));
 		bindShellKey(R.id.touchpad_key_escape, "Escape", ShellNavigation.InputRole.POINTER);
 		bindShellKey(R.id.touchpad_key_switch, "alt+Tab", ShellNavigation.InputRole.POINTER);
 		bindShellKey(R.id.touchpad_key_super, "super", ShellNavigation.InputRole.POINTER);
@@ -433,17 +485,10 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		mCoolDragAndDropGridView = (CoolDragAndDropGridView) findViewById(R.id.key_drag_DragAndDropGridView);
 
 
-		LayoutProfileActivation layoutActivation = activateLayoutProfiles();
-		legacyLayoutFallbackReadOnly = layoutActivation.getReadOnlyLegacyFallback();
-		if (layoutActivation.getActivated()) {
-			mItems = customButtonsFromProfile(layoutActivation.getProfile());
-		} else {
-			mItems = loadKeyboardLayout(this,false);//new LinkedList<Item>();
-			if (layoutActivation.getWarning() != null) {
-				Toast.makeText(this, layoutActivation.getWarning(), Toast.LENGTH_LONG).show();
-			}
-		}
-
+		// Construct owners here, but activate/migrate and read profile files only on actionsIoWorker.
+		layoutProfileRepository = new LayoutProfileRepository(new File(getFilesDir(), "layout-profiles"));
+		layoutProfileRuntime = new LayoutProfileRuntime(layoutProfileRepository,
+				new LegacyLayoutProfileMigrator(getFilesDir(), layoutProfileRepository));
 
 		mItemAdapter = new CustomKeyboardButtonAdapter(this, mItems);
 		mCoolDragAndDropGridView.setAdapter(mItemAdapter);
@@ -522,6 +567,10 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	/** Stable shell hook for destination controllers; changing destination never dispatches input. */
 	public ShellNavigation shellNavigation() { return shellNavigation; }
 
+	/** Immutable saved snapshot only: no draft/preview can become a normal executable action. */
+	public LayoutProfile selectedSavedActionProfile() { return selectedActionProfile; }
+	public void refreshSavedActions() { requestActionsData(); }
+
 	private void renderShell() {
 		if (shellRoot == null || shellNavigation == null) return;
 		NativeShellViews.render(shellRoot, shellNavigation, this::bindKeyCatalogCommand);
@@ -543,10 +592,12 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 				if (!shellNavigation.overlays().contains(ShellNavigation.Overlay.TYPING)) ET.setText("");
 			}
 		}
+		renderActions();
 		if (shellNavigation.topOverlay() == ShellNavigation.Overlay.COMPUTERS) renderComputers();
 	}
 
 	@Override protected void onSaveInstanceState(Bundle outState) {
+		outState.putBoolean("actions.existingDataAtLaunch", databaseExistedAtLaunch || preferencesExistedAtLaunch);
 		outState.putString("shell.destination", shellNavigation.destination().name());
 		outState.putBoolean("shell.joystick", shellNavigation.joystick());
 		ArrayList<String> overlays = new ArrayList<>();
@@ -684,30 +735,33 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		shellDialogs.add(dialog);
 		dialog.setOnDismissListener(dismissed -> {
 			shellDialogs.remove(dialog);
-			if (shellDialogs.isEmpty()) shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
+			if (shellDialogs.isEmpty() && !actionsEditMode && !actionProfileSelectionPending) {
+				shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
+			}
 		});
 		dialog.show();
 	}
 
 	public void showSavedScripts() {
-		ArrayList<ArrayList<String>> scripts = db.listAll(DatabaseHandler.SCRIPT_TABLE_NAME, new String[]{"Alias", "Script", "id"});
+		List<SavedActionScript> scripts = new ArrayList<>(savedActionScripts);
 		String[] titles = new String[scripts.size()];
-		for (int i = 0; i < scripts.size(); i++) titles[i] = scripts.get(i).get(0);
+		for (int i = 0; i < scripts.size(); i++) titles[i] = scripts.get(i).getName();
 		AlertDialog.Builder builder = new AlertDialog.Builder(this).setTitle(R.string.ng_scripts)
 				.setNegativeButton(R.string.ng_close, null)
-				.setNeutralButton(R.string.ng_manage_scripts, (dialog, which) -> openLegacyManager(1));
-		if (titles.length == 0) builder.setMessage(R.string.ng_no_scripts);
-		else builder.setItems(titles, (dialog, which) -> runSavedScript(Integer.parseInt(scripts.get(which).get(2))));
+				.setNeutralButton(R.string.ng_manage_scripts, (dialog, which) -> openScriptManager(null));
+		if (scriptsLoading) builder.setMessage(R.string.ng_scripts_loading);
+		else if (scriptsLoadFailed) builder.setMessage(R.string.ng_script_read_failed);
+		else if (titles.length == 0) builder.setMessage(R.string.ng_no_scripts);
+		else builder.setItems(titles, (dialog, which) -> {
+			int id = scripts.get(which).getId();
+			// Start after this owned selection dialog has retired/dismissed, not behind its overlay.
+			mainHandler.post(() -> runSavedScript(id));
+		});
 		showOwnedDialog(builder.create());
 	}
 
 	public void runSavedScript(int id) {
-		ArrayList<ArrayList<String>> scripts = db.getRowWithId(DatabaseHandler.SCRIPT_TABLE_NAME,
-				new String[]{"Alias", "Script", "id"}, String.valueOf(id));
-		if (scripts.isEmpty()) return;
-		SessionInteractions.PresentationToken presentation = sessionPresenter == null ? null : sessionPresenter.presentationToken();
-		if (commandTransport == null || !commandTransport.executeExecCommand(scripts.get(0).get(1), presentation))
-			Toast.makeText(this, "Connect to a computer before running a script.", Toast.LENGTH_LONG).show();
+		runSavedScriptAsync(id);
 	}
 
 	public void getPreferences(){
@@ -794,10 +848,11 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 			externalScreenPending = false;
 			shellNavigation.close(ShellNavigation.Overlay.EXTERNAL);
 		}
-		if (returningFromLayoutEditor || returningFromLayoutManager) {
+		if (returningFromLayoutEditor || returningFromLayoutManager || returningFromActionEditor || returningFromScriptsManager) {
 			returningFromLayoutEditor = false;
 			returningFromLayoutManager = false;
-			reloadSelectedSavedLayout();
+			returningFromActionEditor = false;
+			returningFromScriptsManager = false;
 		}
 		foregroundRecoveryWindow = new ForegroundRecoveryWindow();
 		Log.d(TAG, "activity_resumed");
@@ -820,6 +875,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		initMenu();
 		showConnectionStat();
 		initDoTool();
+		requestActionsData();
 		windowFocused = getWindow().getDecorView().hasWindowFocus();
 		updateControlInputSurface();
 	}
@@ -973,6 +1029,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	}
 
 	private void deactivateControlInputSurface() {
+		actionsExecutionGeneration++;
 		InputSurfaceToken old = controlInputSurface;
 		controlInputSurface = null;
 		for (Map.Entry<View, CapturedButtonGesture> entry : new ArrayList<>(mouseButtonGestures.entrySet())) {
@@ -1531,7 +1588,10 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		if (foregroundRecoveryWindow != null) foregroundRecoveryWindow.close();
 		deactivateControlInputSurface();
 		if (mCoolDragAndDropGridView != null) mCoolDragAndDropGridView.cancelLegacyDragAndDrop();
-		if (shellDialogs.isEmpty()) shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
+		if (shellDialogs.isEmpty()) {
+			actionsEditMode = false;
+			shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
+		}
 		// Navigation/lifecycle/Back never save an editor or layout. Legacy mutations persist at
 		// their explicit Save/Drop/Delete boundary instead; repository editor drafts stay owned there.
 		super.onPause();
@@ -1558,6 +1618,9 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	@Override
 	protected void onDestroy() {
 		activityResumed = false;
+		actionsDataGeneration++;
+		actionSelectionGeneration++;
+		actionsIoWorker.shutdownNow();
 		computerLoadGeneration++;
 		for (AlertDialog dialog : new ArrayList<>(shellDialogs)) dialog.dismiss();
 		deactivateControlInputSurface();
@@ -1831,29 +1894,19 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		builder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
 			@Override
 			public void onClick(DialogInterface dialog, int which) {
-				if (isRepositoryLayoutActive()) {
-					try {
-						LayoutProfile selected = layoutProfileRuntime.selectProfile(profileId);
-						if (def) {
-							mItems = loadDefaultKeyboardLayout(MainActivity.this);
-							assignFreshLayoutButtonIds(mItems);
-							saveCurrentRepositoryLayout();
-						} else {
-							mItems = customButtonsFromProfile(selected);
-						}
-					} catch (Exception ignored) {
-						Log.w(TAG, "layout_profile_selection_failed");
-						Toast.makeText(MainActivity.this,
-								"The saved layout could not be loaded. No layout was changed.", Toast.LENGTH_LONG).show();
-						return;
-					}
-				} else {
-					mItems = loadKeyboardLayout(MainActivity.this,def);
-					assignFreshLayoutButtonIds(mItems);
+				if (!isRepositoryLayoutActive()) {
+					Toast.makeText(MainActivity.this, R.string.ng_actions_layout_unavailable, Toast.LENGTH_LONG).show();
+					return;
 				}
-				mItemAdapter = new CustomKeyboardButtonAdapter(MainActivity.this, mItems);
-				mCoolDragAndDropGridView.setAdapter(mItemAdapter);
-				mItemAdapter.notifyDataSetChanged();
+				List<LayoutButton> defaults = null;
+				if (def) {
+					defaults = new ArrayList<>();
+					for (CustomKeyboardButton button : loadDefaultKeyboardLayout(MainActivity.this)) {
+						defaults.add(new LayoutButton(UUID.randomUUID().toString(), button.getmTitle(), button.getmCommand(),
+								button.getmSpans(), button.getmColor()));
+					}
+				}
+				selectActionProfile(profileId, defaults);
 
 			}
 		});
@@ -2077,7 +2130,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 				if(id==19999999){
 					//manage sripts ID
 
-					openLegacyManager(1);
+					openScriptManager(null);
 
 				}else {
 
@@ -2211,15 +2264,23 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		}
 		Toast.makeText(getBaseContext(),"Remove item "+potentialDeletePosition,Toast.LENGTH_LONG).show();
 	}
-	private LayoutProfileActivation activateLayoutProfiles() {
+	private static LayoutProfileActivation activateLayoutProfiles(File filesDirectory,
+			LayoutProfileRepository repository, LayoutProfileRuntime runtime, boolean hasUserData,
+			List<LayoutButton> legacyDefaults) {
 		try {
-			layoutProfileRepository = new LayoutProfileRepository(new File(getFilesDir(), "layout-profiles"));
-			layoutProfileRuntime = new LayoutProfileRuntime(
-					layoutProfileRepository,
-					new LegacyLayoutProfileMigrator(getFilesDir(), layoutProfileRepository));
-			return layoutProfileRuntime.activate();
+			boolean hasLegacySource = false;
+			for (String source : new String[]{"keyLayoutFile.csv", "keyFileOne.csv", "keyFileTwo.csv", "keyFileThree.csv"}) {
+				if (new File(filesDirectory, source).exists()) {
+					hasLegacySource = true;
+					break;
+				}
+			}
+			FreshActionsProfileInitializer.INSTANCE.initializeIfFresh(
+					repository, hasLegacySource, hasUserData);
+			FreshActionsProfileInitializer.INSTANCE.preserveLegacyDefaultsIfNeeded(
+					repository, hasLegacySource, hasUserData, legacyDefaults);
+			return runtime.activate();
 		} catch (Exception ignored) {
-			layoutProfileRepository = null;
 			Log.w(TAG, "layout_profile_activation_failed");
 			return new LayoutProfileActivation(null,
 					"Layout profiles could not be activated. Check retained layout files and storage, then restart; legacy layouts remain available read-only.");
@@ -2231,22 +2292,16 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	}
 
 	private void openLayoutEditor() {
-		if (!isRepositoryLayoutActive() || layoutProfileRepository == null) {
+		if (!isRepositoryLayoutActive() || selectedActionProfile == null) {
 			Toast.makeText(this, "The layout editor is unavailable until saved profiles are safely activated.",
 					Toast.LENGTH_LONG).show();
 			return;
 		}
-		try {
-			LayoutProfile selected = layoutProfileRepository.loadSelectedProfile();
-			if (selected == null) {
-				Toast.makeText(this, "No saved layout is selected.", Toast.LENGTH_LONG).show();
-				return;
-			}
-			Intent intent = new Intent(this, LayoutEditorActivity.class);
-			intent.putExtra(LayoutEditorActivity.EXTRA_PROFILE_ID, selected.getId());
-			returningFromLayoutEditor = true;
-			openExternalScreen(intent);
-		} catch (Exception ignored) {
+		finishActionsEditMode();
+		returningFromLayoutEditor = true;
+		try { openExternalScreen(new Intent(this, LayoutEditorActivity.class)
+				.putExtra(LayoutEditorActivity.EXTRA_PROFILE_ID, selectedActionProfile.getId())); }
+		catch (RuntimeException ignored) {
 			returningFromLayoutEditor = false;
 			Toast.makeText(this, "The selected layout could not be opened.", Toast.LENGTH_LONG).show();
 		}
@@ -2259,6 +2314,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 			return;
 		}
 		try {
+			finishActionsEditMode();
 			returningFromLayoutManager = true;
 			openExternalScreen(new Intent(this, LayoutProfileManagerActivity.class));
 		} catch (Exception ignored) {
@@ -2267,21 +2323,316 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		}
 	}
 
-	/** Rebind normal controls only from the repository's saved selected profile after editor return. */
-	private void reloadSelectedSavedLayout() {
-		if (!isRepositoryLayoutActive() || layoutProfileRepository == null) return;
+	private void finishActionsEditMode() {
+		if (!actionsEditMode) return;
+		actionsEditMode = false;
+		if (shellNavigation != null) shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
+	}
+
+	private void toggleActionsEditMode() {
+		if (!isRepositoryLayoutActive() || selectedActionProfile == null) {
+			Toast.makeText(this, R.string.ng_actions_layout_unavailable, Toast.LENGTH_LONG).show();
+			return;
+		}
+		actionsEditMode = !actionsEditMode;
+		if (actionsEditMode) shellNavigation.open(ShellNavigation.Overlay.ACTION_EDIT);
+		else shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
+	}
+
+	private void showActionsMoreMenu() {
+		finishActionsEditMode();
+		String[] choices = {
+				getString(R.string.ng_actions_more_manage_layouts),
+				getString(R.string.ng_actions_more_advanced),
+				getString(R.string.ng_actions_more_manage_scripts),
+		};
+		AlertDialog dialog = new AlertDialog.Builder(this)
+				.setTitle(R.string.ng_actions_more)
+				.setItems(choices, (ignored, which) -> {
+					if (which == 0) openLayoutProfileManager();
+					else if (which == 1) openLayoutEditor();
+					else if (which == 2) openScriptManager(null);
+				})
+				.setNegativeButton(R.string.ng_close, null)
+				.create();
+		showOwnedDialog(dialog);
+	}
+
+	private void showActionLayoutPicker() {
+		if (!isRepositoryLayoutActive()) {
+			Toast.makeText(this, R.string.ng_actions_layout_unavailable, Toast.LENGTH_LONG).show();
+			return;
+		}
+		if (actionsLoading) {
+			Toast.makeText(this, R.string.ng_actions_loading, Toast.LENGTH_SHORT).show();
+			return;
+		}
+		if (actionProfiles.isEmpty()) {
+			requestActionsData();
+			Toast.makeText(this, R.string.ng_actions_layout_failed, Toast.LENGTH_LONG).show();
+			return;
+		}
+		List<LayoutProfile> choices = new ArrayList<>(actionProfiles);
+		AlertDialog dialog = ActionsViewRenderer.profilePicker(this, choices, selectedActionProfile,
+				this::selectActionProfile, this::openLayoutProfileManager);
+		showOwnedDialog(dialog);
+	}
+
+	private void selectActionProfile(String profileId) {
+		selectActionProfile(profileId, null);
+	}
+
+	private void selectActionProfile(String profileId, List<LayoutButton> replacement) {
+		if (!isRepositoryLayoutActive() || layoutProfileRuntime == null || profileId == null) return;
+		if (actionsLoading || actionProfileSelectionPending) return;
+		if (replacement == null && selectedActionProfile != null && profileId.equals(selectedActionProfile.getId())) return;
+		final long generation = ++actionSelectionGeneration;
+		final long dataGeneration = ++actionsDataGeneration;
+		shellNavigation.replaceContent(() -> {
+			actionProfileSelectionPending = true;
+			actionsLoading = true;
+		});
+		final WeakReference<MainActivity> owner = new WeakReference<>(this);
+		final LayoutProfileRuntime runtime = layoutProfileRuntime;
+		final LayoutProfileRepository repository = layoutProfileRepository;
+		final Handler handler = new Handler(Looper.getMainLooper());
 		try {
-			LayoutProfile selected = layoutProfileRuntime.loadSelectedProfile();
-			if (selected == null) return;
-			mItems = customButtonsFromProfile(selected);
-			if (mCoolDragAndDropGridView != null) {
-				mItemAdapter = new CustomKeyboardButtonAdapter(this, mItems);
-				mCoolDragAndDropGridView.setAdapter(mItemAdapter);
-				mItemAdapter.notifyDataSetChanged();
+			actionsIoWorker.execute(() -> {
+				LayoutProfile selected = null;
+				List<LayoutProfile> profiles = new ArrayList<>();
+				boolean failed = false;
+				try {
+					if (replacement != null) runtime.saveProfileAs(profileId, "Active layout", replacement);
+					selected = runtime.selectProfile(profileId);
+					profiles = repository.listProfiles();
+				} catch (Exception ignored) { failed = true; }
+				final LayoutProfile result = selected;
+				final List<LayoutProfile> resultProfiles = profiles;
+				final boolean resultFailed = failed;
+				handler.post(() -> {
+					MainActivity activity = owner.get();
+					if (activity == null || activity.isFinishing() || activity.isDestroyed() ||
+							generation != activity.actionSelectionGeneration ||
+							dataGeneration != activity.actionsDataGeneration) return;
+					activity.shellNavigation.replaceContent(() -> {
+						if (result != null) {
+							if (!resultFailed) activity.actionProfiles = new ArrayList<>(resultProfiles);
+							activity.installSelectedActionProfile(result);
+						}
+						activity.actionProfileSelectionPending = false;
+						activity.actionsLoading = false;
+					});
+					if (resultFailed || result == null) {
+						Toast.makeText(activity, R.string.ng_actions_layout_changed, Toast.LENGTH_LONG).show();
+					}
+				});
+			});
+		} catch (RuntimeException ignored) {
+			shellNavigation.replaceContent(() -> { actionProfileSelectionPending = false; actionsLoading = false; });
+			Toast.makeText(this, R.string.ng_actions_layout_changed, Toast.LENGTH_LONG).show();
+		}
+	}
+
+	private void installSelectedActionProfile(LayoutProfile profile) {
+		selectedActionProfile = profile;
+		mItems = customButtonsFromProfile(profile);
+		if (mCoolDragAndDropGridView != null) {
+			mItemAdapter = new CustomKeyboardButtonAdapter(this, mItems);
+			mCoolDragAndDropGridView.setAdapter(mItemAdapter);
+			mItemAdapter.notifyDataSetChanged();
+		}
+	}
+
+	private void requestActionsData() {
+		final long generation = ++actionsDataGeneration;
+		final WeakReference<MainActivity> owner = new WeakReference<>(this);
+		final LayoutProfileRepository repository = layoutProfileRepository;
+		final LayoutProfileRuntime runtime = layoutProfileRuntime;
+		final File filesDirectory = getFilesDir();
+		final boolean hasUserData = databaseExistedAtLaunch || preferencesExistedAtLaunch;
+		final List<LayoutButton> legacyDefaults = new ArrayList<>();
+		int defaultIndex = 0;
+		for (CustomKeyboardButton button : loadDefaultKeyboardLayout(this)) {
+			legacyDefaults.add(new LayoutButton("legacy-default-" + (++defaultIndex), button.getmTitle(),
+					button.getmCommand(), button.getmSpans(), button.getmColor()));
+		}
+		final Context applicationContext = getApplicationContext();
+		final Handler handler = new Handler(Looper.getMainLooper());
+		shellNavigation.replaceContent(() -> {
+			actionProfileSelectionPending = false;
+			actionsLoading = true;
+			actionsLoadFailed = false;
+			scriptsLoading = true;
+			scriptsLoadFailed = false;
+		});
+		try {
+			actionsIoWorker.execute(() -> {
+				List<LayoutProfile> profiles = new ArrayList<>();
+				LayoutProfile selected = null;
+				String profileError = null;
+				try {
+					if (!runtime.isRepositoryActive()) {
+						LayoutProfileActivation activation = activateLayoutProfiles(filesDirectory, repository, runtime, hasUserData, legacyDefaults);
+						profileError = activation.getWarning();
+					}
+					if (runtime.isRepositoryActive()) {
+						profiles = repository.listProfiles();
+						selected = runtime.loadSelectedProfile();
+						if (selected == null) profileError = applicationContext.getString(R.string.ng_actions_layout_failed);
+					}
+				} catch (Exception ignored) {
+					profileError = applicationContext.getString(R.string.ng_actions_layout_failed);
+				}
+				List<SavedActionScript> scripts = new ArrayList<>();
+				boolean scriptFailure = false;
+				try { scripts = new SavedActionScriptRepository(applicationContext).listScripts(); }
+				catch (Exception ignored) { scriptFailure = true; }
+				ActionsSnapshot snapshot = new ActionsSnapshot(profiles, selected, scripts,
+						profileError, scriptFailure);
+				handler.post(() -> {
+					MainActivity activity = owner.get();
+					if (activity == null || activity.isFinishing() || activity.isDestroyed() ||
+							generation != activity.actionsDataGeneration) return;
+					activity.shellNavigation.replaceContent(() -> {
+						activity.actionProfiles = new ArrayList<>(snapshot.profiles);
+						activity.savedActionScripts = new ArrayList<>(snapshot.scripts);
+						activity.selectedActionProfile = snapshot.selectedProfile;
+						activity.actionsLoading = false;
+						activity.actionsLoadFailed = snapshot.profileError != null;
+						activity.legacyLayoutFallbackReadOnly = !runtime.isRepositoryActive();
+						activity.scriptsLoading = false;
+						activity.scriptsLoadFailed = snapshot.scriptsFailed;
+						if (snapshot.selectedProfile != null) activity.installSelectedActionProfile(snapshot.selectedProfile);
+					});
+					if (snapshot.profileError != null) Toast.makeText(activity, snapshot.profileError, Toast.LENGTH_LONG).show();
+				});
+			});
+		} catch (RuntimeException ignored) {
+			shellNavigation.replaceContent(() -> {
+				actionsLoading = false; actionsLoadFailed = true;
+				scriptsLoading = false; scriptsLoadFailed = true;
+			});
+		}
+	}
+
+	private void renderActions() {
+		if (shellRoot == null) return;
+		LinearLayout tiles = findViewById(R.id.actions_tiles);
+		LinearLayout scripts = findViewById(R.id.actions_script_list);
+		Button picker = findViewById(R.id.actions_layout_picker);
+		Button edit = findViewById(R.id.actions_edit);
+		Button add = findViewById(R.id.actions_add);
+		if (tiles == null || scripts == null || picker == null || edit == null || add == null) return;
+		boolean canEditProfile = isRepositoryLayoutActive() && selectedActionProfile != null && !actionsLoading;
+		ActionsViewRenderer.renderProfileControls(shellRoot, selectedActionProfile, actionsEditMode, canEditProfile);
+		int emptyMessage = actionsLoading ? R.string.ng_actions_loading :
+				actionsLoadFailed ? R.string.ng_actions_layout_failed : R.string.ng_actions_layout_unavailable;
+		ActionsViewRenderer.renderTiles(this, tiles, selectedActionProfile, actionsEditMode, emptyMessage,
+				(tile, button) -> {
+					tile.setOnClickListener(view -> {
+						if (actionsEditMode) {
+							openActionEditor(button.getId());
+							return;
+						}
+						dispatchActionTile(view, button);
+					});
+					tile.setEnabled(!actionsLoading);
+					if (!actionsEditMode && !actionsLoading) installInputButtonCapture(tile, ShellNavigation.InputRole.ACTIONS);
+				});
+		ActionsViewRenderer.renderScripts(this, scripts, savedActionScripts, scriptsLoading, scriptsLoadFailed,
+				actionsEditMode || actionsLoading, new ActionsViewRenderer.ScriptListener() {
+					@Override public void onRun(View view, SavedActionScript script) {
+						if (view.isShown() && view.isAttachedToWindow() && savedActionScripts.contains(script)) runSavedScriptAsync(script.getId());
+					}
+					@Override public void onEdit(View view, SavedActionScript script) { openScriptManager(script.getId()); }
+				});
+	}
+
+	private void dispatchActionTile(View tile, LayoutButton button) {
+		if (actionsEditMode || actionsLoading || !tile.isShown() || !tile.isAttachedToWindow() ||
+				selectedActionProfile == null || !selectedActionProfile.getButtons().contains(button)) return;
+		InputGestureToken gesture = takeButtonActivationGesture(tile);
+		Object token = gesture != null ? gesture :
+				(canUseActiveSurfaceForButtonClick(tile) ? activeActionInputToken() : null);
+		try {
+			if (!isInputTokenActive(token)) return;
+			IDoTool inputTool = createDoToolForInput(token);
+			CommandTransport inputTransport = commandTransportForInput(token);
+			if (inputTool != null && inputTransport != null) {
+				CustomCommandDispatcher.execCommand(button.getCommand(), inputTool, inputTransport);
 			}
-		} catch (Exception ignored) {
-			Log.w(TAG, "layout_profile_reload_failed");
-			Toast.makeText(this, "The saved layout could not be reloaded.", Toast.LENGTH_LONG).show();
+		} catch (RuntimeException ignored) {
+			Toast.makeText(this, R.string.ng_action_dispatch_failed, Toast.LENGTH_LONG).show();
+		} finally {
+			if (gesture != null && commandTransport != null) commandTransport.finishInputGesture(gesture);
+		}
+	}
+
+	private void openActionEditor(String buttonId) {
+		if (!isRepositoryLayoutActive() || selectedActionProfile == null) {
+			Toast.makeText(this, R.string.ng_actions_layout_unavailable, Toast.LENGTH_LONG).show();
+			return;
+		}
+		finishActionsEditMode();
+		returningFromActionEditor = true;
+		try {
+			openExternalScreen(ActionEditorActivity.intent(this, selectedActionProfile.getId(), buttonId));
+		} catch (RuntimeException ignored) {
+			returningFromActionEditor = false;
+			Toast.makeText(this, R.string.ng_action_editor_load_failed, Toast.LENGTH_LONG).show();
+		}
+	}
+
+	private void openScriptManager(Integer scriptId) {
+		openScriptManager(scriptId, false);
+	}
+
+	private void openScriptManager(Integer scriptId, boolean add) {
+		finishActionsEditMode();
+		Intent intent = new Intent(this, ListEditActivity.class).putExtra("intVariableType", 1);
+		if (scriptId != null) intent.putExtra(ListEditActivity.EXTRA_SCRIPT_ID, scriptId.toString());
+		if (add) intent.putExtra(ListEditActivity.EXTRA_ADD_SCRIPT, true);
+		returningFromScriptsManager = true;
+		try { openExternalScreen(intent); }
+		catch (RuntimeException ignored) {
+			returningFromScriptsManager = false;
+			Toast.makeText(this, R.string.ng_script_unavailable, Toast.LENGTH_LONG).show();
+		}
+	}
+
+	private void runSavedScriptAsync(int id) {
+		if (actionsEditMode || shellNavigation.topOverlay() != null) return;
+		final long executionGeneration = actionsExecutionGeneration;
+		final WeakReference<MainActivity> owner = new WeakReference<>(this);
+		final Context applicationContext = getApplicationContext();
+		final SessionCommandTransport transport = commandTransport;
+		final SessionInteractions.PresentationToken presentation = sessionPresenter == null
+				? null : sessionPresenter.presentationToken();
+		final long activityToken = activityGeneration;
+		final Handler handler = new Handler(Looper.getMainLooper());
+		try {
+			actionsIoWorker.execute(() -> {
+				String command = null;
+				try { command = new SavedActionScriptRepository(applicationContext).loadCommand(id); }
+				catch (Exception ignored) { /* Report only a fixed message on the UI thread. */ }
+				final String savedCommand = command;
+				handler.post(() -> {
+					MainActivity activity = owner.get();
+					if (activity == null || activity.isFinishing() || activity.isDestroyed() ||
+							activityToken != activity.activityGeneration || !activity.activityResumed ||
+							executionGeneration != activity.actionsExecutionGeneration || activity.actionsEditMode ||
+							activity.shellNavigation.topOverlay() != null) return;
+					if (savedCommand == null) {
+						Toast.makeText(activity, R.string.ng_script_unavailable, Toast.LENGTH_LONG).show();
+						return;
+					}
+					if (transport == null || !transport.executeExecCommand(savedCommand, presentation)) {
+						Toast.makeText(activity, R.string.ng_script_run_rejected, Toast.LENGTH_LONG).show();
+					}
+				});
+			});
+		} catch (RuntimeException ignored) {
+			Toast.makeText(this, R.string.ng_script_read_failed, Toast.LENGTH_LONG).show();
 		}
 	}
 
@@ -2319,23 +2670,45 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	}
 
 	private void saveCurrentRepositoryLayout() {
-		if (!isRepositoryLayoutActive()) return;
-		try {
-			layoutProfileRuntime.saveCurrentProfile(layoutButtonsForRepository());
-		} catch (Exception ignored) {
-			Log.w(TAG, "layout_profile_save_failed");
-			Toast.makeText(this, "Keyboard layout could not be saved.", Toast.LENGTH_LONG).show();
-		}
+		if (!isRepositoryLayoutActive() || selectedActionProfile == null) return;
+		final LayoutProfileRuntime runtime = layoutProfileRuntime;
+		final String profileId = selectedActionProfile.getId();
+		final List<LayoutButton> buttons = layoutButtonsForRepository();
+		final WeakReference<MainActivity> owner = new WeakReference<>(this);
+		final Handler handler = new Handler(Looper.getMainLooper());
+		actionsIoWorker.execute(() -> {
+			boolean saved = false;
+			try { saved = runtime.saveCurrentProfileIfSelected(profileId, buttons) != null; }
+			catch (Exception ignored) { /* No raw data in diagnostics. */ }
+			final boolean success = saved;
+			handler.post(() -> {
+				MainActivity activity = owner.get();
+				if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
+				if (success) activity.requestActionsData();
+				else Toast.makeText(activity, R.string.ng_actions_layout_changed, Toast.LENGTH_LONG).show();
+			});
+		});
 	}
 
 	private void saveRepositoryLayoutAs(String profileId) {
-		if (!isRepositoryLayoutActive()) return;
-		try {
-			layoutProfileRuntime.saveProfileAs(profileId, presetNameForId(profileId), layoutButtonsForRepository());
-		} catch (Exception ignored) {
-			Log.w(TAG, "layout_profile_save_failed");
-			Toast.makeText(this, "Keyboard layout could not be saved.", Toast.LENGTH_LONG).show();
-		}
+		if (!isRepositoryLayoutActive() || selectedActionProfile == null) return;
+		final LayoutProfileRuntime runtime = layoutProfileRuntime;
+		final List<LayoutButton> buttons = selectedActionProfile.getButtons();
+		final String name = presetNameForId(profileId);
+		final WeakReference<MainActivity> owner = new WeakReference<>(this);
+		final Handler handler = new Handler(Looper.getMainLooper());
+		actionsIoWorker.execute(() -> {
+			boolean saved = false;
+			try { runtime.saveProfileAs(profileId, name, buttons); saved = true; }
+			catch (Exception ignored) { /* Fixed diagnostic only, never stored command content. */ }
+			final boolean success = saved;
+			handler.post(() -> {
+				MainActivity activity = owner.get();
+				if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
+				if (success) activity.requestActionsData();
+				else Toast.makeText(activity, R.string.ng_actions_layout_changed, Toast.LENGTH_LONG).show();
+			});
+		});
 	}
 
 	private String presetNameForId(String profileId) {
@@ -2519,6 +2892,15 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		}
 	}
 	public void xMouseNewCustomButton(final Integer id){
+		if (isRepositoryLayoutActive()) {
+			String buttonId = id == null || id < 0 || id >= mItems.size() ? null : layoutButtonIds.get(mItems.get(id));
+			openActionEditor(buttonId);
+			return;
+		}
+		if (legacyLayoutFallbackReadOnly) {
+			Toast.makeText(this, R.string.ng_actions_layout_unavailable, Toast.LENGTH_LONG).show();
+			return;
+		}
 		//open dialog for new command
 
 		//Preparing views

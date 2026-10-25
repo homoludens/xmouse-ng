@@ -7,26 +7,34 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:padding="16dp"
         android:orientation="vertical">
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Alias" />
+            android:labelFor="@id/new_script_alias"
+            android:text="@string/ng_script_name" />
 
         <EditText
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:inputType="textCapSentences"
             android:id="@+id/new_script_alias" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Command" />
+            android:labelFor="@id/new_script_command"
+            android:text="@string/ng_script_command" />
 
         <EditText
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:minHeight="96dp"
+            android:gravity="top|start"
+            android:inputType="textMultiLine|textNoSuggestions"
             android:id="@+id/new_script_command" />
 
     </LinearLayout>

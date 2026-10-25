@@ -629,6 +629,77 @@ class SessionPipelineIntegrationTest {
         }
     }
 
+    @Test fun actionsShortcutsAdvancedCommandsAndScriptsKeepSeparateRecordingRoutesWithoutEditorExecution() {
+        val backend = RecordingSshBackend()
+        Fixture(commandBackend = backend).use { f ->
+            f.connect(SessionFixtures.host("synthetic.invalid").copy(initialCommand = null))
+            f.await { f.controller.current.connection.isReady }
+            val sessionGeneration = f.controller.current.generation
+            var surface: InputSurfaceToken? = f.controller.activateControlSurface(f.presentation)
+            lateinit var navigation: com.stripe1.xmouse.ShellNavigation
+            navigation = com.stripe1.xmouse.ShellNavigation(object : com.stripe1.xmouse.ShellNavigation.Listener {
+                override fun retireInput() { f.controller.deactivateControlSurface(surface); surface = null }
+                override fun render() { assertNull(surface) }
+                override fun refreshInput() {
+                    if (navigation.eligible(true, true, f.controller.current.connection.isReady))
+                        surface = f.controller.activateControlSurface(f.presentation)
+                }
+            })
+            navigation.select(com.stripe1.xmouse.ShellNavigation.Destination.ACTIONS)
+            val old = requireNotNull(f.controller.beginInputGesture(surface))
+            navigation.open(com.stripe1.xmouse.ShellNavigation.Overlay.ACTION_EDIT)
+            assertNull(surface)
+            assertFalse(f.controller.executeInputCommand("xdotool key alt+F4", old))
+            val files = object : com.stripe1.xmouse.layout.LayoutProfileFileOps {
+                val bytes = mutableMapOf<String, ByteArray>()
+                override fun listFileNames() = bytes.keys.toList()
+                override fun readAtomically(fileName: String) = bytes[fileName]?.copyOf()
+                override fun writeAtomically(fileName: String, content: ByteArray) { bytes[fileName] = content.copyOf() }
+                override fun deleteAtomically(fileName: String) { bytes.remove(fileName) }
+            }
+            val repository = com.stripe1.xmouse.layout.LayoutProfileRepository(files)
+            val saved = com.stripe1.xmouse.layout.LayoutProfile(id = "recorded-actions", name = "Same name", buttons = listOf(
+                com.stripe1.xmouse.layout.LayoutButton("stable", "Close", "xdotool key Alt+F4", 7, "#80aAbBcC")))
+            repository.createProfile(saved); repository.selectProfile(saved.id)
+            val editor = com.stripe1.xmouse.layout.ActionEditorSessionViewModel(saved.id, "stable", repository, Executor { it.run() })
+            editor.save(com.stripe1.xmouse.layout.ActionEditorSubmission("Renamed", com.stripe1.xmouse.layout.ActionCommandType.KEYBOARD_SHORTCUT,
+                "Alt+F4", null, null))
+            assertTrue(editor.state.value.saved)
+            assertEquals(saved.copy(buttons = saved.buttons.map { it.copy(title = "Renamed") }), repository.loadSelectedProfile())
+            navigation.replaceContent {
+                com.stripe1.xmouse.layout.ActionPresentation.tileRows(repository.loadSelectedProfile()!!)
+            }
+            navigation.open(com.stripe1.xmouse.ShellNavigation.Overlay.EXTERNAL)
+            navigation.close(com.stripe1.xmouse.ShellNavigation.Overlay.ACTION_EDIT)
+            navigation.close(com.stripe1.xmouse.ShellNavigation.Overlay.EXTERNAL)
+            f.queue.drain()
+            assertTrue(backend.writes.isEmpty()); assertTrue(backend.commandOrder.isEmpty())
+
+            fun dispatch(command: String) {
+                val gesture = requireNotNull(f.controller.beginInputGesture(surface))
+                val transport = com.stripe1.xmouse.CommandTransport { raw -> f.controller.executeInputCommand(raw, gesture) }
+                com.stripe1.xmouse.CustomCommandDispatcher.execCommand(command, com.stripe1.xmouse.XDoTool(transport), transport)
+                f.controller.finishInputGesture(gesture)
+            }
+            dispatch(com.stripe1.xmouse.layout.ActionCommandCodec.serialize(
+                com.stripe1.xmouse.layout.ActionCommandType.KEYBOARD_SHORTCUT, "Alt+F4", ""))
+            f.await { backend.writes.size == 1 }
+            val opaque = "xdotool windowminimize $(xdotool getactivewindow)"
+            dispatch(opaque)
+            f.await { backend.writes.size == 2 }
+            assertEquals(listOf("xdotool key Alt+F4\r\n", "$opaque\r\n"), backend.writes.toList())
+            assertTrue(f.execResults.isEmpty())
+            val script = "printf 'raw script'\nsecond line  "
+            assertTrue(f.controller.executeExecCommand(script, f.presentation))
+            f.await { f.execResults.any { it.first == script } }
+            assertEquals(listOf("shell:xdotool key Alt+F4", "shell:$opaque", "exec:$script"), backend.commandOrder.toList())
+            assertEquals(2, backend.writes.size)
+            assertEquals(sessionGeneration, f.controller.current.generation)
+            assertEquals(1, backend.events.count { it.name == "session.connect" })
+            assertFalse(backend.events.any { it.name == "session.close" })
+        }
+    }
+
     @Test fun cancelledInputQueuedBehindBlockedExecIsDroppedAtRealTransportAndOldHoldIsReleased() {
         val backend = RecordingSshBackend()
         Fixture(commandBackend = backend).use { f ->

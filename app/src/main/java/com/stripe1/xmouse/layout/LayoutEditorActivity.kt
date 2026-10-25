@@ -41,6 +41,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -85,7 +86,7 @@ import java.io.File
 
 /** Separate editor surface; it never receives or invokes the remote command sink. */
 class LayoutEditorActivity : ComponentActivity() {
-    private lateinit var editorViewModel: LayoutEditorViewModel
+    private lateinit var editorViewModel: LayoutEditorWorkerViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -100,48 +101,38 @@ class LayoutEditorActivity : ComponentActivity() {
         val repository = LayoutProfileRepository(File(filesDir, PROFILE_DIRECTORY))
         editorViewModel = ViewModelProvider(
             this,
-            LayoutEditorViewModel.Factory(profileId, repository),
-        )[LayoutEditorViewModel::class.java]
+            LayoutEditorWorkerViewModel.Factory(profileId, repository),
+        )[LayoutEditorWorkerViewModel::class.java]
 
         setContent {
             XMouseNgTheme {
                 val state by editorViewModel.state.collectAsState()
+                val closed by editorViewModel.closed.collectAsState()
+                LaunchedEffect(closed) { if (closed) finish() }
                 LayoutEditorScreen(
                     state = state,
-                    onNameChanged = editorViewModel::updateProfileNameInput,
-                    onButtonSelected = editorViewModel::selectButton,
-                    onDragCommitted = editorViewModel::commitDrag,
-                    onWidthChanged = editorViewModel::updateButtonWidth,
-                    onMoveEarlier = editorViewModel::moveSelectedButtonEarlier,
-                    onMoveLater = editorViewModel::moveSelectedButtonLater,
-                    onNewButton = editorViewModel::startNewButtonEdit,
-                    onEditButton = editorViewModel::startSelectedButtonEdit,
-                    onDuplicateButton = editorViewModel::startSelectedButtonDuplicate,
-                    onDeleteButton = editorViewModel::deleteSelectedButton,
-                    onUndo = editorViewModel::undo,
-                    onRedo = editorViewModel::redo,
-                    onButtonTitleChanged = editorViewModel::updateButtonTitleInput,
-                    onButtonCommandChanged = editorViewModel::updateButtonCommandInput,
-                    onButtonWidthInputChanged = editorViewModel::updateButtonWidthInput,
-                    onButtonColorChanged = editorViewModel::updateButtonColorInput,
-                    onButtonEditSave = editorViewModel::saveButtonEdit,
-                    onButtonEditCancel = editorViewModel::cancelButtonEdit,
-                    onBack = {
-                        if (editorViewModel.state.value.isShowingBackConfirmation) {
-                            editorViewModel.resolveBack(LayoutEditorBackChoice.CANCEL)
-                        } else if (editorViewModel.requestBack()) {
-                            finish()
-                        }
-                    },
-                    onSave = {
-                        if (editorViewModel.save()) finish()
-                    },
-                    onDiscard = {
-                        if (editorViewModel.discard()) finish()
-                    },
-                    onBackChoice = { choice ->
-                        if (editorViewModel.resolveBack(choice)) finish()
-                    },
+                    onNameChanged = { value -> editorViewModel.edit { it.updateProfileNameInput(value) } },
+                    onButtonSelected = { id -> editorViewModel.edit { it.selectButton(id) } },
+                    onDragCommitted = { drag -> editorViewModel.edit { it.commitDrag(drag) } },
+                    onWidthChanged = { id, width -> editorViewModel.edit { it.updateButtonWidth(id, width) } },
+                    onMoveEarlier = { editorViewModel.edit { it.moveSelectedButtonEarlier() } },
+                    onMoveLater = { editorViewModel.edit { it.moveSelectedButtonLater() } },
+                    onNewButton = { editorViewModel.edit { it.startNewButtonEdit() } },
+                    onEditButton = { editorViewModel.edit { it.startSelectedButtonEdit() } },
+                    onDuplicateButton = { editorViewModel.edit { it.startSelectedButtonDuplicate() } },
+                    onDeleteButton = { editorViewModel.edit { it.deleteSelectedButton() } },
+                    onUndo = { editorViewModel.edit { it.undo() } },
+                    onRedo = { editorViewModel.edit { it.redo() } },
+                    onButtonTitleChanged = { value -> editorViewModel.edit { it.updateButtonTitleInput(value) } },
+                    onButtonCommandChanged = { value -> editorViewModel.edit { it.updateButtonCommandInput(value) } },
+                    onButtonWidthInputChanged = { value -> editorViewModel.edit { it.updateButtonWidthInput(value) } },
+                    onButtonColorChanged = { value -> editorViewModel.edit { it.updateButtonColorInput(value) } },
+                    onButtonEditSave = { editorViewModel.edit { it.saveButtonEdit() } },
+                    onButtonEditCancel = { editorViewModel.edit { it.cancelButtonEdit() } },
+                    onBack = editorViewModel::back,
+                    onSave = editorViewModel::saveAndClose,
+                    onDiscard = editorViewModel::discardAndClose,
+                    onBackChoice = editorViewModel::backChoice,
                 )
             }
         }
@@ -172,7 +163,7 @@ private fun LayoutEditorScreen(
     onButtonCommandChanged: (String) -> Unit,
     onButtonWidthInputChanged: (String) -> Unit,
     onButtonColorChanged: (String) -> Unit,
-    onButtonEditSave: () -> Boolean,
+    onButtonEditSave: () -> Unit,
     onButtonEditCancel: () -> Unit,
     onBack: () -> Unit,
     onSave: () -> Unit,
@@ -377,7 +368,7 @@ private fun ButtonEditDialog(
     onCommandChanged: (String) -> Unit,
     onWidthChanged: (String) -> Unit,
     onColorChanged: (String) -> Unit,
-    onSave: () -> Boolean,
+    onSave: () -> Unit,
     onCancel: () -> Unit,
 ) {
     val title = when (input.mode) {

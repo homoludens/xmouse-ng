@@ -47,6 +47,12 @@
             android:label="@string/layout_profiles_title"
             android:parentActivityName=".MainActivity"
             android:theme="@style/AppTheme.NoActionBar" />
+        <activity
+            android:name=".layout.ActionEditorActivity"
+            android:exported="false"
+            android:label="@string/ng_action_editor_title_add"
+            android:parentActivityName=".MainActivity"
+            android:theme="@style/AppTheme.NoActionBar" />
         <service
             android:name=".session.SessionForegroundService"
             android:exported="false"

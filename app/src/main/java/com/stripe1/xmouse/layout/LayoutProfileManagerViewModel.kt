@@ -26,12 +26,13 @@ data class LayoutProfileManagerState(
 /** User-facing named-layout operations, always addressed by stable profile ID. */
 class LayoutProfileManagerViewModel(
     private val repository: LayoutProfileRepository,
+    autoRefresh: Boolean = true,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(LayoutProfileManagerState())
     val state = mutableState.asStateFlow()
 
     init {
-        refresh()
+        if (autoRefresh) refresh()
     }
 
     fun refresh() {

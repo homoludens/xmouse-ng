@@ -44,6 +44,7 @@ class LayoutEditorPointerAndroidTest {
                 Intent(context, LayoutEditorActivity::class.java)
                     .putExtra(LayoutEditorActivity.EXTRA_PROFILE_ID, saved.id),
             ).use {
+                compose.awaitEditorTag("layout-editor-button-source")
                 val source = compose.onNodeWithTag("layout-editor-button-source")
                 source.performScrollTo()
                 val sourceBounds = source.fetchSemanticsNode().boundsInRoot
@@ -59,16 +60,18 @@ class LayoutEditorPointerAndroidTest {
                 source.performTouchInput { up() }
 
                 val moved = saved.copy(buttons = listOf(saved.buttons[1], saved.buttons[0], saved.buttons[2]))
-                compose.waitForIdle()
+                compose.waitUntil(5_000) { repository.loadDraft(saved.id) == moved }
                 assertEquals(moved, repository.loadDraft(saved.id))
                 compose.onNodeWithText("Title: Source").assertExists()
                 compose.onNodeWithTag("layout-editor-increase-width").performScrollTo().performTouchInput { click() }
                 val resized = moved.copy(buttons = moved.buttons.map { if (it.id == "source") it.copy(width = 4) else it })
-                compose.waitForIdle()
+                compose.waitUntil(5_000) { repository.loadDraft(saved.id) == resized }
                 assertEquals(resized, repository.loadDraft(saved.id))
 
                 compose.onNodeWithTag("layout-editor-button-maximum").performScrollTo().performTouchInput { click() }
+                compose.awaitEditorText("Title: Maximum")
                 compose.onNodeWithTag("layout-editor-increase-width").performScrollTo().performTouchInput { click() }
+                compose.awaitEditorTag("layout-editor-width-error")
                 compose.onNodeWithTag("layout-editor-width-error").performScrollTo().assertIsDisplayed()
                 assertEquals(resized, repository.loadDraft(saved.id))
                 assertEquals(saved, repository.loadProfile(saved.id))

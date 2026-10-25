@@ -33,6 +33,11 @@ import java.util.LinkedList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.lang.ref.WeakReference;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import android.os.Handler;
+import android.os.Looper;
 
 public class ListEditActivity extends AppCompatActivity implements MyInterface {
     public interface DiscoveryHandle {
@@ -87,6 +92,15 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
     private String discoveryError;
     private boolean permissionInFlight;
     private int permissionGeneration = -1;
+    private String pendingScriptId;
+    private boolean pendingScriptEditAttempted;
+    private boolean pendingAddScript;
+    private int scriptEditGeneration;
+    private final ExecutorService scriptWorker = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "xmouse-script-crud");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -100,6 +114,9 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
         database = new DatabaseHandler(getApplicationContext());
         credentials = AndroidCredentials.get(this);
         type = getIntent().getIntExtra("intVariableType", 0) == 0 ? ActivityType.type_host : ActivityType.type_script;
+        pendingScriptId = type == ActivityType.type_script
+                ? getIntent().getStringExtra(EXTRA_SCRIPT_ID) : null;
+        pendingAddScript = type == ActivityType.type_script && getIntent().getBooleanExtra(EXTRA_ADD_SCRIPT, false);
         setTitle(type == ActivityType.type_host ? "Computers" : "Manage Scripts");
         ((FloatingActionButton) findViewById(R.id.fab)).setOnClickListener(view -> {
             if (type == ActivityType.type_host) startActivity(ComputerEditorActivity.intent(this, 0));
@@ -122,7 +139,7 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
         if (editing != null) editing.dismiss();
         super.onStop();
     }
-    @Override protected void onDestroy() { database.close(); super.onDestroy(); }
+    @Override protected void onDestroy() { scriptWorker.shutdown(); database.close(); super.onDestroy(); }
     private boolean current(int token) { return token == generation && !isFinishing() && !isDestroyed(); }
     private void failure() { Toast.makeText(this, CredentialRepository.RECOVERY_MESSAGE, Toast.LENGTH_LONG).show(); }
 
@@ -347,13 +364,29 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
                 } catch (Exception ignored) { runOnUiThread(() -> { if (current(token)) failure(); }); }
             });
         } else {
-            List<HostItem> items = new LinkedList<>();
-            ArrayList<ArrayList<String>> rows = database.listAll(DatabaseHandler.SCRIPT_TABLE_NAME, new String[]{"Alias", "Script", "id"});
-            for (int i = rows.size() - 1; i >= 0; i--) {
-                ArrayList<String> row = rows.get(i);
-                HostItem item = new HostItem(); item.setAlias(row.get(0)); item.setIP(row.get(1)); item.setUsername(row.get(2)); items.add(item);
-            }
-            showItems(items);
+            final int token = generation;
+            final Context context = getApplicationContext();
+            final WeakReference<ListEditActivity> owner = new WeakReference<>(this);
+            final Handler handler = new Handler(Looper.getMainLooper());
+            scriptWorker.execute(() -> {
+                List<HostItem> items = new LinkedList<>();
+                boolean failed = false;
+                try (DatabaseHandler database = new DatabaseHandler(context)) {
+                    ArrayList<ArrayList<String>> rows = database.listAll(DatabaseHandler.SCRIPT_TABLE_NAME,
+                            new String[]{"Alias", "Script", "id"});
+                    for (int i = rows.size() - 1; i >= 0; i--) {
+                        ArrayList<String> row = rows.get(i);
+                        HostItem item = new HostItem(); item.setAlias(row.get(0)); item.setIP(row.get(1)); item.setUsername(row.get(2)); items.add(item);
+                    }
+                } catch (Exception ignored) { failed = true; }
+                final boolean readFailed = failed;
+                handler.post(() -> {
+                    ListEditActivity activity = owner.get();
+                    if (activity == null || !activity.current(token)) return;
+                    if (readFailed) Toast.makeText(activity, R.string.ng_script_read_failed, Toast.LENGTH_LONG).show();
+                    else activity.showItems(items);
+                });
+            });
         }
     }
 
@@ -361,11 +394,31 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
         mHostItems = items;
         adapter = new HostListItemAdapter(this, items, this, type);
         mList.setAdapter(adapter);
+        if (type == ActivityType.type_script && pendingAddScript) {
+            pendingAddScript = false;
+            xMouseManage(null);
+        }
+        if (type == ActivityType.type_script && pendingScriptId != null && !pendingScriptEditAttempted) {
+            pendingScriptEditAttempted = true;
+            int position = -1;
+            for (int index = 0; index < items.size(); index++) {
+                if (pendingScriptId.equals(items.get(index).getUsername())) {
+                    position = index;
+                    break;
+                }
+            }
+            pendingScriptId = null;
+            if (position >= 0) xMouseManage(position);
+            else Toast.makeText(this, "That saved script is no longer available.", Toast.LENGTH_LONG).show();
+        }
     }
 
     public void xMouseManage(final Integer pos) {
         xMouseManage(pos, null);
     }
+
+    public static final String EXTRA_SCRIPT_ID = "com.stripe1.xmouse.script.id";
+    public static final String EXTRA_ADD_SCRIPT = "com.stripe1.xmouse.script.add";
 
     private void xMouseManage(final Integer pos, SshServiceDiscovery.Candidate candidate) {
         final boolean script = type == ActivityType.type_script;
@@ -403,6 +456,7 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
                 .setPositiveButton("Save", null).setNegativeButton(existing == null ? "Cancel" : "Delete", null);
         if (existing != null) builder.setNeutralButton("Cancel", null);
         AlertDialog dialog = builder.create();
+        scriptEditGeneration++;
         editing = dialog;
         dialog.show();
         if (dialog.getWindow() != null) {
@@ -410,6 +464,7 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
         }
         final int token = generation;
         dialog.setOnDismissListener(ignored -> {
+            scriptEditGeneration++;
             if (passwordBox != null) passwordBox.getText().clear();
             if (editing == dialog) editing = null;
             if (transientDiscoveryCandidate == candidate) transientDiscoveryCandidate = null;
@@ -418,13 +473,9 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
             String alias = nameBox.getText().toString(); String endpoint = hostBox.getText().toString();
             if (script) {
-                if (existing != null) database.updateRow(DatabaseHandler.SCRIPT_TABLE_NAME, new String[]{"Alias", "Script"}, new String[]{alias, endpoint}, existing.getUsername());
-                else {
-                    ArrayList<ArrayList<String>> values = new ArrayList<>();
-                    values.add(new ArrayList<>(Arrays.asList("Alias", alias))); values.add(new ArrayList<>(Arrays.asList("Script", endpoint)));
-                    database.addRow(DatabaseHandler.SCRIPT_TABLE_NAME, values);
-                }
-                dialog.dismiss(); loadCurrentHostList();
+                if (alias.trim().isEmpty()) { nameBox.setError("Enter a script name"); return; }
+                if (endpoint.trim().isEmpty()) { hostBox.setError("Enter an SSH command"); return; }
+                mutateScript(existing == null ? null : existing.getUsername(), alias, endpoint, false);
             } else {
                 String user = userBox.getText().toString(); String port = portBox.getText().toString();
                 if (!com.stripe1.xmouse.connection.ComputerDraft.validUsername(user)) {
@@ -438,7 +489,11 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
         });
         dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(view -> {
             if (existing == null) { dialog.dismiss(); return; }
-            if (script) { database.deleteRow(DatabaseHandler.SCRIPT_TABLE_NAME, Integer.parseInt(existing.getUsername())); dialog.dismiss(); loadCurrentHostList(); }
+            if (script) new AlertDialog.Builder(this).setTitle("Delete script?")
+                    .setMessage("Remove this saved script? This does not run its command.")
+                    .setNegativeButton("Cancel", null).setPositiveButton("Delete", (confirmation, which) -> {
+                        if (current(token) && dialog.isShowing()) mutateScript(existing.getUsername(), null, null, true);
+                    }).show();
             else new AlertDialog.Builder(this).setTitle("Delete computer?")
                     .setMessage("Remove this saved computer? Protected credentials and active control sessions are not reset.")
                     .setNegativeButton("Cancel", null).setPositiveButton("Delete", (confirmation, which) -> {
@@ -450,6 +505,40 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
                             runOnUiThread(() -> { if (current(token)) { dialog.dismiss(); loadCurrentHostList(); } });
                         } catch (Exception ignored) { runOnUiThread(() -> { if (current(token)) failure(); }); }
                     }); }).show();
+        });
+    }
+
+    /** Existing SQLite script CRUD, serialized without retaining this Activity or its form widgets. */
+    private void mutateScript(String id, String alias, String command, boolean delete) {
+        final int token = generation;
+        final int editToken = scriptEditGeneration;
+        final Context context = getApplicationContext();
+        final WeakReference<ListEditActivity> owner = new WeakReference<>(this);
+        final Handler handler = new Handler(Looper.getMainLooper());
+        if (editing != null) {
+            editing.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+            editing.getButton(AlertDialog.BUTTON_NEGATIVE).setEnabled(false);
+        }
+        scriptWorker.execute(() -> {
+            boolean saved = false;
+            try (DatabaseHandler database = new DatabaseHandler(context)) {
+                if (delete) saved = database.deleteRow(DatabaseHandler.SCRIPT_TABLE_NAME, Integer.parseInt(id)) == 1;
+                else if (id != null) saved = database.updateRow(DatabaseHandler.SCRIPT_TABLE_NAME,
+                        new String[]{"Alias", "Script"}, new String[]{alias, command}, id) == 1;
+                else saved = database.addScript(alias, command) > 0;
+            } catch (Exception ignored) { /* Never expose script text or SQLite/provider messages. */ }
+            final boolean success = saved;
+            handler.post(() -> {
+                ListEditActivity activity = owner.get();
+                if (activity == null || !activity.current(token) || activity.editing == null ||
+                        editToken != activity.scriptEditGeneration) return;
+                if (success) { activity.editing.dismiss(); activity.loadCurrentHostList(); }
+                else {
+                    Toast.makeText(activity, R.string.ng_script_save_failed, Toast.LENGTH_LONG).show();
+                    activity.editing.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                    activity.editing.getButton(AlertDialog.BUTTON_NEGATIVE).setEnabled(true);
+                }
+            });
         });
     }
 

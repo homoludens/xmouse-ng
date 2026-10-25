@@ -75,6 +75,9 @@ public final class ShellNavigation {
         if (index >= 0) change(() -> overlays.remove(index));
     }
 
+    /** Saved Actions arriving from disk replace controls just like a destination/category change. */
+    public void replaceContent(Runnable mutation) { change(mutation); }
+
     /** Local layer first, then pointer mode, then Touchpad, then normal Android Back. */
     public boolean back() {
         if (!overlays.isEmpty()) { closeTop(); return true; }

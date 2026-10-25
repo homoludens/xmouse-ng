@@ -69,6 +69,7 @@ class LayoutProfileManagerAndroidTest {
             ActivityScenario.launch<LayoutProfileManagerActivity>(
                 Intent(context, LayoutProfileManagerActivity::class.java),
             ).use {
+                compose.awaitEditorText("Selected layout ID: ${profiles.last().id}")
                 compose.onNodeWithText("Selected layout ID: ${profiles.last().id}").assertExists()
                 profiles.forEach { profile ->
                     compose.onNodeWithTag("layout-profiles-list")
@@ -79,6 +80,7 @@ class LayoutProfileManagerAndroidTest {
                 compose.onNodeWithTag("layout-profiles-list")
                     .performScrollToNode(hasTestTag("layout-profile-select-${profiles.first().id}"))
                 compose.onNodeWithTag("layout-profile-select-${profiles.first().id}").performClick()
+                compose.awaitEditorText("Selected layout ID: ${profiles.first().id}")
                 compose.onNodeWithText("Selected layout ID: ${profiles.first().id}").assertExists()
                 assertEquals(profiles.first().id, repository.loadSelectedProfile()?.id)
             }

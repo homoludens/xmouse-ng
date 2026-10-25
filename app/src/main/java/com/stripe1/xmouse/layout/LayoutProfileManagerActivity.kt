@@ -45,7 +45,7 @@ import java.io.File
 
 /** User-facing CRUD and selection screen for saved named layouts. */
 class LayoutProfileManagerActivity : ComponentActivity() {
-    private lateinit var managerViewModel: LayoutProfileManagerViewModel
+    private lateinit var managerViewModel: LayoutProfileManagerWorkerViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,25 +55,25 @@ class LayoutProfileManagerActivity : ComponentActivity() {
         managerViewModel = ViewModelProvider(
             this,
             LayoutProfileManagerViewModelFactory(repository),
-        )[LayoutProfileManagerViewModel::class.java]
+        )[LayoutProfileManagerWorkerViewModel::class.java]
 
         setContent {
             XMouseNgTheme {
                 val state by managerViewModel.state.collectAsState()
                 LayoutProfileManagerScreen(
                     state = state,
-                    onRefresh = managerViewModel::refresh,
-                    onCreate = managerViewModel::beginCreate,
-                    onRename = managerViewModel::beginRename,
-                    onDuplicate = managerViewModel::beginDuplicate,
-                    onSelect = managerViewModel::selectProfile,
-                    onDelete = managerViewModel::requestDelete,
+                    onRefresh = { managerViewModel.edit { it.refresh() } },
+                    onCreate = { managerViewModel.edit { it.beginCreate() } },
+                    onRename = { id -> managerViewModel.edit { it.beginRename(id) } },
+                    onDuplicate = { id -> managerViewModel.edit { it.beginDuplicate(id) } },
+                    onSelect = { id -> managerViewModel.edit { it.selectProfile(id) } },
+                    onDelete = { id -> managerViewModel.edit { it.requestDelete(id) } },
                     onEdit = ::openEditor,
-                    onNameChanged = managerViewModel::updateNameInput,
-                    onNameSave = managerViewModel::commitNameAction,
-                    onNameCancel = managerViewModel::cancelNameAction,
-                    onDeleteConfirm = managerViewModel::confirmDelete,
-                    onDeleteCancel = managerViewModel::cancelDelete,
+                    onNameChanged = { value -> managerViewModel.edit { it.updateNameInput(value) } },
+                    onNameSave = { managerViewModel.edit { it.commitNameAction() } },
+                    onNameCancel = { managerViewModel.edit { it.cancelNameAction() } },
+                    onDeleteConfirm = { managerViewModel.edit { it.confirmDelete() } },
+                    onDeleteCancel = { managerViewModel.edit { it.cancelDelete() } },
                     onClose = ::finish,
                 )
             }
@@ -82,7 +82,7 @@ class LayoutProfileManagerActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (::managerViewModel.isInitialized) managerViewModel.refresh()
+        if (::managerViewModel.isInitialized) managerViewModel.edit { it.refresh() }
     }
 
     private fun openEditor(profileId: String) {
@@ -98,8 +98,8 @@ private class LayoutProfileManagerViewModelFactory(
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
-        require(modelClass.isAssignableFrom(LayoutProfileManagerViewModel::class.java))
-        return LayoutProfileManagerViewModel(repository) as T
+        require(modelClass.isAssignableFrom(LayoutProfileManagerWorkerViewModel::class.java))
+        return LayoutProfileManagerWorkerViewModel(repository) as T
     }
 }
 
@@ -114,9 +114,9 @@ private fun LayoutProfileManagerScreen(
     onDelete: (String) -> Unit,
     onEdit: (String) -> Unit,
     onNameChanged: (String) -> Unit,
-    onNameSave: () -> Boolean,
+    onNameSave: () -> Unit,
     onNameCancel: () -> Unit,
-    onDeleteConfirm: () -> Boolean,
+    onDeleteConfirm: () -> Unit,
     onDeleteCancel: () -> Unit,
     onClose: () -> Unit,
 ) {

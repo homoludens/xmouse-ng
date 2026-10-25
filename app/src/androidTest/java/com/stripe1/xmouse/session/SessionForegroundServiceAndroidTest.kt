@@ -21,6 +21,8 @@ import android.provider.Settings
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
+import com.stripe1.xmouse.layout.awaitEditorTag
 import android.widget.EditText
 import android.widget.ListView
 import androidx.test.core.app.ActivityScenario
@@ -446,13 +448,12 @@ class SessionForegroundServiceAndroidTest {
     }
 
     private fun clickLegacyButton(activity: MainActivity, title: String) {
-        val grid = activity.findViewById<SpanVariableGridView>(R.id.key_drag_DragAndDropGridView)
-        val adapter = grid.adapter as CustomKeyboardButtonAdapter
-        val position = (0 until adapter.count).firstOrNull { adapter.getItem(it)?.getmTitle() == title }
-        assertNotNull("legacy custom button is missing: $title", position)
-        val button = grid.getChildAt(requireNotNull(position))
-        assertNotNull("legacy custom button view was not attached: $title", button)
-        assertTrue("legacy custom button did not receive its click: $title", button.performClick())
+        val saved = requireNotNull(activity.selectedSavedActionProfile())
+        val action = saved.buttons.singleOrNull { it.title == title }
+        assertNotNull("preserved custom action is missing: $title", action)
+        val button = activity.findViewById<ViewGroup>(R.id.actions_tiles).findViewWithTag<View>(requireNotNull(action).id)
+        assertNotNull("native action tile was not attached: $title", button)
+        assertTrue("native action tile did not receive its click: $title", button.performClick())
     }
 
     private fun addSavedScript(activity: MainActivity, alias: String, command: String): Int {
@@ -1334,6 +1335,11 @@ class SessionForegroundServiceAndroidTest {
                 ready
             }
             // The same production service transport records editor-time and normal-mode commands.
+            eventually {
+                var loaded = false
+                activityScenario.onActivity { loaded = it.selectedSavedActionProfile()?.id == original.id }
+                loaded
+            }
             recordingOwner.backend.writes.clear()
             recordingOwner.backend.commandOrder.clear()
 
@@ -1345,8 +1351,10 @@ class SessionForegroundServiceAndroidTest {
                 activity.onOptionsItemSelected(requireNotNull(toolbar.menu.findItem(R.id.action_edit_layout)))
             }
 
+            compose.awaitEditorTag("layout-editor-button-source")
             val sourceNode = compose.onNodeWithTag("layout-editor-button-source").performScrollTo()
             sourceNode.performClick()
+            compose.awaitEditorTag("layout-editor-move-earlier")
             sourceNode.assertIsSelected()
             assertEquals("a preview tap only selects an editor button", original, repository.loadProfile(original.id))
             assertNull(repository.loadDraft(original.id))
@@ -1368,22 +1376,26 @@ class SessionForegroundServiceAndroidTest {
             compose.waitForIdle()
 
             val moved = original.copy(buttons = original.buttons.reversed())
+            eventually { repository.loadDraft(original.id) == moved }
             assertEquals(moved, repository.loadDraft(original.id))
             assertEquals("dragging cannot update the saved profile", original, repository.loadProfile(original.id))
 
             compose.onNodeWithTag("layout-editor-increase-width").performScrollTo().performClick()
             compose.waitForIdle()
             val resized = moved.copy(buttons = listOf(moved.buttons[0], moved.buttons[1].copy(width = 4)))
+            eventually { repository.loadDraft(original.id) == resized }
             assertEquals(resized, repository.loadDraft(original.id))
             assertEquals("resizing cannot update the saved profile", original, repository.loadProfile(original.id))
 
             val expectedCommand = "printf 'saved-layout-only'"
             compose.onNodeWithTag("layout-editor-add-button").performScrollTo().performClick()
+            compose.awaitEditorTag("layout-editor-button-title")
             compose.onNodeWithTag("layout-editor-button-title").performScrollTo().performTextInput("Saved action")
             compose.onNodeWithTag("layout-editor-button-command").performScrollTo().performTextInput(expectedCommand)
             compose.onNodeWithTag("layout-editor-button-save").performClick()
             compose.waitForIdle()
 
+            eventually { repository.loadDraft(original.id)?.buttons?.lastOrNull()?.title == "Saved action" }
             val draft = requireNotNull(repository.loadDraft(original.id))
             val created = draft.buttons.last()
             assertEquals("Saved action", created.title)
@@ -1405,13 +1417,8 @@ class SessionForegroundServiceAndroidTest {
             eventually {
                 var reloaded = false
                 activityScenario.onActivity { activity ->
-                    val adapter = activity.findViewById<SpanVariableGridView>(R.id.key_drag_DragAndDropGridView)
-                        .adapter as? CustomKeyboardButtonAdapter
-                    val button = adapter?.let { current ->
-                        (0 until current.count).mapNotNull(current::getItem)
-                            .singleOrNull { it.getmTitle() == "Saved action" }
-                    }
-                    reloaded = button?.getmCommand() == expectedCommand && button.getmSpans() == created.width &&
+                    val button = activity.selectedSavedActionProfile()?.buttons?.singleOrNull { it.title == "Saved action" }
+                    reloaded = button?.command == expectedCommand && button.width == created.width &&
                         activity.activeControlInputToken() != null
                 }
                 reloaded
@@ -1706,12 +1713,9 @@ class SessionForegroundServiceAndroidTest {
             clickLegacyButton(activity, "Backspace")
             clickLegacyButton(activity, "+Volume")
             clickLegacyButton(activity, "Minimize")
-            val rawButton = (activity.findViewById<SpanVariableGridView>(R.id.key_drag_DragAndDropGridView).adapter
-                as CustomKeyboardButtonAdapter).let { adapter ->
-                (0 until adapter.count).mapNotNull { adapter.getItem(it) }.single { it.getmTitle() == "Minimize" }
-            }
+            val rawButton = requireNotNull(activity.selectedSavedActionProfile()).buttons.single { it.title == "Minimize" }
             assertEquals("the raw custom-button command must remain unchanged", rawCustomCommand,
-                rawButton.getmCommand())
+                rawButton.command)
 
             addSavedScript(activity, scriptAlias, scriptCommand)
         }
@@ -1728,9 +1732,9 @@ class SessionForegroundServiceAndroidTest {
         // Once the foreground inputs are observed at the provider boundary, suspend controls before
         // exercising the saved-script dialog. Otherwise the fail-closed transport admission is
         // correctly allowed to drop input that has not yet reached the provider.
-        activityScenario.onActivity {
-            it.findViewById<View>(R.id.actions_scripts).performClick()
-        }
+        activityScenario.onActivity { it.refreshSavedActions() }
+        waitForText(scriptAlias)
+        activityScenario.onActivity { it.showSavedScripts() }
         waitForRecentCommand(activityScenario, rawCustomCommand)
         val shellCommandsBeforeScript = recordingOwner.backend.commandOrder.toList()
         assertTrue("the real touchpad/joystick and volume/keyboard/custom routes must reach the same shell sink",

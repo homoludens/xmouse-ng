@@ -1,0 +1,322 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/action_editor_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/ng_background"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp">
+
+        <Button
+            android:id="@+id/action_editor_back"
+            style="@style/Widget.XMouseNg.ControlButton.Soft"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:text="@string/ng_action_editor_cancel" />
+
+        <TextView
+            android:id="@+id/action_editor_title"
+            style="@style/TextAppearance.XMouseNg.Heading"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_weight="1" />
+    </LinearLayout>
+
+    <ScrollView
+        android:id="@+id/action_editor_scroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
+        android:clipToPadding="false">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="18dp"
+            android:paddingEnd="18dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="18dp">
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/action_name_field"
+                style="@style/Widget.XMouseNg.TextInputLayout"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/ng_action_editor_name">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/action_name"
+                    style="@style/Widget.XMouseNg.TextInputEditText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="textCapSentences"
+                    android:saveEnabled="false"
+                    android:maxLines="2" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <TextView
+                android:id="@+id/action_type_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="@string/ng_action_editor_type"
+                android:textColor="@color/ng_text_secondary"
+                android:textSize="14sp" />
+
+            <RadioGroup
+                android:id="@+id/action_type_group"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <RadioButton
+                    android:id="@+id/action_type_shortcut"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:buttonTint="@color/ng_accent"
+                    android:text="@string/ng_action_editor_shortcut"
+                    android:textColor="@color/ng_text_primary"
+                    android:textSize="15sp" />
+
+                <RadioButton
+                    android:id="@+id/action_type_advanced"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:buttonTint="@color/ng_accent"
+                    android:text="@string/ng_action_editor_advanced"
+                    android:textColor="@color/ng_text_primary"
+                    android:textSize="15sp" />
+            </RadioGroup>
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/action_command_field"
+                style="@style/Widget.XMouseNg.TextInputLayout"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/ng_action_editor_shortcut_hint">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/action_command"
+                    style="@style/Widget.XMouseNg.TextInputEditText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="textNoSuggestions|textVisiblePassword"
+                    android:saveEnabled="false"
+                    android:imeOptions="actionDone"
+                    android:maxLines="1" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <TextView
+                android:id="@+id/action_command_error"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:accessibilityLiveRegion="polite"
+                android:textColor="@color/ng_danger"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/action_size_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="@string/ng_action_editor_size"
+                android:textColor="@color/ng_text_secondary"
+                android:textSize="14sp" />
+
+            <RadioGroup
+                android:id="@+id/action_size_group"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <RadioButton
+                    android:id="@+id/action_size_regular"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:buttonTint="@color/ng_accent"
+                    android:text="@string/ng_action_editor_regular"
+                    android:textColor="@color/ng_text_primary" />
+
+                <RadioButton
+                    android:id="@+id/action_size_wide"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:buttonTint="@color/ng_accent"
+                    android:text="@string/ng_action_editor_wide"
+                    android:textColor="@color/ng_text_primary" />
+
+                <RadioButton
+                    android:id="@+id/action_size_custom"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:buttonTint="@color/ng_accent"
+                    android:text="@string/ng_action_editor_custom"
+                    android:textColor="@color/ng_text_primary" />
+            </RadioGroup>
+
+            <TextView
+                android:id="@+id/action_size_custom_note"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingStart="4dp"
+                android:textColor="@color/ng_text_secondary"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/action_color_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="@string/ng_action_editor_colors"
+                android:textColor="@color/ng_text_secondary"
+                android:textSize="14sp" />
+
+            <HorizontalScrollView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:scrollbars="none">
+            <com.google.android.material.button.MaterialButtonToggleGroup
+                android:id="@+id/action_color_group"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                app:selectionRequired="false"
+                app:singleSelection="true">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/action_color_white"
+                    style="@style/Widget.XMouseNg.KeyCategory"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:text="@string/ng_action_color_white" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/action_color_green"
+                    style="@style/Widget.XMouseNg.KeyCategory"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:text="@string/ng_action_color_green" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/action_color_blue"
+                    style="@style/Widget.XMouseNg.KeyCategory"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:text="@string/ng_action_color_blue" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/action_color_red"
+                    style="@style/Widget.XMouseNg.KeyCategory"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:text="@string/ng_action_color_red" />
+            </com.google.android.material.button.MaterialButtonToggleGroup>
+            </HorizontalScrollView>
+
+            <Button
+                android:id="@+id/action_color_advanced_toggle"
+                style="@style/Widget.XMouseNg.ControlButton.Soft"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="6dp"
+                android:text="@string/ng_action_editor_custom_rgb" />
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/action_custom_color_field"
+                style="@style/Widget.XMouseNg.TextInputLayout"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/ng_action_editor_custom_rgb_hint"
+                android:visibility="gone">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/action_custom_color"
+                    style="@style/Widget.XMouseNg.TextInputEditText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="textNoSuggestions|textVisiblePassword"
+                    android:saveEnabled="false"
+                    android:imeOptions="actionDone"
+                    android:maxLength="9"
+                    android:maxLines="1" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <TextView
+                android:id="@+id/action_color_custom_note"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingStart="4dp"
+                android:paddingTop="4dp"
+                android:textColor="@color/ng_text_secondary"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/action_editor_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:accessibilityLiveRegion="polite"
+                android:paddingTop="10dp"
+                android:textColor="@color/ng_danger"
+                android:textSize="14sp"
+                android:visibility="gone" />
+
+            <Button android:id="@+id/action_editor_open_advanced"
+                style="@style/Widget.XMouseNg.ControlButton.Soft"
+                android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="48dp"
+                android:layout_marginTop="16dp" android:text="@string/ng_action_editor_open_advanced" />
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="12dp" android:text="@string/ng_action_editor_script_help"
+                android:textColor="@color/ng_text_secondary" android:textSize="13sp" />
+            <Button android:id="@+id/action_editor_new_script"
+                style="@style/Widget.XMouseNg.ControlButton.Soft"
+                android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="48dp"
+                android:text="@string/ng_action_editor_new_script" />
+        </LinearLayout>
+    </ScrollView>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp">
+
+        <Button
+            android:id="@+id/action_editor_delete"
+            style="@style/Widget.XMouseNg.ControlButton.Danger"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:text="@string/ng_action_editor_delete"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/action_editor_save"
+            style="@style/Widget.XMouseNg.ControlButton.Accent"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:text="@string/ng_action_editor_save" />
+    </LinearLayout>
+</LinearLayout>

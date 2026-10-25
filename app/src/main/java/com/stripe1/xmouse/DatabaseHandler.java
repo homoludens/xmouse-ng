@@ -211,6 +211,15 @@ public class DatabaseHandler extends SQLiteOpenHelper implements Closeable {
         db.insert(TABLE_NAME, null, values);
         db.close(); // Closing database connection
     }
+
+    /** Script creation uses the same table/columns, but must report a failed insert to its form. */
+    public long addScript(String alias, String command) {
+        ContentValues values = new ContentValues();
+        values.put(KEY_TIME, dateFormat.format(Calendar.getInstance().getTime()));
+        values.put("Alias", alias);
+        values.put("Script", command);
+        return getWritableDatabase().insertOrThrow(SCRIPT_TABLE_NAME, null, values);
+    }
     
     public String[] getLastRow(String TABLE_NAME,String[] columnKeys) {
     	

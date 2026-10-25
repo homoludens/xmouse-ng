@@ -117,21 +117,55 @@
         </LinearLayout>
     </ScrollView>
     <LinearLayout android:id="@+id/actions_destination" android:layout_width="match_parent"
-        android:layout_height="match_parent" android:orientation="vertical" android:padding="14dp" android:visibility="gone">
-        <TextView style="@style/TextAppearance.XMouseNg.Heading" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:text="@string/ng_actions" />
-        <HorizontalScrollView android:layout_width="match_parent" android:layout_height="wrap_content">
-            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal">
-                <Button android:id="@+id/actions_layouts" style="@style/Widget.XMouseNg.ControlButton.Soft"
-                    android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/layout_profiles_title" />
-                <Button android:id="@+id/actions_edit" style="@style/Widget.XMouseNg.ControlButton.Soft"
-                    android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/ng_edit_actions" />
-                <Button android:id="@+id/actions_scripts" style="@style/Widget.XMouseNg.ControlButton.Soft"
-                    android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/ng_scripts" />
+        android:layout_height="match_parent" android:orientation="vertical" android:visibility="gone">
+        <ScrollView android:id="@+id/actions_scroll" android:layout_width="match_parent"
+            android:layout_height="0dp" android:layout_weight="1" android:fillViewport="true"
+            android:clipToPadding="false">
+            <LinearLayout android:id="@+id/actions_content" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:orientation="vertical"
+                android:paddingStart="14dp" android:paddingEnd="14dp" android:paddingTop="8dp"
+                android:paddingBottom="18dp">
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:gravity="center_vertical" android:orientation="horizontal">
+                    <TextView style="@style/TextAppearance.XMouseNg.Heading" android:layout_width="0dp"
+                        android:layout_height="wrap_content" android:layout_weight="1" android:text="@string/ng_actions" />
+                    <Button android:id="@+id/actions_edit" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                        android:layout_width="wrap_content" android:layout_height="48dp"
+                        android:text="@string/ng_edit_actions_short" />
+                    <Button android:id="@+id/actions_more" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                        android:layout_width="wrap_content" android:layout_height="48dp" android:layout_marginStart="6dp"
+                        android:text="@string/ng_actions_more" />
+                </LinearLayout>
+                <com.google.android.material.button.MaterialButton android:id="@+id/actions_layout_picker"
+                    style="@style/Widget.XMouseNg.ControlButton.Soft" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:minHeight="48dp" android:layout_marginTop="8dp"
+                    android:drawableEnd="@drawable/ic_ng_chevron_down" android:drawableTint="@color/ng_text_secondary"
+                    android:gravity="center_vertical|start" android:paddingStart="14dp" android:paddingEnd="14dp"
+                    android:text="@string/ng_actions_choose_layout" android:textAlignment="viewStart" />
+                <LinearLayout android:id="@+id/actions_tiles" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:layout_marginTop="10dp"
+                    android:orientation="vertical" />
+                <Button android:id="@+id/actions_add" style="@style/Widget.XMouseNg.ControlButton.Accent"
+                    android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="2dp"
+                    android:drawableStart="@drawable/ic_ng_add" android:drawableTint="@color/ng_on_accent"
+                    android:drawablePadding="8dp" android:gravity="center" android:text="@string/ng_add_action" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="20dp" android:gravity="center_vertical" android:orientation="horizontal">
+                    <TextView android:id="@+id/actions_scripts" style="@style/TextAppearance.XMouseNg.Heading"
+                        android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                        android:text="@string/ng_scripts" />
+                    <Button android:id="@+id/actions_add_script" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                        android:layout_width="wrap_content" android:layout_height="48dp"
+                        android:text="@string/ng_add_script" />
+                </LinearLayout>
+                <LinearLayout android:id="@+id/actions_script_list" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="vertical" />
             </LinearLayout>
-        </HorizontalScrollView>
+        </ScrollView>
+        <!-- Retained only as an inaccessible legacy adapter host; the primary Actions UI is above. -->
         <LinearLayout android:id="@+id/keyboard" android:layout_width="match_parent"
-            android:layout_height="0dp" android:layout_weight="1" android:orientation="vertical">
+            android:layout_height="wrap_content" android:visibility="gone" android:importantForAccessibility="noHideDescendants"
+            android:orientation="vertical">
             <include layout="@layout/drag_and_drop" />
         </LinearLayout>
     </LinearLayout>

@@ -22,7 +22,7 @@ class LayoutProfileRuntime(
     private val repository: LayoutProfileRepository,
     private val migrator: LegacyLayoutProfileMigrator,
 ) {
-    private var repositoryActive = false
+    @Volatile private var repositoryActive = false
     private var selectedProfileId: String? = null
 
     @Synchronized
@@ -43,29 +43,22 @@ class LayoutProfileRuntime(
             )
         }
 
-        val activeProfile = try {
-            repository.loadProfile(LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID)
-        } catch (_: Exception) {
-            return LayoutProfileActivation(
-                null,
-                "The active legacy layout is missing or unreadable. Restore or repair keyLayoutFile.csv and restart; legacy layouts remain available read-only.",
-            )
-        }
-
         val selected = try {
-            repository.loadSelectedProfile() ?: activeProfile.also {
-                repository.selectProfile(LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID)
+            // Named profiles remain valid when the initial empty Actions profile was deliberately
+            // deleted in the manager. Migration warnings above still fail closed for damaged sources.
+            repository.loadSelectedProfile() ?: repository.listProfiles().firstOrNull()?.also {
+                repository.selectProfile(it.id)
             }
         } catch (_: Exception) {
             return LayoutProfileActivation(null, genericWarning())
-        }
+        } ?: return LayoutProfileActivation(null, genericWarning())
 
         selectedProfileId = selected.id
         repositoryActive = true
         return LayoutProfileActivation(selected, null)
     }
 
-    fun isRepositoryActive(): Boolean = synchronized(this) { repositoryActive }
+    fun isRepositoryActive(): Boolean = repositoryActive
 
     @Synchronized
     fun selectProfile(profileId: String): LayoutProfile {
@@ -93,6 +86,13 @@ class LayoutProfileRuntime(
         val saved = repository.loadProfile(profileId).copy(buttons = buttons.toList())
         repository.saveProfile(saved)
         return saved
+    }
+
+    /** Legacy UI Save captures its profile before queuing; a later selection cannot redirect it. */
+    @Synchronized
+    fun saveCurrentProfileIfSelected(profileId: String, buttons: List<LayoutButton>): LayoutProfile? {
+        if (selectedProfileId != profileId) return null
+        return saveCurrentProfile(buttons)
     }
 
     /** Save-as targets use stable IDs; missing legacy preset IDs are created only on user action. */

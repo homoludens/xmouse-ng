@@ -44,10 +44,12 @@ class LayoutEditorAccessibilityAndroidTest {
                 Intent(context, LayoutEditorActivity::class.java)
                     .putExtra(LayoutEditorActivity.EXTRA_PROFILE_ID, saved.id),
             ).use {
+                compose.awaitEditorTag("layout-editor-button-target")
                 val selected = compose.onNodeWithContentDescription(
                     "Target, button 2 of 4, width 2 columns",
                 ).performScrollTo()
                 selected.performClick()
+                compose.awaitEditorTag("layout-editor-move-earlier")
                 selected.assertIsSelected()
 
                 val moveEarlier = compose.onNodeWithContentDescription(
@@ -59,10 +61,14 @@ class LayoutEditorAccessibilityAndroidTest {
                 assertTrue("Move action must be at least 48dp high", targetBounds.height >= minimumTargetPx)
                 moveEarlier.performClick()
 
+                compose.waitUntil(5_000) { repository.loadDraft(saved.id)?.buttons?.firstOrNull()?.id == "target" }
+
                 compose.onNodeWithContentDescription("Target, button 1 of 4. Move later")
                     .performScrollTo().performClick()
+                compose.waitUntil(5_000) { repository.loadDraft(saved.id)?.buttons?.getOrNull(1)?.id == "target" }
                 compose.onNodeWithContentDescription("Target, button 2 of 4. Move later")
                     .performScrollTo().performClick()
+                compose.waitUntil(5_000) { repository.loadDraft(saved.id)?.buttons?.getOrNull(2)?.id == "target" }
                 compose.onNodeWithContentDescription("Target, width 2 columns. Increase width")
                     .performScrollTo().performClick()
 
@@ -74,10 +80,10 @@ class LayoutEditorAccessibilityAndroidTest {
                         saved.buttons[3],
                     ),
                 )
-                compose.waitForIdle()
+                compose.waitUntil(5_000) { repository.loadDraft(saved.id) == resized }
                 assertEquals(resized, repository.loadDraft(saved.id))
                 compose.onNodeWithTag("layout-editor-save").performScrollTo().performClick()
-                compose.waitForIdle()
+                compose.waitUntil(5_000) { repository.loadProfile(saved.id) == resized }
                 assertEquals(resized, repository.loadProfile(saved.id))
             }
         } finally {
