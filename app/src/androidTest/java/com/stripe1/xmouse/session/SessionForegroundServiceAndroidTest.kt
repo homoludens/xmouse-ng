@@ -32,9 +32,9 @@ import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import androidx.core.content.edit
-import androidx.core.view.GravityCompat
 import androidx.appcompat.widget.Toolbar
-import androidx.drawerlayout.widget.DrawerLayout
+import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.stripe1.xmouse.ShellNavigation
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsSelected
@@ -1418,8 +1418,7 @@ class SessionForegroundServiceAndroidTest {
             }
 
             activityScenario.onActivity { activity ->
-                assertTrue("normal custom controls must be available after editor return",
-                    activity.findViewById<View>(R.id.fab).performClick())
+                activity.findViewById<BottomNavigationView>(R.id.bottom_navigation).selectedItemId = R.id.nav_actions
             }
             eventually {
                 var active = false
@@ -1458,7 +1457,7 @@ class SessionForegroundServiceAndroidTest {
 
     @Test
     @SdkSuppress(minSdkVersion = 36)
-    fun systemBackClosesDrawerAndDialogsBeforeDirtyEditorWithoutDisconnecting() {
+    fun systemBackClosesComputerOverlayAndDialogsBeforeDirtyEditorWithoutDisconnecting() {
         grantNotificationPermissionForDisclosureTest()
         grantLocalNetworkPermissionForConnectionTest()
 
@@ -1484,13 +1483,12 @@ class SessionForegroundServiceAndroidTest {
             val readyConnection = recordingOwner.controller.current.connection
 
             activityScenario.onActivity { activity ->
-                activity.findViewById<DrawerLayout>(R.id.drawer_layout).openDrawer(GravityCompat.START)
+                activity.findViewById<View>(R.id.computer_selector).performClick()
             }
             eventually {
                 var open = false
                 activityScenario.onActivity {
-                    open = it.findViewById<DrawerLayout>(R.id.drawer_layout)
-                        .isDrawerOpen(GravityCompat.START)
+                    open = it.shellNavigation().topOverlay() == ShellNavigation.Overlay.COMPUTERS
                 }
                 open
             }
@@ -1498,8 +1496,7 @@ class SessionForegroundServiceAndroidTest {
             eventually {
                 var open = true
                 activityScenario.onActivity {
-                    open = it.findViewById<DrawerLayout>(R.id.drawer_layout)
-                        .isDrawerOpen(GravityCompat.START)
+                    open = it.shellNavigation().topOverlay() != null
                 }
                 !open
             }
@@ -1508,9 +1505,8 @@ class SessionForegroundServiceAndroidTest {
 
             // This menu action presents a destructive layout-switch confirmation. Back must cancel it.
             activityScenario.onActivity { activity ->
-                activity.findViewById<DrawerLayout>(R.id.drawer_layout).openDrawer(GravityCompat.START)
-                val navigation = activity.findViewById<com.google.android.material.navigation.NavigationView>(R.id.nav_view)
-                assertTrue(activity.onNavigationItemSelected(requireNotNull(navigation.menu.findItem(61))))
+                val toolbar = activity.findViewById<Toolbar>(R.id.toolbar)
+                assertTrue(activity.onOptionsItemSelected(requireNotNull(toolbar.menu.findItem(R.id.action_load_preset_one))))
             }
             waitForText("Load Keyboard Layout 1")
             device.pressBack()
@@ -1578,6 +1574,53 @@ class SessionForegroundServiceAndroidTest {
     }
 
     @Test
+    fun shellTabsAndSameActivityOverlaysKeepOneSessionAndRejectOldCapabilities() {
+        grantNotificationPermissionForDisclosureTest()
+        grantLocalNetworkPermissionForConnectionTest()
+        val owner = RecordingTransportOwner()
+        install(owner)
+        val activityScenario = launchVisibleActivity(autoConnect = true, inputBackend = "xdotool", initialCommand = "")
+        eventually { owner.controller.current.connection.isReady }
+        eventually {
+            var active = false
+            activityScenario.onActivity { active = it.activePointerInputToken() != null }
+            active
+        }
+        val generation = owner.controller.current.generation
+        val connection = owner.controller.current.connection
+        activityScenario.onActivity { activity ->
+            val old = requireNotNull(activity.activePointerInputToken())
+            val bottom = activity.findViewById<BottomNavigationView>(R.id.bottom_navigation)
+            for (id in listOf(R.id.nav_keys, R.id.nav_actions, R.id.nav_touchpad)) {
+                bottom.selectedItemId = id
+                assertNull(if (id == R.id.nav_touchpad) activity.activeKeyInputToken() else activity.activePointerInputToken())
+                assertFalse(activity.isControlInputTokenActive(old))
+                assertTrue(bottom.menu.findItem(id).isChecked)
+            }
+            val pointer = requireNotNull(activity.activePointerInputToken())
+            activity.findViewById<View>(R.id.computer_selector).performClick()
+            assertNull(activity.activeControlInputToken())
+            assertFalse(activity.isControlInputTokenActive(pointer))
+            activity.onBackPressedDispatcher.onBackPressed()
+            assertNotSame(pointer, requireNotNull(activity.activePointerInputToken()))
+            activity.findViewById<View>(R.id.type_on_computer).performClick()
+            assertNull(activity.activePointerInputToken())
+            assertNotNull(activity.activeTypingInputToken())
+            activity.findViewById<EditText>(R.id.keyboard_input).setText("merely edited, never sent")
+            activity.onBackPressedDispatcher.onBackPressed()
+            assertNull(activity.activeTypingInputToken())
+            assertNotNull(activity.activePointerInputToken())
+            assertEquals("● Connected", activity.findViewById<android.widget.TextView>(R.id.connection_status).text.toString())
+        }
+        assertTrue("navigation and editing alone must not send input", owner.backend.writes.isEmpty())
+        assertTrue(owner.backend.commandOrder.isEmpty())
+        assertSame(connection, owner.controller.current.connection)
+        assertEquals(generation, owner.controller.current.generation)
+        assertEquals(1, owner.attemptsCreated)
+        assertTrue(owner.controller.current.connection.isReady)
+    }
+
+    @Test
     fun legacyControlsCustomButtonsAndSavedScriptsUseTheServiceCommandSink() {
         grantNotificationPermissionForDisclosureTest()
         val startup = "synthetic startup command must run once"
@@ -1609,7 +1652,12 @@ class SessionForegroundServiceAndroidTest {
             dispatchTouch(mouse, downTime, downTime + 40, MotionEvent.ACTION_UP, x + 30f, 55f)
             assertTrue("legacy mouse-button click was not handled",
                 activity.findViewById<View>(R.id.firstMouseButton).performClick())
-
+        }
+        eventually {
+            recordingOwner.backend.writes.contains("xdotool click 1\r\n") &&
+                recordingOwner.backend.writes.any { it.startsWith("xdotool mousemove_relative -- ") }
+        }
+        activityScenario.onActivity { activity ->
             assertTrue("joystick mode toggle was not handled",
                 activity.findViewById<View>(R.id.jsToggle).performClick())
             val joystickLayout = activity.findViewById<android.widget.LinearLayout>(R.id.js)
@@ -1636,11 +1684,25 @@ class SessionForegroundServiceAndroidTest {
             assertTrue("legacy volume shortcut was not tracked", up.isTracking)
             assertTrue("legacy volume shortcut dispatch rejected key-up",
                 activity.onKeyUp(KeyEvent.KEYCODE_VOLUME_UP, up))
-
-            assertTrue("keyboard mode toggle was not handled", activity.findViewById<View>(R.id.fab).performClick())
+        }
+        eventually {
+            recordingOwner.backend.writes.count { it.startsWith("xdotool mousemove_relative -- ") } >= 2 &&
+                recordingOwner.backend.writes.contains("xdotool key XF86AudioRaiseVolume\r\n")
+        }
+        activityScenario.onActivity { it.findViewById<View>(R.id.type_on_computer).performClick() }
+        instrumentation.waitForIdleSync()
+        activityScenario.onActivity { activity ->
             activity.findViewById<EditText>(R.id.keyboard_input).setText(R.string.app_name)
             assertTrue("batch keyboard send button was not handled",
                 activity.findViewById<View>(R.id.keyboard_send).performClick())
+        }
+        eventually { recordingOwner.backend.writes.contains("xdotool type '$keyboardText'\r\n") }
+        activityScenario.onActivity {
+            it.findViewById<View>(R.id.overlay_close).performClick()
+            it.findViewById<BottomNavigationView>(R.id.bottom_navigation).selectedItemId = R.id.nav_actions
+        }
+        instrumentation.waitForIdleSync()
+        activityScenario.onActivity { activity ->
             clickLegacyButton(activity, "Backspace")
             clickLegacyButton(activity, "+Volume")
             clickLegacyButton(activity, "Minimize")
@@ -1664,10 +1726,10 @@ class SessionForegroundServiceAndroidTest {
                 recordingOwner.backend.writes.contains("$rawCustomCommand\r\n")
         }
         // Once the foreground inputs are observed at the provider boundary, suspend controls before
-        // exercising the saved-script drawer. Otherwise the new fail-closed transport admission is
+        // exercising the saved-script dialog. Otherwise the fail-closed transport admission is
         // correctly allowed to drop input that has not yet reached the provider.
         activityScenario.onActivity {
-            it.findViewById<DrawerLayout>(R.id.drawer_layout).openDrawer(GravityCompat.START)
+            it.findViewById<View>(R.id.actions_scripts).performClick()
         }
         waitForRecentCommand(activityScenario, rawCustomCommand)
         val shellCommandsBeforeScript = recordingOwner.backend.commandOrder.toList()
@@ -1677,13 +1739,8 @@ class SessionForegroundServiceAndroidTest {
                 shellCommandsBeforeScript.contains("shell:xdotool type '$keyboardText'") &&
                 shellCommandsBeforeScript.contains("shell:$rawCustomCommand"))
 
-        var scriptSelectionHandled = false
-        activityScenario.onActivity { activity ->
-            val navigation = activity.findViewById<com.google.android.material.navigation.NavigationView>(R.id.nav_view)
-            assertEquals(scriptAlias, navigation.menu.findItem(savedScriptId).title.toString())
-            scriptSelectionHandled = navigation.menu.performIdentifierAction(savedScriptId, 0)
-        }
-        assertTrue("the open Saved Scripts drawer did not route its selected item", scriptSelectionHandled)
+        waitForText(scriptAlias)
+        clickText(scriptAlias)
         eventually { recordingOwner.backend.channels.any { it.name == "exec" && it.command == scriptCommand } }
         assertEquals("Activity shell inputs and the saved exec script must share one ordered sink",
             shellCommandsBeforeScript + "exec:$scriptCommand", recordingOwner.backend.commandOrder.toList())
@@ -1821,8 +1878,9 @@ class SessionForegroundServiceAndroidTest {
 
         val oldKeyboardSurface = AtomicReference<InputSurfaceToken>()
         var keyboardDownTime = 0L
+        activityScenario.onActivity { it.findViewById<View>(R.id.type_on_computer).performClick() }
+        instrumentation.waitForIdleSync()
         activityScenario.onActivity { activity ->
-            activity.findViewById<View>(R.id.fab).performClick()
             activity.findViewById<EditText>(R.id.keyboard_input).setText("input_lifecycle_fixture")
             keyboardButton.set(activity.findViewById(R.id.keyboard_send))
             assertTrue("keyboard send button was not laid out", keyboardButton.get().width > 0)

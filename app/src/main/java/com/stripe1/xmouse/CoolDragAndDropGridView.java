@@ -55,6 +55,8 @@ public class CoolDragAndDropGridView extends SpanVariableGridView implements Vie
 		void onDeleteItem(int mDragPosition);
 
 		void onEditItem(int mDragPosition);
+
+		default void onDragCancelled() { }
 	}
 
 
@@ -85,6 +87,22 @@ public class CoolDragAndDropGridView extends SpanVariableGridView implements Vie
 
 		mDragAndDropStarted = true;
 
+	}
+
+	/** Cancel view-only reordering without Drop/Edit/Delete callbacks or persistence. */
+	public void cancelLegacyDragAndDrop() {
+		boolean active = mDragAndDropStarted || mDragPosition != AdapterView.INVALID_POSITION;
+		mDragAndDropStarted = false;
+		mDragPosition = mDropPosition = mCurrentPosition = AdapterView.INVALID_POSITION;
+		if (mDelayedOnDragRunnable != null) removeCallbacks(mDelayedOnDragRunnable);
+		destroyDragImageView();
+		for (int i = 0; i < getChildCount(); i++) {
+			getChildAt(i).setVisibility(View.VISIBLE);
+			getChildAt(i).clearAnimation();
+		}
+		resetLongClickTransition();
+		if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(false);
+		if (active && mDragAndDropListener != null) mDragAndDropListener.onDragCancelled();
 	}
 
 	public void setDragAndDropListener(DragAndDropListener dragAndDropListener) {
@@ -307,6 +325,11 @@ public class CoolDragAndDropGridView extends SpanVariableGridView implements Vie
 		default:
 		case MotionEvent.ACTION_UP:
 		case MotionEvent.ACTION_CANCEL:
+			if (mDragAndDropStarted && mDragPosition == AdapterView.INVALID_POSITION) {
+				// A long press released before the first drag MOVE still owns an edit layer.
+				cancelLegacyDragAndDrop();
+				return true;
+			}
 
 			mDragAndDropStarted = false;
 
@@ -359,7 +382,6 @@ public class CoolDragAndDropGridView extends SpanVariableGridView implements Vie
 				break;
 
 			case MotionEvent.ACTION_UP:
-			case MotionEvent.ACTION_CANCEL:
 
 				onDrop();
 
@@ -368,6 +390,9 @@ public class CoolDragAndDropGridView extends SpanVariableGridView implements Vie
 				getParent().requestDisallowInterceptTouchEvent(false);
 				
 				return false;
+			case MotionEvent.ACTION_CANCEL:
+				cancelLegacyDragAndDrop();
+				return true;
 
 			default:
 

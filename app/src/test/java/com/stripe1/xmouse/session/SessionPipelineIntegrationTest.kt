@@ -483,6 +483,75 @@ class SessionPipelineIntegrationTest {
         }
     }
 
+    @Test fun shellTabsAndOverlaysRetireHeldInputWithoutDispatchOrHealthySessionReconnect() {
+        val backend = RecordingSshBackend()
+        Fixture(commandBackend = backend).use { f ->
+            f.connect(SessionFixtures.host("synthetic.invalid").copy(initialCommand = null))
+            f.await { f.controller.current.connection.isReady }
+            val generation = f.controller.current.generation
+            val connection = f.controller.current.connection
+            var surface: InputSurfaceToken? = f.controller.activateControlSurface(f.presentation)
+            val oldSurface = requireNotNull(surface)
+            val gesture = requireNotNull(f.controller.beginInputGesture(oldSurface))
+            assertTrue(f.controller.executeInputCommand("xdotool mousedown 1", gesture))
+            f.await { backend.writes.contains("xdotool mousedown 1\r\n") }
+            lateinit var navigation: com.stripe1.xmouse.ShellNavigation
+            val order = mutableListOf<String>()
+            navigation = com.stripe1.xmouse.ShellNavigation(object : com.stripe1.xmouse.ShellNavigation.Listener {
+                override fun retireInput() {
+                    order += "retire"
+                    f.controller.deactivateControlSurface(surface)
+                    surface = null
+                }
+                override fun render() {
+                    assertFalse(f.controller.isControlSurfaceActive(oldSurface))
+                    assertNull(surface)
+                    order += "render"
+                }
+                override fun refreshInput() {
+                    if (navigation.eligible(true, true, f.controller.current.connection.isReady))
+                        surface = f.controller.activateControlSurface(f.presentation)
+                    order += "refresh"
+                }
+            })
+            navigation.select(com.stripe1.xmouse.ShellNavigation.Destination.KEYS)
+            f.await { backend.writes.contains("xdotool mouseup 1\r\n") }
+            assertFalse(f.controller.executeInputCommand("xdotool click 1", gesture))
+            assertFalse(f.controller.executeInputCommand("xdotool mousemove_relative -- 9 9", oldSurface))
+            navigation.select(com.stripe1.xmouse.ShellNavigation.Destination.ACTIONS)
+            navigation.select(com.stripe1.xmouse.ShellNavigation.Destination.TOUCHPAD)
+            for (overlay in listOf(com.stripe1.xmouse.ShellNavigation.Overlay.COMPUTERS,
+                com.stripe1.xmouse.ShellNavigation.Overlay.EXTERNAL,
+                com.stripe1.xmouse.ShellNavigation.Overlay.ACTION_EDIT,
+                com.stripe1.xmouse.ShellNavigation.Overlay.MENU)) {
+                val previous = surface
+                navigation.open(overlay)
+                assertNull(surface)
+                assertFalse(f.controller.isControlSurfaceActive(previous))
+                navigation.back()
+                assertNotNull(surface)
+                assertNotSame(previous, surface)
+            }
+            val pointer = surface
+            navigation.open(com.stripe1.xmouse.ShellNavigation.Overlay.TYPING)
+            assertEquals(com.stripe1.xmouse.ShellNavigation.InputRole.TYPING, navigation.inputRole())
+            assertNotNull(surface)
+            assertNotSame(pointer, surface)
+            assertFalse(f.controller.isControlSurfaceActive(pointer))
+            val typing = surface
+            navigation.back()
+            assertFalse(f.controller.isControlSurfaceActive(typing))
+            f.queue.drain()
+            assertEquals(listOf("xdotool mousedown 1\r\n", "xdotool mouseup 1\r\n"), backend.writes.toList())
+            assertTrue(backend.commandOrder.none { it.startsWith("exec:") })
+            assertEquals(generation, f.controller.current.generation)
+            assertSame(connection, f.controller.current.connection)
+            assertEquals(1, backend.events.count { it.name == "session.connect" })
+            assertFalse(backend.events.any { it.name == "session.close" })
+            assertEquals(List(order.size / 3) { listOf("retire", "render", "refresh") }.flatten(), order)
+        }
+    }
+
     @Test fun cancelledInputQueuedBehindBlockedExecIsDroppedAtRealTransportAndOldHoldIsReleased() {
         val backend = RecordingSshBackend()
         Fixture(commandBackend = backend).use { f ->

@@ -799,9 +799,7 @@ class CredentialRepositoryAndroidTest {
                     MainActivity.db = f.helper
                     activity.getPreferences()
                     assertEquals("42", f.preferences.getString("hostPreferenceList", null))
-                    val menu = android.widget.PopupMenu(activity, activity.findViewById(R.id.fab)).menu
-                    val item = menu.add(1, blank.toInt(), 0, "storage-only")
-                    activity.onNavigationItemSelected(item)
+                    activity.selectHostAndConnect(blank.toInt())
                 }
                 barrier()
                 scenario.onActivity { activity -> activity.getPreferences(); assertEquals("", MainActivity.setting_host) }

@@ -34,6 +34,11 @@
 
     <style name="AppTheme.PopupOverlay" parent="ThemeOverlay.AppCompat" />
 
+    <style name="TextAppearance.XMouseNg.Heading" parent="TextAppearance.MaterialComponents.Headline5">
+        <item name="android:textSize">23sp</item>
+        <item name="android:textColor">@color/ng_text_primary</item>
+    </style>
+
     <!-- Explicitly applied by the redesigned Views; legacy Button/ToggleButton
          widget classes retain their existing casts and compound-drawable behavior. -->
     <style name="Widget.XMouseNg.ControlButton" parent="Widget.MaterialComponents.Button.OutlinedButton">

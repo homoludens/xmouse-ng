@@ -23,8 +23,6 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.preference.PreferenceManager;
 import android.provider.Settings;
-import android.text.Editable;
-import android.text.TextWatcher;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
@@ -42,19 +40,16 @@ import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.ToggleButton;
 
-import androidx.appcompat.app.ActionBarDrawerToggle;
+import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.widget.Toolbar;
-import androidx.core.view.GravityCompat;
-import androidx.drawerlayout.widget.DrawerLayout;
 import androidx.fragment.app.FragmentManager;
 
-import com.google.android.material.floatingactionbutton.FloatingActionButton;
-import com.google.android.material.navigation.NavigationView;
 import com.stripe1.xmouse.secrets.AndroidCredentials;
 import com.stripe1.xmouse.secrets.CredentialUi;
+import com.stripe1.xmouse.secrets.CredentialHost;
 import com.stripe1.xmouse.clipboard.ClipboardPreparation;
 import com.stripe1.xmouse.clipboard.ClipboardRead;
 import com.stripe1.xmouse.clipboard.ClipboardShareCoordinator;
@@ -97,7 +92,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.WeakHashMap;
 
-public class MainActivity extends AppCompatActivity implements MyInterface, NavigationView.OnNavigationItemSelectedListener,
+public class MainActivity extends AppCompatActivity implements MyInterface,
 		CoolDragAndDropGridView.DragAndDropListener,
 		SpanVariableGridView.OnItemClickListener,
 		SpanVariableGridView.OnItemLongClickListener,
@@ -142,12 +137,21 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	private Sensor gyroscope;
 	private GyroscopeSamplingGate gyroSamplingGate;
 	private ToggleButton gyroToggle;
-	private DrawerLayout drawerLayout;
+	private ShellNavigation shellNavigation;
+	private View shellRoot;
+	private long computerLoadGeneration;
+	private static final class ComputerEntry {
+		final long id;
+		final String name;
+		ComputerEntry(long id, String name) { this.id = id; this.name = name; }
+	}
+	private List<ComputerEntry> cachedComputers = new ArrayList<>();
+	private boolean externalScreenPending;
+	private final java.util.Set<AlertDialog> shellDialogs = new java.util.HashSet<>();
 	private MyMouseView mouseControlView;
 	private MyJSView joystickControlView;
 	private boolean activityResumed;
 	private boolean windowFocused;
-	private boolean drawerOpen;
 	private InputSurfaceToken controlInputSurface;
 	private final Map<Integer, InputGestureToken> volumeInputGestures = new HashMap<>();
 	private static final class CapturedButtonGesture {
@@ -223,7 +227,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	private int potentialDeletePosition;
 	private int startPosition;
 	//static ListView scriptList;
-	private FloatingActionButton fab;
 	private TextView recentCmdTextView;
 
 
@@ -244,6 +247,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			mItemAdapter = new CustomKeyboardButtonAdapter(MainActivity.this, mItems);
 			mCoolDragAndDropGridView.setAdapter(mItemAdapter);
 			mItemAdapter.notifyDataSetChanged();
+			saveKeyboardLayout();
 		}
 	}
 	@Override
@@ -254,7 +258,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	public void xMouseClickMouse(View v){
 		InputGestureToken gesture = takeButtonActivationGesture(v);
 		Object token = gesture != null ? gesture :
-				(canUseActiveSurfaceForButtonClick(v) ? activeControlInputToken() : null);
+				(canUseActiveSurfaceForButtonClick(v) ? activePointerInputToken() : null);
 		if (!isInputTokenActive(token)) {
 			if (gesture != null && commandTransport != null) commandTransport.cancelInputGesture(gesture);
 			return;
@@ -327,6 +331,32 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		SystemWindowInsets.applyToAndConsume(getWindow(), findViewById(R.id.main_safe_area));
 		toolbar = (Toolbar) findViewById(R.id.toolbar);
 		setSupportActionBar(toolbar);
+		if (getSupportActionBar() != null) getSupportActionBar().setDisplayShowTitleEnabled(false);
+		shellRoot = findViewById(R.id.native_shell);
+		shellNavigation = new ShellNavigation(new ShellNavigation.Listener() {
+			@Override public void retireInput() { deactivateControlInputSurface(); }
+			@Override public void render() { renderShell(); }
+			@Override public void refreshInput() { updateControlInputSurface(); }
+		});
+		NativeShellViews.bind(shellRoot, shellNavigation);
+		if (savedInstanceState != null) {
+			ArrayList<String> overlays = savedInstanceState.getStringArrayList("shell.overlays");
+			shellNavigation.restore(savedInstanceState.getString("shell.destination"),
+					savedInstanceState.getBoolean("shell.joystick"), overlays == null ? new ArrayList<>() : overlays);
+		}
+		getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+			@Override public void handleOnBackPressed() {
+				if (shellNavigation.topOverlay() == ShellNavigation.Overlay.ACTION_EDIT && shellDialogs.isEmpty()) {
+					if (mCoolDragAndDropGridView != null) mCoolDragAndDropGridView.cancelLegacyDragAndDrop();
+					shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
+					return;
+				}
+				if (shellNavigation.back()) return;
+				setEnabled(false);
+				try { getOnBackPressedDispatcher().onBackPressed(); }
+				finally { setEnabled(true); }
+			}
+		});
 		commandTransport = new SessionCommandTransport(getApplicationContext());
 		credentialUi = new CredentialUi(this);
 		sessionPresenter = new SessionActivityPresenter(this, credentialUi, this);
@@ -334,83 +364,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		initializeGyroscopeSampling();
 
 
-
-		fab = (FloatingActionButton) findViewById(R.id.fab);
-		fab.setOnClickListener(new View.OnClickListener() {
-			@Override
-			public void onClick(View view) {
-				if(keyboardLayout.getVisibility() == View.VISIBLE){
-					mouseLayout.setVisibility(View.VISIBLE);
-					keyboardLayout.setVisibility(View.INVISIBLE);
-					jsLayout.setVisibility(View.INVISIBLE);
-					//Log.d("MainActivity", "Show Mouse");
-					fab.setImageResource(R.drawable.ic_action_hardware_keyboard);
-				}else {
-					keyboardLayout.setVisibility(View.VISIBLE);
-					mouseLayout.setVisibility(View.INVISIBLE);
-					jsLayout.setVisibility(View.INVISIBLE);
-					//Log.d("MainActivity", "Show Keyboard");
-					fab.setImageResource(R.drawable.ic_action_hardware_mouse);
-				}
-				//Snackbar.make(view, "Replace with your own action", Snackbar.LENGTH_LONG).setAction("Action", null).show();
-
-				//Hides soft keyboard if open
-				InputMethodManager imm = (InputMethodManager)getSystemService(Context.INPUT_METHOD_SERVICE);
-				imm.hideSoftInputFromWindow(view.getWindowToken(), 0);
-
-
-			}
-		});
-
-		/*fab.setOnLongClickListener(new View.OnLongClickListener() {
-			@Override
-			public boolean onLongClick(View view) {
-				if(jsLayout.getVisibility() == View.INVISIBLE){
-					mouseLayout.setVisibility(View.INVISIBLE);
-					keyboardLayout.setVisibility(View.INVISIBLE);
-					jsLayout.setVisibility(View.VISIBLE);
-					//Log.d("MainActivity", "Show Mouse");
-					fab.setImageResource(R.drawable.ic_action_hardware_keyboard);
-				}else {
-					keyboardLayout.setVisibility(View.INVISIBLE);
-					mouseLayout.setVisibility(View.VISIBLE);
-					jsLayout.setVisibility(View.INVISIBLE);
-					//Log.d("MainActivity", "Show Keyboard");
-					fab.setImageResource(R.drawable.ic_action_hardware_mouse);
-				}
-				//Snackbar.make(view, "Replace with your own action", Snackbar.LENGTH_LONG).setAction("Action", null).show();
-
-				//Hides soft keyboard if open
-				InputMethodManager imm = (InputMethodManager)getSystemService(Context.INPUT_METHOD_SERVICE);
-				imm.hideSoftInputFromWindow(view.getWindowToken(), 0);
-
-
-				return true;
-			}
-		});*/
-
-		drawerLayout = (DrawerLayout) findViewById(R.id.drawer_layout);
-		ActionBarDrawerToggle toggle = new ActionBarDrawerToggle(
-				this, drawerLayout, toolbar, R.string.navigation_drawer_open, R.string.navigation_drawer_close);
-		drawerLayout.addDrawerListener(toggle);
-		toggle.syncState();
-		drawerLayout.addDrawerListener(new DrawerLayout.SimpleDrawerListener() {
-			@Override public void onDrawerSlide(View drawerView, float slideOffset) {
-				if (slideOffset > 0f && !drawerOpen) {
-					drawerOpen = true;
-					deactivateControlInputSurface();
-				}
-			}
-			@Override public void onDrawerOpened(View drawerView) {
-				drawerOpen = true;
-				deactivateControlInputSurface();
-			}
-			@Override public void onDrawerClosed(View drawerView) {
-				drawerOpen = false;
-				updateControlInputSurface();
-			}
-		});
-		getOnBackPressedDispatcher().addCallback(this, new DrawerBackCallback(drawerLayout));
 
 		mouseLayout = (LinearLayout) findViewById(R.id.mouse);
 		keyboardLayout = (LinearLayout) findViewById(R.id.keyboard);
@@ -448,23 +401,19 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		installMouseButtonInputCapture(R.id.js_fifthMouseButton);
 		installMouseButtonInputCapture(R.id.keyboard_send);
 
-		jsSwitch.setOnClickListener(new View.OnClickListener() {
-			@Override
-			public void onClick(View v) {
-				mouseLayout.setVisibility(View.INVISIBLE);
-				//keyboardLayout.setVisibility(View.INVISIBLE);
-				jsLayout.setVisibility(View.VISIBLE);
-			}
+		findViewById(R.id.header_settings).setOnClickListener(v -> openSettings());
+		findViewById(R.id.connection_status).setOnClickListener(v -> showSessionControls());
+		findViewById(R.id.computers_manage).setOnClickListener(v -> openLegacyManager(0));
+		findViewById(R.id.computers_connect).setOnClickListener(v -> {
+			if (hasActiveOrPendingSession()) disconnectForegroundSessionFromUi();
+			else requestForegroundSessionFromUi();
 		});
-
-		js_jsSwitch.setOnClickListener(new View.OnClickListener() {
-			@Override
-			public void onClick(View v) {
-				mouseLayout.setVisibility(View.VISIBLE);
-				//keyboardLayout.setVisibility(View.INVISIBLE);
-				jsLayout.setVisibility(View.INVISIBLE);
-			}
-		});
+		findViewById(R.id.actions_layouts).setOnClickListener(v -> openLayoutProfileManager());
+		findViewById(R.id.actions_edit).setOnClickListener(v -> openLayoutEditor());
+		findViewById(R.id.actions_scripts).setOnClickListener(v -> showSavedScripts());
+		bindShellKey(R.id.key_escape, "Escape");
+		bindShellKey(R.id.key_switch, "alt+Tab");
+		bindShellKey(R.id.key_super, "super");
 
 		ScrollView scrollView = (ScrollView) findViewById(R.id.key_drag_scrollView);
 		mCoolDragAndDropGridView = (CoolDragAndDropGridView) findViewById(R.id.key_drag_DragAndDropGridView);
@@ -492,18 +441,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		//sh.addView(keyView);
 		ET = (EditText) findViewById(R.id.keyboard_input);
 
-		ET.addTextChangedListener(new TextWatcher() {
-			@Override
-			public void afterTextChanged(Editable s) {
-				if(!MainActivity.setting_keyboard_batch){
-					useKeyboardSendText();
-				}
-			}
-			@Override
-			public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-			@Override
-			public void onTextChanged(CharSequence s, int start,  int before, int count) {}
-		});
+		// Entering/editing a shell text field is never a remote input event, regardless of the
+		// retained legacy batch preference. Only the explicit Send callback owns typing capability.
 
 		EditKeyboardButtonsLayout = (RelativeLayout) findViewById(R.id.editKeyboardButtonsLayout);
 		EditKeyboardButtonsLayout.setVisibility(View.GONE);
@@ -563,60 +502,140 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 
 	public void initMenu(){
+		loadComputerMetadata();
+	}
 
+	/** Stable shell hook for destination controllers; changing destination never dispatches input. */
+	public ShellNavigation shellNavigation() { return shellNavigation; }
 
-
-		//SETUP NAV PANE
-		NavigationView navigationView = (NavigationView) findViewById(R.id.nav_view);
-		navigationView.setNavigationItemSelectedListener(this);
-		Menu m = (Menu) navigationView.getMenu();//.findViewById(R.id.drawer_menu_hosts);
-		m.clear(); //clear in case we added or removed scripts or hosts
-
-		MenuItem title1 = m.add(0, 999, Menu.NONE, "Host Computers");
-		ArrayList<ArrayList<String>> hosts = db.listAll(DatabaseHandler.HOST_TABLE_NAME, new String[]{"Alias", "Host", "Username", "Port", "id"});
-
-		if(hosts.size()>0) {
-			for (int i = hosts.size()-1;i>=0; i--) {
-
-				String desc = hosts.get(i).get(0);// + " [" + hosts.get(i).get(2) + "@" + hosts.get(i).get(1) + ":" + hosts.get(i).get(3) + "] id=" + hosts.get(i).get(5);
-				Integer id = Integer.valueOf(hosts.get(i).get(4));
-
-				MenuItem itemAdd1 = m.add(1, id, Menu.NONE, desc);
-				itemAdd1.setIcon(R.drawable.ic_action_hardware_desktop_windows);
-				itemAdd1.setCheckable(true);
-
-
-			}
+	private void renderShell() {
+		if (shellRoot == null || shellNavigation == null) return;
+		NativeShellViews.render(shellRoot, shellNavigation);
+		boolean typing = shellNavigation.topOverlay() == ShellNavigation.Overlay.TYPING;
+		if (!typing && ET != null) {
+			ET.clearFocus();
+			((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(ET.getWindowToken(), 0);
+			if (!shellNavigation.overlays().contains(ShellNavigation.Overlay.TYPING)) ET.setText("");
 		}
-		MenuItem itemAdd0 = m.add(1, 999999999, Menu.NONE, "Manage Hosts");
-		itemAdd0.setIcon(android.R.drawable.ic_menu_manage);
+		if (shellNavigation.topOverlay() == ShellNavigation.Overlay.COMPUTERS) renderComputers();
+	}
 
+	@Override protected void onSaveInstanceState(Bundle outState) {
+		outState.putString("shell.destination", shellNavigation.destination().name());
+		outState.putBoolean("shell.joystick", shellNavigation.joystick());
+		ArrayList<String> overlays = new ArrayList<>();
+		for (ShellNavigation.Overlay overlay : shellNavigation.overlays()) overlays.add(overlay.name());
+		outState.putStringArrayList("shell.overlays", overlays);
+		super.onSaveInstanceState(outState);
+	}
 
+	private void bindShellKey(int viewId, String key) {
+		bindShellKey(viewId, key, ShellNavigation.InputRole.KEYS);
+	}
 
-		MenuItem title3 = m.add(2, 60, Menu.NONE, "Keyboard Layouts");
+	/** Reusable key/quick-key hook for Keys, Touchpad, and Typing; never borrow another role. */
+	public void bindShellKey(int viewId, String key, ShellNavigation.InputRole role) {
+		installInputButtonCapture(viewId, role);
+		findViewById(viewId).setOnClickListener(view -> {
+			InputGestureToken gesture = takeButtonActivationGesture(view);
+			Object token = gesture != null ? gesture : canUseActiveSurfaceForButtonClick(view) ? inputTokenFor(role) : null;
+			IDoTool tool = isInputTokenActive(token) ? createDoToolForInput(token) : null;
+			if (tool != null) tool.key(key);
+			if (gesture != null && commandTransport != null) commandTransport.finishInputGesture(gesture);
+		});
+	}
 
-		MenuItem itemAdd7 = m.add(3, 61, Menu.NONE, "Layout 1");
-		itemAdd7.setIcon(R.drawable.ic_action_av_subtitles);
-		MenuItem itemAdd8 = m.add(3, 62, Menu.NONE, "Layout 2");
-		itemAdd8.setIcon(R.drawable.ic_action_av_subtitles);
-		MenuItem itemAdd = m.add(3, 63, Menu.NONE, "Layout 3");
-		itemAdd.setIcon(R.drawable.ic_action_av_subtitles);
-		MenuItem itemAdd9 = m.add(3, 64, Menu.NONE, "Add Button");
-		itemAdd9.setIcon(android.R.drawable.ic_menu_add);
-
-		MenuItem title2 = m.add(4, 1234, Menu.NONE, "Saved Scripts");
-
-		ArrayList<ArrayList<String>> scriptItems = db.listAll(DatabaseHandler.SCRIPT_TABLE_NAME, new String[]{"Alias", "Script", "id"});
-		if(scriptItems.size()>0){
-			for(int i=scriptItems.size()-1;i>=0; i--) {
-				MenuItem thisItem = m.add(5, Integer.parseInt(scriptItems.get(i).get(2)), Menu.NONE, scriptItems.get(i).get(0));
-				thisItem.setIcon(R.drawable.ic_action_action_assignment);
+	/** Metadata-only worker path: no prepare/authenticate/readPassword or secret data in the UI. */
+	private void loadComputerMetadata() {
+		final long generation = ++computerLoadGeneration;
+		com.stripe1.xmouse.secrets.CredentialRepository repository = AndroidCredentials.get(getApplicationContext());
+		repository.execute(() -> {
+			try {
+				List<ComputerEntry> hosts = new ArrayList<>();
+				for (CredentialHost host : repository.hosts()) hosts.add(new ComputerEntry(host.getId(), computerName(host)));
+				String selectedName = computerName(repository.selectedHost());
+				mainHandler.post(() -> {
+					if (generation != computerLoadGeneration || isFinishing() || isDestroyed()) return;
+					cachedComputers = hosts;
+					((TextView) findViewById(R.id.computer_name)).setText(selectedName);
+					findViewById(R.id.computer_selector).setContentDescription(getString(R.string.ng_select_computer, selectedName));
+					((TextView) findViewById(R.id.computers_message)).setText(hosts.isEmpty() ? R.string.ng_no_computers : R.string.ng_computers);
+					renderComputers();
+				});
+			} catch (Exception ignored) {
+				mainHandler.post(() -> {
+					if (generation == computerLoadGeneration && !isDestroyed())
+						((TextView) findViewById(R.id.computers_message)).setText(R.string.ng_computers_failed);
+				});
 			}
+		});
+	}
+
+	private String computerName(CredentialHost host) {
+		if (host.getAlias() != null && !host.getAlias().trim().isEmpty()) return host.getAlias();
+		String endpoint = host.displayEndpoint();
+		return endpoint.isEmpty() ? getString(R.string.ng_choose_computer) : endpoint;
+	}
+
+	private void renderComputers() {
+		LinearLayout list = findViewById(R.id.computers_list);
+		list.removeAllViews();
+		for (ComputerEntry host : cachedComputers) {
+			Button button = new Button(this);
+			button.setText(host.name);
+			button.setMinHeight((int) (48 * getResources().getDisplayMetrics().density));
+			button.setOnClickListener(v -> {
+				shellNavigation.closeTop();
+				selectHostAndConnect((int) host.id);
+			});
+			list.addView(button, new LinearLayout.LayoutParams(-1, -2));
 		}
+	}
 
-		MenuItem itemAdd6 = m.add(5, 19999999, Menu.NONE, "Manage Scripts");
-		itemAdd6.setIcon(android.R.drawable.ic_menu_manage);
+	private void openSettings() { openExternalScreen(new Intent(this, SettingsActivity.class)); }
+	private void openLegacyManager(int type) {
+		openExternalScreen(new Intent(this, ListEditActivity.class).putExtra("intVariableType", type));
+	}
+	private void openExternalScreen(Intent intent) {
+		shellNavigation.open(ShellNavigation.Overlay.EXTERNAL);
+		externalScreenPending = true;
+		try { startActivity(intent); }
+		catch (RuntimeException failure) {
+			externalScreenPending = false;
+			shellNavigation.closeTop();
+			throw failure;
+		}
+	}
 
+	private void showOwnedDialog(AlertDialog dialog) {
+		shellNavigation.open(ShellNavigation.Overlay.ACTION_EDIT);
+		shellDialogs.add(dialog);
+		dialog.setOnDismissListener(dismissed -> {
+			shellDialogs.remove(dialog);
+			if (shellDialogs.isEmpty()) shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
+		});
+		dialog.show();
+	}
+
+	public void showSavedScripts() {
+		ArrayList<ArrayList<String>> scripts = db.listAll(DatabaseHandler.SCRIPT_TABLE_NAME, new String[]{"Alias", "Script", "id"});
+		String[] titles = new String[scripts.size()];
+		for (int i = 0; i < scripts.size(); i++) titles[i] = scripts.get(i).get(0);
+		AlertDialog.Builder builder = new AlertDialog.Builder(this).setTitle(R.string.ng_scripts)
+				.setNegativeButton(R.string.ng_close, null)
+				.setNeutralButton(R.string.ng_manage_scripts, (dialog, which) -> openLegacyManager(1));
+		if (titles.length == 0) builder.setMessage(R.string.ng_no_scripts);
+		else builder.setItems(titles, (dialog, which) -> runSavedScript(Integer.parseInt(scripts.get(which).get(2))));
+		showOwnedDialog(builder.create());
+	}
+
+	public void runSavedScript(int id) {
+		ArrayList<ArrayList<String>> scripts = db.getRowWithId(DatabaseHandler.SCRIPT_TABLE_NAME,
+				new String[]{"Alias", "Script", "id"}, String.valueOf(id));
+		if (scripts.isEmpty()) return;
+		SessionInteractions.PresentationToken presentation = sessionPresenter == null ? null : sessionPresenter.presentationToken();
+		if (commandTransport == null || !commandTransport.executeExecCommand(scripts.get(0).get(1), presentation))
+			Toast.makeText(this, "Connect to a computer before running a script.", Toast.LENGTH_LONG).show();
 	}
 
 	public void getPreferences(){
@@ -678,7 +697,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	public void xMouseKeyboardSend(View v){
 		InputGestureToken gesture = takeButtonActivationGesture(v);
 		Object token = gesture != null ? gesture :
-				(canUseActiveSurfaceForButtonClick(v) ? activeControlInputToken() : null);
+				(canUseActiveSurfaceForButtonClick(v) ? activeTypingInputToken() : null);
 		if (!isInputTokenActive(token)) {
 			if (gesture != null && commandTransport != null) commandTransport.cancelInputGesture(gesture);
 			return;
@@ -699,6 +718,10 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	protected void onResume() {
 		super.onResume();
 		activityResumed = true;
+		if (externalScreenPending) {
+			externalScreenPending = false;
+			shellNavigation.close(ShellNavigation.Overlay.EXTERNAL);
+		}
 		if (returningFromLayoutEditor || returningFromLayoutManager) {
 			returningFromLayoutEditor = false;
 			returningFromLayoutManager = false;
@@ -857,8 +880,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 
 	private void updateControlInputSurface() {
-		boolean eligible = activityResumed && windowFocused && !drawerOpen &&
-				(drawerLayout == null || !drawerLayout.isDrawerOpen(GravityCompat.START)) &&
+		boolean eligible = shellNavigation != null && shellNavigation.eligible(activityResumed, windowFocused,
+				sessionSnapshot != null && sessionSnapshot.getConnection().isReady()) &&
 				!isFinishing() && !isDestroyed() && sessionPresenter != null && commandTransport != null &&
 				getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) &&
 				sessionSnapshot != null && sessionSnapshot.getConnection().isReady() &&
@@ -889,6 +912,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			if (commandTransport != null) commandTransport.cancelInputGesture(gesture);
 		}
 		if (commandTransport != null) commandTransport.deactivateControlSurface(old);
+		if (mItemAdapter != null) mItemAdapter.resetForInactiveSurface();
 		mouseButtonGestures.clear();
 		volumeInputGestures.clear();
 		if (mouseControlView != null) mouseControlView.resetForInactiveSurface();
@@ -898,7 +922,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 	private void refreshGyroscopeSampling() {
 		if (gyroSamplingGate != null) {
-			gyroSamplingGate.update(activityResumed, controlInputSurface,
+			gyroSamplingGate.update(activityResumed, activePointerInputToken(),
 					gyroToggle != null && gyroToggle.isChecked());
 		}
 	}
@@ -912,6 +936,12 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 
 	private void installMouseButtonInputCapture(int viewId) {
+		installInputButtonCapture(viewId, viewId == R.id.keyboard_send
+				? ShellNavigation.InputRole.TYPING : ShellNavigation.InputRole.POINTER);
+	}
+
+	/** Same cancellation/accessibility policy for all destination buttons, including future typing keys. */
+	public void installInputButtonCapture(int viewId, ShellNavigation.InputRole role) {
 		View button = findViewById(viewId);
 		if (button == null) return;
 		button.setOnTouchListener((view, event) -> {
@@ -920,7 +950,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 					cancelledButtonTouches.remove(view);
 					CapturedButtonGesture old = mouseButtonGestures.remove(view);
 					if (old != null && commandTransport != null) commandTransport.cancelInputGesture(old.token);
-					InputGestureToken gesture = beginControlInputGesture();
+					InputSurfaceToken surface = inputTokenFor(role);
+					InputGestureToken gesture = commandTransport == null ? null : commandTransport.beginInputGesture(surface);
 					if (gesture != null) {
 						mouseButtonGestures.put(view, new CapturedButtonGesture(gesture));
 						view.setPressed(true);
@@ -984,8 +1015,29 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		return isInputTokenActive(token) ? token : null;
 	}
 
+	/** Compatibility/volume route. New destination controls must use their role-specific helpers. */
 	public InputGestureToken beginControlInputGesture() {
 		return commandTransport == null ? null : commandTransport.beginInputGesture(activeControlInputToken());
+	}
+
+	private InputSurfaceToken inputTokenFor(ShellNavigation.InputRole role) {
+		return shellNavigation != null && shellNavigation.inputRole() == role ? activeControlInputToken() : null;
+	}
+	public InputSurfaceToken activePointerInputToken() { return inputTokenFor(ShellNavigation.InputRole.POINTER); }
+	public InputSurfaceToken activeKeyInputToken() { return inputTokenFor(ShellNavigation.InputRole.KEYS); }
+	public InputSurfaceToken activeActionInputToken() { return inputTokenFor(ShellNavigation.InputRole.ACTIONS); }
+	public InputSurfaceToken activeTypingInputToken() { return inputTokenFor(ShellNavigation.InputRole.TYPING); }
+	public InputGestureToken beginPointerInputGesture() {
+		return commandTransport == null ? null : commandTransport.beginInputGesture(activePointerInputToken());
+	}
+	public InputGestureToken beginActionInputGesture() {
+		return commandTransport == null ? null : commandTransport.beginInputGesture(activeActionInputToken());
+	}
+	public InputGestureToken beginKeyInputGesture() {
+		return commandTransport == null ? null : commandTransport.beginInputGesture(activeKeyInputToken());
+	}
+	public InputGestureToken beginTypingInputGesture() {
+		return commandTransport == null ? null : commandTransport.beginInputGesture(activeTypingInputToken());
 	}
 
 	public IDoTool createDoToolForInput(Object token) {
@@ -1037,7 +1089,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 						.setNegativeButton(R.string.session_controls_disconnect,
 								(dialog, which) -> disconnectForegroundSessionFromUi());
 			}
-			pendingDialog.show();
+			showOwnedDialog(pendingDialog.create());
 			return;
 		}
 		String message;
@@ -1052,14 +1104,14 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		} else {
 			message = getString(R.string.session_controls_hidden_older_message);
 		}
-		new AlertDialog.Builder(this)
+		showOwnedDialog(new AlertDialog.Builder(this)
 				.setTitle(R.string.session_controls_title)
 				.setMessage(message)
 				.setPositiveButton(retry ? R.string.session_controls_retry : active ? R.string.session_controls_open : R.string.session_controls_connect,
 						(dialog, which) -> { if (!active) requestForegroundSessionFromUi(); })
 				.setNegativeButton(active || retry ? R.string.session_controls_disconnect : R.string.session_controls_close,
 						(dialog, which) -> { if (active || retry) disconnectForegroundSessionFromUi(); })
-				.show();
+				.create());
 	}
 
 	/** Keeps an in-progress permission flow intact while directing a legacy connect tap to it. */
@@ -1138,7 +1190,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			return;
 		}
 		pendingLocalNetworkPermissionTicket = ticket;
-		new AlertDialog.Builder(this)
+		showOwnedDialog(new AlertDialog.Builder(this)
 				.setTitle(R.string.local_network_permission_title)
 				.setMessage(R.string.local_network_permission_message)
 				.setPositiveButton(R.string.local_network_permission_request, (dialog, which) -> {
@@ -1162,7 +1214,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 				.setNegativeButton(R.string.local_network_permission_not_now,
 						(dialog, which) -> cancelLocalNetworkPermissionRequest(ticket))
 				.setOnCancelListener(dialog -> cancelLocalNetworkPermissionRequest(ticket))
-				.show();
+				.create());
 	}
 
 	private void cancelLocalNetworkPermissionRequest(String ticket) {
@@ -1222,7 +1274,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 
 	private void showLocalNetworkPermissionDenied() {
-		new AlertDialog.Builder(this)
+		showOwnedDialog(new AlertDialog.Builder(this)
 				.setTitle(R.string.local_network_permission_denied_title)
 				.setMessage(R.string.local_network_permission_denied_message)
 				.setPositiveButton(R.string.local_network_permission_retry,
@@ -1230,11 +1282,11 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 				.setNeutralButton(R.string.local_network_permission_open_settings,
 						(dialog, which) -> openApplicationSettings())
 				.setNegativeButton(R.string.local_network_permission_not_now, null)
-				.show();
+				.create());
 	}
 
 	private void showNotificationPermissionRationale() {
-		new AlertDialog.Builder(this)
+		showOwnedDialog(new AlertDialog.Builder(this)
 				.setTitle(R.string.session_permission_rationale_title)
 				.setMessage(R.string.session_permission_rationale_message)
 				.setPositiveButton(R.string.session_permission_request, (dialog, which) -> {
@@ -1257,7 +1309,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 				.setNeutralButton(R.string.session_permission_not_now,
 						(dialog, which) -> cancelPendingForegroundSessionRequest())
 				.setOnCancelListener(dialog -> cancelPendingForegroundSessionRequest())
-				.show();
+				.create());
 	}
 
 	/** A permission result is only UI for the exact still-reserved request that launched it. */
@@ -1292,7 +1344,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	}
 
 	private void showNotificationPermissionDenied() {
-		new AlertDialog.Builder(this)
+		showOwnedDialog(new AlertDialog.Builder(this)
 				.setTitle(R.string.session_permission_denied_title)
 				.setMessage(R.string.session_permission_denied_message)
 				.setPositiveButton(R.string.session_permission_continue_without,
@@ -1302,7 +1354,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 				.setNeutralButton(R.string.session_permission_open_settings,
 						(dialog, which) -> openNotificationSettings())
 				.setOnCancelListener(dialog -> cancelPendingForegroundSessionRequest())
-				.show();
+				.create());
 	}
 
 	private void showNotificationSettingsExplanation(boolean permanentDenial) {
@@ -1310,7 +1362,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 				? R.string.session_permission_older_settings_message
 				: permanentDenial ? R.string.session_permission_settings_message
 				: R.string.session_permission_denied_message;
-		new AlertDialog.Builder(this)
+		showOwnedDialog(new AlertDialog.Builder(this)
 				.setTitle(permanentDenial ? R.string.session_permission_settings_title : R.string.session_permission_denied_title)
 				.setMessage(message)
 				.setPositiveButton(permanentDenial ? R.string.session_permission_open_settings
@@ -1332,7 +1384,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 							else cancelPendingForegroundSessionRequest();
 						})
 				.setOnCancelListener(dialog -> cancelPendingForegroundSessionRequest())
-				.show();
+				.create());
 	}
 
 	private void openNotificationSettings() {
@@ -1401,14 +1453,10 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		activityResumed = false;
 		if (foregroundRecoveryWindow != null) foregroundRecoveryWindow.close();
 		deactivateControlInputSurface();
-		if (!returningFromLayoutEditor) {
-			if (isRepositoryLayoutActive()) {
-				saveCurrentRepositoryLayout();
-			} else if (!legacyLayoutFallbackReadOnly) {
-				KEYLOAYOUTFILENAME = "keyLayoutFile.csv";
-				saveKeyboardLayout();
-			}
-		}
+		if (mCoolDragAndDropGridView != null) mCoolDragAndDropGridView.cancelLegacyDragAndDrop();
+		if (shellDialogs.isEmpty()) shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
+		// Navigation/lifecycle/Back never save an editor or layout. Legacy mutations persist at
+		// their explicit Save/Drop/Delete boundary instead; repository editor drafts stay owned there.
 		super.onPause();
 		// Another activity is taking focus (this activity is about to be "paused").
 	}
@@ -1433,6 +1481,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	@Override
 	protected void onDestroy() {
 		activityResumed = false;
+		computerLoadGeneration++;
+		for (AlertDialog dialog : new ArrayList<>(shellDialogs)) dialog.dismiss();
 		deactivateControlInputSurface();
 		cancelPendingForegroundSessionRequest();
 		unbindSessionService();
@@ -1462,7 +1512,15 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			case ERROR: status = "Connection failed"; break;
 			default: status = "Disconnected"; break;
 		}
-		if (toolbar != null) toolbar.setSubtitle(status);
+		TextView headerStatus = findViewById(R.id.connection_status);
+		if (headerStatus != null) {
+			headerStatus.setText("● " + status);
+			headerStatus.setTextColor(getColor(state.isReady() ? R.color.ng_accent :
+					phase == ConnectionState.Phase.ERROR ? R.color.ng_danger : R.color.ng_text_secondary));
+			headerStatus.setContentDescription(getString(R.string.ng_status_action, status));
+		}
+		Button computerConnect = findViewById(R.id.computers_connect);
+		if (computerConnect != null) computerConnect.setText(active ? "Disconnect" : phase == ConnectionState.Phase.ERROR ? "Retry" : "Connect");
 		if (conDiscButton != null) {
 			conDiscButton.setIcon(active ? R.drawable.state_conn : R.drawable.state_disc);
 			String action = active ? "Disconnect" : phase == ConnectionState.Phase.ERROR ? getString(R.string.session_controls_retry) : "Connect";
@@ -1729,7 +1787,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			}
 		});
 		AlertDialog dialog = builder.create();
-		dialog.show();
+		showOwnedDialog(dialog);
 	}
 	public void confirmSaveLayout(String title, String msg, final boolean def, final String presetProfileId){
 		if (!isRepositoryLayoutActive() && legacyLayoutFallbackReadOnly) {
@@ -1758,7 +1816,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			}
 		});
 		AlertDialog dialog = builder.create();
-		dialog.show();
+		showOwnedDialog(dialog);
 	}
 	@Override
 
@@ -1776,13 +1834,40 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		//Log.d("prepMenu","menu prepared");
 		return true;
 	}
+
+	@Override public boolean onMenuOpened(int featureId, Menu menu) {
+		if (shellNavigation != null) shellNavigation.open(ShellNavigation.Overlay.MENU);
+		return super.onMenuOpened(featureId, menu);
+	}
+	@Override public void onPanelClosed(int featureId, Menu menu) {
+		super.onPanelClosed(featureId, menu);
+		if (shellNavigation != null) shellNavigation.close(ShellNavigation.Overlay.MENU);
+	}
 	@Override
 	public boolean onOptionsItemSelected(MenuItem item) {
+		shellNavigation.close(ShellNavigation.Overlay.MENU);
 
 		int id = item.getItemId();
 		if (id == R.id.action_settings) {
-			Intent intent = new Intent(this, SettingsActivity.class);
-			startActivity(intent);
+			openSettings();
+			return true;
+		} else if (id == R.id.action_scripts) {
+			showSavedScripts();
+			return true;
+		} else if (id == R.id.action_joystick) {
+			shellNavigation.select(ShellNavigation.Destination.TOUCHPAD);
+			shellNavigation.setJoystick(!shellNavigation.joystick());
+			return true;
+		} else if (id == R.id.action_add_button) {
+			xMouseNewCustomButton(null);
+			return true;
+		} else if (id == R.id.action_load_preset_one || id == R.id.action_load_preset_two || id == R.id.action_load_preset_three) {
+			int preset = id == R.id.action_load_preset_one ? 1 : id == R.id.action_load_preset_two ? 2 : 3;
+			KEYLOAYOUTFILENAME = preset == 1 ? "keyFileOne.csv" : preset == 2 ? "keyFileTwo.csv" : "keyFileThree.csv";
+			confirmLayoutReload("Load Keyboard Layout " + preset, "Any unsaved buttons will be lost", false,
+					preset == 1 ? LegacyLayoutProfileMigrator.PRESET_ONE_PROFILE_ID : preset == 2
+							? LegacyLayoutProfileMigrator.PRESET_TWO_PROFILE_ID : LegacyLayoutProfileMigrator.PRESET_THREE_PROFILE_ID);
+			return true;
 		} else if (id == R.id.action_session_controls) {
 			showSessionControls();
 			return true;
@@ -1866,9 +1951,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 		dialog.show(fm, "NoticeDialogFragment");
 	}
-	@Override
 	public boolean onNavigationItemSelected(MenuItem item) {
-		// Handle navigation view keyboard_button clicks here.
+		// Compatibility bridge for existing callers; primary UI routes are native shell controls.
 		int id = item.getItemId();
 		int group = item.getGroupId();
 		//Toast.makeText(getBaseContext(),String.valueOf(id),Toast.LENGTH_LONG).show();
@@ -1878,9 +1962,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 				if(id==999999999){
 					//manage sripts ID
 
-					Intent intent = new Intent(this, ListEditActivity.class);
-					intent.putExtra("intVariableType", 0); //0=hosts
-					startActivity(intent);
+					openLegacyManager(0);
 
 				}else {
 					selectHostAndConnect(id);
@@ -1918,9 +2000,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 				if(id==19999999){
 					//manage sripts ID
 
-					Intent intent = new Intent(this, ListEditActivity.class);
-					intent.putExtra("intVariableType", 1); //1=scripts
-					startActivity(intent);
+					openLegacyManager(1);
 
 				}else {
 
@@ -1944,12 +2024,10 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 				break;
 		}
 
-		DrawerLayout drawer = (DrawerLayout) findViewById(R.id.drawer_layout);
-		drawer.closeDrawer(GravityCompat.START);
 		return true;
 	}
 
-	private void selectHostAndConnect(int id) {
+	public void selectHostAndConnect(int id) {
 		final long activityToken = activityGeneration;
 		final long selectionToken = ++hostSelectionGeneration;
 		if (promptInteractions != null) promptInteractions.invalidate();
@@ -1961,6 +2039,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 					if (activityToken != activityGeneration || selectionToken != hostSelectionGeneration ||
 							isFinishing() || isDestroyed() || !getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return;
 					getPreferences();
+					loadComputerMetadata();
 					requestForegroundSessionForSelectedHost();
 				});
 			} catch (Exception ignored) {
@@ -1979,10 +2058,10 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 	@Override
 	public boolean onItemLongClick(AdapterView<?> arg0, View arg1, int arg2, long arg3) {
 		if(!MainActivity.setting_keyboard_locked){
+			shellNavigation.open(ShellNavigation.Overlay.ACTION_EDIT);
 			mCoolDragAndDropGridView.startDragAndDrop();
 			EditKeyboardButtonsLayout.setVisibility(View.VISIBLE);
 			ETLayout.setVisibility(View.GONE);
-			fab.setVisibility(View.GONE);
 		}
 		return false;
 	}
@@ -2009,13 +2088,20 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 
 			mItems.add(to, mItems.remove(from));
 			mItemAdapter.notifyDataSetChanged();
+			saveKeyboardLayout();
 		}
 
 		potentialDeletePosition = to;
 		startPosition = from;
 		EditKeyboardButtonsLayout.setVisibility(View.GONE);
-		fab.setVisibility(View.VISIBLE);
 		ETLayout.setVisibility(View.VISIBLE);
+		shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
+	}
+
+	@Override public void onDragCancelled() {
+		if (mItemAdapter != null) mItemAdapter.notifyDataSetChanged();
+		if (EditKeyboardButtonsLayout != null) EditKeyboardButtonsLayout.setVisibility(View.GONE);
+		if (shellNavigation != null) shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
 	}
 
 	@Override
@@ -2040,6 +2126,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		try {
 			mItems.remove(potentialDeletePosition);
 			mItemAdapter.notifyDataSetChanged();
+			saveKeyboardLayout();
 		}catch (Exception ignored){
 			Log.w(TAG, "layout_button_delete_failed");
 			Toast.makeText(getBaseContext(),"Error during delete",Toast.LENGTH_LONG).show();
@@ -2081,7 +2168,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			Intent intent = new Intent(this, LayoutEditorActivity.class);
 			intent.putExtra(LayoutEditorActivity.EXTRA_PROFILE_ID, selected.getId());
 			returningFromLayoutEditor = true;
-			startActivity(intent);
+			openExternalScreen(intent);
 		} catch (Exception ignored) {
 			returningFromLayoutEditor = false;
 			Toast.makeText(this, "The selected layout could not be opened.", Toast.LENGTH_LONG).show();
@@ -2096,7 +2183,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 		}
 		try {
 			returningFromLayoutManager = true;
-			startActivity(new Intent(this, LayoutProfileManagerActivity.class));
+			openExternalScreen(new Intent(this, LayoutProfileManagerActivity.class));
 		} catch (Exception ignored) {
 			returningFromLayoutManager = false;
 			Toast.makeText(this, "The layout manager could not be opened.", Toast.LENGTH_LONG).show();
@@ -2410,6 +2497,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 							mItemAdapter = new CustomKeyboardButtonAdapter(MainActivity.this, mItems);
 							mCoolDragAndDropGridView.setAdapter(mItemAdapter);
 							mItemAdapter.notifyDataSetChanged();
+							saveKeyboardLayout();
 
 							Toast.makeText(getBaseContext(), "Button \"" + name + "\" saved to main layout", Toast.LENGTH_LONG).show();
 
@@ -2435,17 +2523,13 @@ public class MainActivity extends AppCompatActivity implements MyInterface, Navi
 			}
 		});
 		AlertDialog dialog = builder.create();
-		dialog.show();
+		showOwnedDialog(dialog);
 		if (dialog.getWindow() != null) {
 			dialog.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
 		}
 
 
 	}
-	private void useKeyboardSendText() {
-		useKeyboardSendText(doTool);
-	}
-
 	private void useKeyboardSendText(IDoTool inputTool) {
 		CharSequence contents = ET.getText();
 		String t = contents.toString();

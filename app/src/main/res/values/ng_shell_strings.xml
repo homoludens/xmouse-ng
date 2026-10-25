@@ -1,0 +1,32 @@
+<resources>
+    <string name="ng_touchpad">Touchpad</string>
+    <string name="ng_keys">Keys</string>
+    <string name="ng_actions">Actions</string>
+    <string name="ng_choose_computer">Choose computer</string>
+    <string name="ng_disconnected">● Disconnected</string>
+    <string name="ng_computers">Computers</string>
+    <string name="ng_manage_computers">Add / find / manage computers</string>
+    <string name="ng_loading_computers">Loading saved computers…</string>
+    <string name="ng_no_computers">No saved computers. Add or find a computer to get started.</string>
+    <string name="ng_computers_failed">Saved computers could not be loaded. Open computer management to retry.</string>
+    <string name="ng_select_computer">Select computer: %1$s</string>
+    <string name="ng_status_action">%1$s. Open session controls</string>
+    <string name="ng_close">Close</string>
+    <string name="ng_typing">Type on computer</string>
+    <string name="ng_typing_label">Text to send</string>
+    <string name="ng_typing_hint">Enter text, then press Send</string>
+    <string name="ng_send">Send</string>
+    <string name="ng_escape">Esc</string>
+    <string name="ng_switch">Alt + Tab</string>
+    <string name="ng_super">Super</string>
+    <string name="ng_edit_actions">Edit actions</string>
+    <string name="ng_delete_action">Delete action</string>
+    <string name="ng_scripts">Saved scripts</string>
+    <string name="ng_no_scripts">No saved scripts</string>
+    <string name="ng_manage_scripts">Manage scripts</string>
+    <string name="ng_joystick">Joystick / touchpad</string>
+    <string name="ng_load_preset_one">Load layout 1</string>
+    <string name="ng_load_preset_two">Load layout 2</string>
+    <string name="ng_load_preset_three">Load layout 3</string>
+    <string name="ng_add_action">Add action</string>
+</resources>

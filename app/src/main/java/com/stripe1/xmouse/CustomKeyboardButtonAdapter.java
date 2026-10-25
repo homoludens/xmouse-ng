@@ -30,6 +30,17 @@ public class CustomKeyboardButtonAdapter extends ArrayAdapter<CustomKeyboardButt
 	private Context mContext;
 	private LayoutInflater mLayoutInflater = null;
 	private final WeakHashMap<View, com.stripe1.xmouse.session.InputGestureToken> inputGestures = new WeakHashMap<>();
+	private final WeakHashMap<View, Boolean> cancelledTouches = new WeakHashMap<>();
+	private final WeakHashMap<View, Boolean> accessibilityActivations = new WeakHashMap<>();
+
+	public void resetForInactiveSurface() {
+		for (View view : new java.util.ArrayList<>(inputGestures.keySet())) {
+			view.setPressed(false);
+			cancelledTouches.put(view, Boolean.TRUE);
+			if (mContext instanceof MainActivity) ((MainActivity) mContext).cancelControlInputGesture(inputGestures.get(view));
+		}
+		inputGestures.clear();
+	}
 
 	/*private View.OnClickListener onRemoveItemListener = new View.OnClickListener() {
 
@@ -115,7 +126,9 @@ public class CustomKeyboardButtonAdapter extends ArrayAdapter<CustomKeyboardButt
 				if (mContext instanceof MainActivity) {
 					MainActivity activity = (MainActivity) mContext;
 					com.stripe1.xmouse.session.InputGestureToken gesture = inputGestures.remove(v);
-					Object token = gesture != null ? gesture : activity.activeControlInputToken();
+					boolean accessibility = Boolean.TRUE.equals(accessibilityActivations.get(v));
+					Object token = gesture != null ? gesture : !cancelledTouches.containsKey(v) || accessibility
+							? activity.activeActionInputToken() : null;
 					if (!activity.isControlInputTokenActive(token)) {
 						if (gesture != null) activity.cancelControlInputGesture(gesture);
 						return;
@@ -136,12 +149,14 @@ public class CustomKeyboardButtonAdapter extends ArrayAdapter<CustomKeyboardButt
 			MainActivity activity = (MainActivity) mContext;
 			switch (event.getActionMasked()) {
 				case MotionEvent.ACTION_DOWN:
+					cancelledTouches.remove(view);
 					com.stripe1.xmouse.session.InputGestureToken old = inputGestures.remove(view);
 					if (old != null) activity.cancelControlInputGesture(old);
-					com.stripe1.xmouse.session.InputGestureToken gesture = activity.beginControlInputGesture();
+					com.stripe1.xmouse.session.InputGestureToken gesture = activity.beginActionInputGesture();
 					if (gesture != null) inputGestures.put(view, gesture);
 					break;
 				case MotionEvent.ACTION_CANCEL:
+					cancelledTouches.put(view, Boolean.TRUE);
 					com.stripe1.xmouse.session.InputGestureToken cancelled = inputGestures.remove(view);
 					if (cancelled != null) activity.cancelControlInputGesture(cancelled);
 					break;
@@ -153,6 +168,15 @@ public class CustomKeyboardButtonAdapter extends ArrayAdapter<CustomKeyboardButt
 					break;
 			}
 			return false;
+		});
+		convertView.setAccessibilityDelegate(new View.AccessibilityDelegate() {
+			@Override public boolean performAccessibilityAction(View host, int action, android.os.Bundle args) {
+				if (action != android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
+					return super.performAccessibilityAction(host, action, args);
+				accessibilityActivations.put(host, Boolean.TRUE);
+				try { return super.performAccessibilityAction(host, action, args); }
+				finally { accessibilityActivations.remove(host); }
+			}
 		});
 
 

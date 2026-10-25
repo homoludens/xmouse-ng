@@ -4,27 +4,25 @@ import android.os.Build
 import android.view.View
 import android.widget.FrameLayout
 import androidx.appcompat.widget.Toolbar
-import androidx.drawerlayout.widget.DrawerLayout
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.platform.app.InstrumentationRegistry
-import com.google.android.material.floatingactionbutton.FloatingActionButton
-import com.google.android.material.navigation.NavigationView
+import com.google.android.material.bottomnavigation.BottomNavigationView
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** Geometry regression for the real main-screen DrawerLayout; no app/session data is opened. */
+/** Geometry regression for the real native shell; no app/session data is opened. */
 @RunWith(AndroidJUnit4::class)
 class MainActivityInsetsAndroidTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
 
     @Test
-    fun controlsAndDrawerStayInsideInsetsAcrossImeAndLandscapeChanges() {
+    fun headerAndBottomNavigationStayInsideInsetsAcrossImeAndLandscapeChanges() {
         ActivityScenario.launch(MainInsetsFixtureActivity::class.java).use { scenario ->
             instrumentation.waitForIdleSync()
 
@@ -52,7 +50,9 @@ class MainActivityInsetsAndroidTest {
             dispatch(scenario, landscapeBars, landscapeCutout, Insets.NONE)
             assertPadding(scenario, Insets.of(48, 0, 32, 24))
             assertMainControlsReachable(scenario)
-            assertDrawerReachable(scenario)
+            scenario.onActivity { it.navigation.open(ShellNavigation.Overlay.COMPUTERS) }
+            instrumentation.waitForIdleSync()
+            assertOverlayReachable(scenario)
         }
     }
 
@@ -102,20 +102,20 @@ class MainActivityInsetsAndroidTest {
     private fun assertMainControlsReachable(scenario: ActivityScenario<MainInsetsFixtureActivity>) {
         scenario.onActivity { activity ->
             val safeArea = activity.findViewById<FrameLayout>(R.id.main_safe_area)
-            val drawer = activity.findViewById<DrawerLayout>(R.id.drawer_layout)
+            val shell = activity.findViewById<View>(R.id.native_shell)
             val toolbar = activity.findViewById<Toolbar>(R.id.toolbar)
-            val fab = activity.findViewById<FloatingActionButton>(R.id.fab)
-            assertEquals(safeArea.paddingLeft, drawer.left)
-            assertEquals(safeArea.paddingTop, drawer.top)
-            assertEquals(safeArea.width - safeArea.paddingRight, drawer.right)
-            assertEquals(safeArea.height - safeArea.paddingBottom, drawer.bottom)
+            val bottom = activity.findViewById<BottomNavigationView>(R.id.bottom_navigation)
+            assertEquals(safeArea.paddingLeft, shell.left)
+            assertEquals(safeArea.paddingTop, shell.top)
+            assertEquals(safeArea.width - safeArea.paddingRight, shell.right)
+            assertEquals(safeArea.height - safeArea.paddingBottom, shell.bottom)
 
             val safeLocation = IntArray(2)
             val toolbarLocation = IntArray(2)
-            val fabLocation = IntArray(2)
+            val bottomLocation = IntArray(2)
             safeArea.getLocationOnScreen(safeLocation)
             toolbar.getLocationOnScreen(toolbarLocation)
-            fab.getLocationOnScreen(fabLocation)
+            bottom.getLocationOnScreen(bottomLocation)
             val safeLeft = safeLocation[0] + safeArea.paddingLeft
             val safeRight = safeLocation[0] + safeArea.width - safeArea.paddingRight
             val safeTop = safeLocation[1] + safeArea.paddingTop
@@ -128,36 +128,34 @@ class MainActivityInsetsAndroidTest {
             assertTrue(
                 "toolbar extends below the safe area",
                 toolbarLocation[1] + toolbar.height <= safeBottom)
-            assertTrue("bottom control starts left of the safe area", fabLocation[0] >= safeLeft)
+            assertTrue("bottom control starts left of the safe area", bottomLocation[0] >= safeLeft)
             assertTrue(
                 "bottom control extends right of the safe area",
-                fabLocation[0] + fab.width <= safeRight)
+                bottomLocation[0] + bottom.width <= safeRight)
             assertTrue(
                 "bottom control is obscured by the navigation bar or IME",
-                fabLocation[1] + fab.height <= safeBottom)
+                bottomLocation[1] + bottom.height <= safeBottom)
         }
     }
 
-    private fun assertDrawerReachable(scenario: ActivityScenario<MainInsetsFixtureActivity>) {
+    private fun assertOverlayReachable(scenario: ActivityScenario<MainInsetsFixtureActivity>) {
         scenario.onActivity { activity ->
             val safeArea = activity.findViewById<FrameLayout>(R.id.main_safe_area)
-            val drawer = activity.findViewById<DrawerLayout>(R.id.drawer_layout)
-            val navigation = activity.findViewById<NavigationView>(R.id.nav_view)
-            drawer.openDrawer(navigation, false)
-            assertTrue(drawer.isDrawerOpen(navigation))
+            val overlay = activity.findViewById<View>(R.id.shell_overlay)
+            assertTrue(overlay.isShown)
 
             val safeLocation = IntArray(2)
-            val drawerLocation = IntArray(2)
+            val overlayLocation = IntArray(2)
             safeArea.getLocationOnScreen(safeLocation)
-            navigation.getLocationOnScreen(drawerLocation)
+            overlay.getLocationOnScreen(overlayLocation)
             assertTrue(
-                "drawer begins above the safe area",
-                drawerLocation[1] >= safeLocation[1] + safeArea.paddingTop)
+                "overlay begins above the safe area",
+                overlayLocation[1] >= safeLocation[1] + safeArea.paddingTop)
             assertTrue(
-                "drawer extends below the safe area",
-                drawerLocation[1] + navigation.height <=
+                "overlay extends below the safe area",
+                overlayLocation[1] + overlay.height <=
                     safeLocation[1] + safeArea.height - safeArea.paddingBottom)
-            drawer.closeDrawer(navigation, false)
+            activity.navigation.closeTop()
         }
     }
 }

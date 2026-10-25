@@ -18,10 +18,10 @@ class JoystickSurfaceAndroidTest {
     @Test
     fun realJoystickHasPaintableAreaBelowItsButtonsInPortraitAndShortLayouts() {
         ActivityScenario.launch(MainInsetsFixtureActivity::class.java).use { scenario ->
+            scenario.onActivity { it.navigation.setJoystick(true) }
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             scenario.onActivity { activity ->
                 val controls = activity.findViewById<LinearLayout>(R.id.js)
-                controls.visibility = View.VISIBLE
                 val joystick = (0 until controls.childCount)
                     .map { controls.getChildAt(it) }
                     .filterIsInstance<MyJSView>()

@@ -228,7 +228,7 @@ public class MyMouseView extends View {
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 if (gestureToken != null) activity.cancelControlInputGesture(gestureToken);
-                gestureToken = activity.beginControlInputGesture();
+                gestureToken = activity.beginPointerInputGesture();
                 gestureTool = activity.createDoToolForInput(gestureToken);
                 if (gestureToken == null || gestureTool == null) {
                     resetLocalState(true);
