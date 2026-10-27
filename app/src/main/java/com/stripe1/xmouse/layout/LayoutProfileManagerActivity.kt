@@ -133,16 +133,21 @@ private fun LayoutProfileManagerScreen(
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    LayoutEditorIconButton(
+                        icon = R.drawable.ic_ng_arrow_back,
+                        contentDescription = stringResource(R.string.layout_profiles_back),
+                        onClick = onClose,
+                        testTag = "layout-profiles-back",
+                    )
                     Text(
                         stringResource(R.string.layout_profiles_title),
-                        style = MaterialTheme.typography.headlineSmall,
+                        style = LayoutEditorTypography.heading,
                         modifier = Modifier.weight(1f),
+                        maxLines = 1,
                     )
-                    TextButton(onClick = onClose, modifier = Modifier.managerTouchTarget()) {
-                        Text(stringResource(R.string.layout_profiles_done))
-                    }
                 }
             }
             item {

@@ -2,11 +2,16 @@ package com.stripe1.xmouse;
 
 import android.app.AlertDialog;
 import android.content.Context;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Build;
+import android.util.TypedValue;
 import android.view.LayoutInflater;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
+import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ListView;
 import android.widget.TextView;
@@ -17,6 +22,7 @@ import androidx.annotation.VisibleForTesting;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
+import com.google.android.material.textfield.TextInputLayout;
 import com.stripe1.xmouse.connection.ConnectionFailure;
 import com.stripe1.xmouse.connection.Endpoint;
 import com.stripe1.xmouse.connection.EndpointHost;
@@ -106,28 +112,41 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
         super.onCreate(savedInstanceState);
         localNetworkPermissionLauncher = registerForActivityResult(
                 new ActivityResultContracts.RequestPermission(), this::onLocalNetworkPermissionResult);
-        setContentView(R.layout.activity_list_edit);
+        type = getIntent().getIntExtra("intVariableType", 0) == 0 ? ActivityType.type_host : ActivityType.type_script;
+        setContentView(type == ActivityType.type_host
+                ? R.layout.activity_list_edit : R.layout.activity_script_manager);
         SystemWindowInsets.applyTo(getWindow(), findViewById(R.id.list_edit_root));
-        setSupportActionBar((Toolbar) findViewById(R.id.toolbar));
-        getSupportActionBar().setDisplayHomeAsUpEnabled(true);
+        if (type == ActivityType.type_host) {
+            Toolbar toolbar = findViewById(R.id.toolbar);
+            setSupportActionBar(toolbar);
+            getSupportActionBar().setDisplayHomeAsUpEnabled(true);
+            toolbar.setNavigationContentDescription(R.string.ng_back);
+            setTitle("Computers");
+            ((FloatingActionButton) findViewById(R.id.fab)).setOnClickListener(
+                    view -> startActivity(ComputerEditorActivity.intent(this, 0)));
+        } else {
+            setTitle(R.string.ng_script_manager_title);
+            findViewById(R.id.scripts_manager_back).setOnClickListener(view -> finish());
+            findViewById(R.id.scripts_manager_add).setOnClickListener(view -> xMouseManage(null));
+        }
         layoutInflater = getLayoutInflater();
         database = new DatabaseHandler(getApplicationContext());
         credentials = AndroidCredentials.get(this);
-        type = getIntent().getIntExtra("intVariableType", 0) == 0 ? ActivityType.type_host : ActivityType.type_script;
         pendingScriptId = type == ActivityType.type_script
                 ? getIntent().getStringExtra(EXTRA_SCRIPT_ID) : null;
         pendingAddScript = type == ActivityType.type_script && getIntent().getBooleanExtra(EXTRA_ADD_SCRIPT, false);
-        setTitle(type == ActivityType.type_host ? "Computers" : "Manage Scripts");
-        ((FloatingActionButton) findViewById(R.id.fab)).setOnClickListener(view -> {
-            if (type == ActivityType.type_host) startActivity(ComputerEditorActivity.intent(this, 0));
-            else xMouseManage(null);
-        });
         mList = findViewById(R.id.myListView);
         findComputersButton = findViewById(R.id.find_computers);
-        findComputersButton.setVisibility(type == ActivityType.type_host ? View.VISIBLE : View.GONE);
-        findComputersButton.setOnClickListener(view -> {
-            if (type == ActivityType.type_host) showFindComputers();
-        });
+        if (findComputersButton != null) {
+            findComputersButton.setVisibility(type == ActivityType.type_host ? View.VISIBLE : View.GONE);
+            findComputersButton.setOnClickListener(view -> {
+                if (type == ActivityType.type_host) showFindComputers();
+            });
+        }
+        if (type == ActivityType.type_script) {
+            TextView status = findViewById(R.id.scripts_manager_count);
+            status.setText(R.string.ng_script_manager_loading);
+        }
         if (savedInstanceState == null && type == ActivityType.type_host && getIntent().getBooleanExtra("findComputers", false))
             showFindComputers();
     }
@@ -383,7 +402,10 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
                 handler.post(() -> {
                     ListEditActivity activity = owner.get();
                     if (activity == null || !activity.current(token)) return;
-                    if (readFailed) Toast.makeText(activity, R.string.ng_script_read_failed, Toast.LENGTH_LONG).show();
+                    if (readFailed) {
+                        activity.showScriptManagerReadFailure();
+                        Toast.makeText(activity, R.string.ng_script_read_failed, Toast.LENGTH_LONG).show();
+                    }
                     else activity.showItems(items);
                 });
             });
@@ -394,6 +416,13 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
         mHostItems = items;
         adapter = new HostListItemAdapter(this, items, this, type);
         mList.setAdapter(adapter);
+        if (type == ActivityType.type_script) {
+            TextView count = findViewById(R.id.scripts_manager_count);
+            count.setText(getResources().getQuantityString(R.plurals.ng_scripts_count, items.size(), items.size()));
+            TextView empty = findViewById(R.id.scripts_manager_empty);
+            empty.setText(R.string.ng_script_manager_empty);
+            empty.setVisibility(items.isEmpty() ? View.VISIBLE : View.GONE);
+        }
         if (type == ActivityType.type_script && pendingAddScript) {
             pendingAddScript = false;
             xMouseManage(null);
@@ -420,6 +449,13 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
     public static final String EXTRA_SCRIPT_ID = "com.stripe1.xmouse.script.id";
     public static final String EXTRA_ADD_SCRIPT = "com.stripe1.xmouse.script.add";
 
+    private void showScriptManagerReadFailure() {
+        TextView count = findViewById(R.id.scripts_manager_count);
+        TextView empty = findViewById(R.id.scripts_manager_empty);
+        if (count != null) count.setText(R.string.ng_script_manager_read_failed);
+        if (empty != null) empty.setVisibility(View.GONE);
+    }
+
     private void xMouseManage(final Integer pos, SshServiceDiscovery.Candidate candidate) {
         final boolean script = type == ActivityType.type_script;
         final HostItem existing = pos == null ? null : mHostItems.get(pos);
@@ -427,9 +463,17 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
         final View layout = layoutInflater.inflate(script ? R.layout.manage_script_item : R.layout.manage_host_item, null);
         final EditText nameBox = layout.findViewById(script ? R.id.new_script_alias : R.id.new_host_alias);
         final EditText hostBox = layout.findViewById(script ? R.id.new_script_command : R.id.new_host_ip);
+        final TextInputLayout scriptNameLayout = script ? layout.findViewById(R.id.new_script_alias_layout) : null;
+        final TextInputLayout scriptCommandLayout = script ? layout.findViewById(R.id.new_script_command_layout) : null;
         final EditText userBox = script ? null : layout.findViewById(R.id.new_host_username);
         final EditText portBox = script ? null : layout.findViewById(R.id.new_host_port);
         final EditText passwordBox = script ? null : layout.findViewById(R.id.new_host_password);
+        if (script) {
+            // Raw script commands are sensitive input: they are never saved in view state/Bundle.
+            hostBox.setSaveEnabled(false);
+            hostBox.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
+            hostBox.setTypeface(Typeface.MONOSPACE);
+        }
         if (!script) {
             passwordBox.setSaveEnabled(false);
             if (android.os.Build.VERSION.SDK_INT >= 26) passwordBox.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
@@ -451,10 +495,18 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
             hostBox.setText(candidateEndpoint(candidate));
             portBox.setText(String.valueOf(candidate.getPort()));
         }
+        String dialogTitle = script
+                ? getString(existing == null ? R.string.ng_script_manager_add_title : R.string.ng_script_manager_edit_title)
+                : (existing == null ? "New Host" : "Edit Host");
+        String saveLabel = script ? getString(R.string.ng_script_manager_save) : "Save";
+        String negativeLabel = existing == null
+                ? (script ? getString(R.string.ng_script_manager_cancel) : "Cancel")
+                : (script ? getString(R.string.ng_script_manager_delete) : "Delete");
         AlertDialog.Builder builder = new AlertDialog.Builder(this).setView(layout)
-                .setTitle((existing == null ? "New " : "Edit ") + (script ? "Script" : "Host"))
-                .setPositiveButton("Save", null).setNegativeButton(existing == null ? "Cancel" : "Delete", null);
-        if (existing != null) builder.setNeutralButton("Cancel", null);
+                .setTitle(dialogTitle).setPositiveButton(saveLabel, null)
+                .setNegativeButton(negativeLabel, null);
+        if (existing != null) builder.setNeutralButton(script
+                ? getString(R.string.ng_script_manager_cancel) : "Cancel", null);
         AlertDialog dialog = builder.create();
         scriptEditGeneration++;
         editing = dialog;
@@ -470,11 +522,14 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
             if (transientDiscoveryCandidate == candidate) transientDiscoveryCandidate = null;
         });
         if (!script && existing != null) passwordBox.setHint("Leave blank to keep the saved password unchanged");
+        if (script) styleScriptEditorButtons(dialog, existing != null);
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
             String alias = nameBox.getText().toString(); String endpoint = hostBox.getText().toString();
             if (script) {
-                if (alias.trim().isEmpty()) { nameBox.setError("Enter a script name"); return; }
-                if (endpoint.trim().isEmpty()) { hostBox.setError("Enter an SSH command"); return; }
+                scriptNameLayout.setError(null);
+                scriptCommandLayout.setError(null);
+                if (alias.trim().isEmpty()) { scriptNameLayout.setError("Enter a script name"); return; }
+                if (endpoint.trim().isEmpty()) { scriptCommandLayout.setError("Enter an SSH command"); return; }
                 mutateScript(existing == null ? null : existing.getUsername(), alias, endpoint, false);
             } else {
                 String user = userBox.getText().toString(); String port = portBox.getText().toString();
@@ -489,12 +544,17 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
         });
         dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(view -> {
             if (existing == null) { dialog.dismiss(); return; }
-            if (script) new AlertDialog.Builder(this).setTitle("Delete script?")
-                    .setMessage("Remove this saved script? This does not run its command.")
-                    .setNegativeButton("Cancel", null).setPositiveButton("Delete", (confirmation, which) -> {
-                        if (current(token) && dialog.isShowing()) mutateScript(existing.getUsername(), null, null, true);
-                    }).show();
-            else new AlertDialog.Builder(this).setTitle("Delete computer?")
+            if (script) {
+                AlertDialog confirmation = new AlertDialog.Builder(this)
+                        .setTitle(R.string.ng_script_delete_title)
+                        .setMessage(getString(R.string.ng_script_delete_message, existing.getAlias()))
+                        .setNegativeButton(R.string.ng_script_manager_cancel, null)
+                        .setPositiveButton(R.string.ng_script_manager_delete, (confirm, which) -> {
+                            if (current(token) && dialog.isShowing()) mutateScript(existing.getUsername(), null, null, true);
+                        }).create();
+                confirmation.show();
+                styleScriptConfirmationButtons(confirmation);
+            } else new AlertDialog.Builder(this).setTitle("Delete computer?")
                     .setMessage("Remove this saved computer? Protected credentials and active control sessions are not reset.")
                     .setNegativeButton("Cancel", null).setPositiveButton("Delete", (confirmation, which) -> {
                         if (!current(token) || !dialog.isShowing()) return;
@@ -506,6 +566,55 @@ public class ListEditActivity extends AppCompatActivity implements MyInterface {
                         } catch (Exception ignored) { runOnUiThread(() -> { if (current(token)) failure(); }); }
                     }); }).show();
         });
+    }
+
+    @VisibleForTesting
+    void styleScriptEditorButtons(AlertDialog dialog, boolean editingExisting) {
+        styleScriptDialogButton(dialog.getButton(AlertDialog.BUTTON_POSITIVE),
+                R.color.ng_accent, R.color.ng_accent, R.color.ng_on_accent);
+        styleScriptDialogButton(dialog.getButton(AlertDialog.BUTTON_NEGATIVE),
+                editingExisting ? R.color.ng_danger_soft : R.color.ng_surface,
+                editingExisting ? R.color.ng_danger : R.color.ng_border,
+                editingExisting ? R.color.ng_danger : R.color.ng_text_primary);
+        if (editingExisting) {
+            styleScriptDialogButton(dialog.getButton(AlertDialog.BUTTON_NEUTRAL),
+                    R.color.ng_surface, R.color.ng_border, R.color.ng_text_primary);
+        }
+    }
+
+    private void styleScriptConfirmationButtons(AlertDialog dialog) {
+        styleScriptDialogButton(dialog.getButton(AlertDialog.BUTTON_POSITIVE),
+                R.color.ng_danger_soft, R.color.ng_danger, R.color.ng_danger);
+        styleScriptDialogButton(dialog.getButton(AlertDialog.BUTTON_NEGATIVE),
+                R.color.ng_surface, R.color.ng_border, R.color.ng_text_primary);
+    }
+
+    private void styleScriptDialogButton(Button button, int background, int stroke, int foreground) {
+        if (button == null) return;
+        GradientDrawable shape = new GradientDrawable();
+        shape.setColor(getColor(background));
+        shape.setCornerRadius(dp(12));
+        shape.setStroke(dp(1), getColor(stroke));
+        button.setBackground(shape);
+        button.setTextColor(getColor(foreground));
+        button.setAllCaps(false);
+        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        button.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        button.setMinWidth(dp(48));
+        button.setMinimumWidth(dp(48));
+        button.setMinHeight(dp(48));
+        button.setMinimumHeight(dp(48));
+        button.setPadding(dp(12), dp(8), dp(12), dp(8));
+        button.setElevation(0f);
+        ViewGroup.LayoutParams params = button.getLayoutParams();
+        if (params != null && params.height > 0) {
+            params.height = Math.max(params.height, dp(48));
+            button.setLayoutParams(params);
+        }
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
     /** Existing SQLite script CRUD, serialized without retaining this Activity or its form widgets. */

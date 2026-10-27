@@ -38,6 +38,14 @@ class LayoutEditorWorkerViewModel(
         }
     }
 
+    fun enterXmlMode() = edit { it.enterXmlMode() }
+    fun updateXmlSource(value: String) = edit { it.updateXmlSource(value) }
+    fun validateXmlSource() = edit { it.validateXmlSource() }
+    fun formatXmlSource() = edit { it.formatXmlSource() }
+    fun applyXmlSource() = edit { it.applyXmlSource() }
+    fun requestXmlExit(action: XmlEditorExitAction) = edit { it.requestXmlExit(action) }
+    fun resolveXmlExit(discardXmlChanges: Boolean) = edit { it.resolveXmlExit(discardXmlChanges) }
+
     fun back() = edit {
         if (it.state.value.isShowingBackConfirmation) it.resolveBack(LayoutEditorBackChoice.CANCEL)
         else if (it.requestBack()) mutableClosed.value = true
@@ -45,6 +53,7 @@ class LayoutEditorWorkerViewModel(
 
     fun saveAndClose() = edit { if (it.save()) mutableClosed.value = true }
     fun discardAndClose() = edit { if (it.discard()) mutableClosed.value = true }
+    fun discardDraft() = edit { it.discard() }
     fun backChoice(choice: LayoutEditorBackChoice) = edit {
         if (it.resolveBack(choice)) mutableClosed.value = true
     }

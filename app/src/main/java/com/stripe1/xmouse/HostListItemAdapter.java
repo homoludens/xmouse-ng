@@ -6,6 +6,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.TextView;
+import com.google.android.material.button.MaterialButton;
 
 import java.util.List;
 
@@ -18,6 +19,7 @@ public class HostListItemAdapter extends ArrayAdapter<HostItem> {
         public TextView alias;
         public TextView desc;
         public TextView dbId;
+        public MaterialButton edit;
 
 
     }
@@ -36,13 +38,18 @@ public class HostListItemAdapter extends ArrayAdapter<HostItem> {
         final HostItemViewHolder itemViewHolder;
 
         if (convertView == null) {
-            convertView = mLayoutInflater.inflate(R.layout.host_list_item, parent, false);
+            int rowLayout = type == ListEditActivity.ActivityType.type_script
+                    ? R.layout.script_list_item : R.layout.host_list_item;
+            convertView = mLayoutInflater.inflate(rowLayout, parent, false);
 
             itemViewHolder = new HostItemViewHolder();
 
             itemViewHolder.alias = (TextView) convertView.findViewById(R.id.hostAlias);
             itemViewHolder.desc = (TextView) convertView.findViewById(R.id.hostDesc);
             itemViewHolder.dbId = (TextView) convertView.findViewById(R.id.hostDBID);
+            if (type == ListEditActivity.ActivityType.type_script) {
+                itemViewHolder.edit = convertView.findViewById(R.id.script_manager_edit);
+            }
 
             convertView.setTag(itemViewHolder);
 
@@ -62,8 +69,16 @@ public class HostListItemAdapter extends ArrayAdapter<HostItem> {
             itemViewHolder.desc.setText(item.getUsername() + "@" + item.getIP() + ":" + item.getPort());
             itemViewHolder.dbId.setText(String.valueOf(item.getDbId()));
         }else if(type== ListEditActivity.ActivityType.type_script){
-            itemViewHolder.desc.setText(item.getIP());
+            itemViewHolder.alias.setMaxLines(2);
+            itemViewHolder.alias.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            itemViewHolder.alias.setContentDescription(getContext().getString(R.string.ng_script_named, item.getAlias()));
+            itemViewHolder.desc.setText(R.string.ng_script_ssh_label);
             itemViewHolder.dbId.setText(item.getUsername());
+            String editDescription = getContext().getString(R.string.ng_edit_named_script, item.getAlias());
+            itemViewHolder.edit.setContentDescription(editDescription);
+            itemViewHolder.edit.setTooltipText(editDescription);
+            itemViewHolder.edit.setOnClickListener(view -> myInterface.performCallback2(position));
+            convertView.setContentDescription(editDescription);
         }
 
         /*if(MainActivity.setting_keyboard_show_details){

@@ -89,6 +89,21 @@
     <string name="ng_no_scripts">No saved scripts</string>
     <string name="ng_manage_scripts">Manage scripts</string>
     <string name="ng_manage_scripts_short">Manage</string>
+    <string name="ng_back">Back</string>
+    <string name="ng_script_manager_title">Manage Scripts</string>
+    <string name="ng_script_manager_empty">No saved scripts</string>
+    <string name="ng_script_manager_loading">Loading scripts…</string>
+    <string name="ng_script_manager_read_failed">Saved scripts could not be loaded.</string>
+    <string name="ng_script_manager_add">Add script</string>
+    <string name="ng_script_manager_add_title">Add script</string>
+    <string name="ng_script_manager_edit_title">Edit script</string>
+    <string name="ng_script_manager_cancel">Cancel</string>
+    <string name="ng_script_manager_save">Save</string>
+    <string name="ng_script_manager_delete">Delete</string>
+    <plurals name="ng_scripts_count">
+        <item quantity="one">%d script</item>
+        <item quantity="other">%d scripts</item>
+    </plurals>
     <string name="ng_load_preset_one">Load layout 1</string>
     <string name="ng_load_preset_two">Load layout 2</string>
     <string name="ng_load_preset_three">Load layout 3</string>

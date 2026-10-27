@@ -118,6 +118,8 @@ class ShellControlRefinementsAndroidTest {
                     val manage = root.findViewById<View>(R.id.scripts_manage)
                     assertEquals("Add script", (add as android.widget.Button).text.toString())
                     assertEquals("Manage", (manage as android.widget.Button).text.toString())
+                    assertNotNull("Add script keeps its visible add icon", (add as MaterialButton).icon)
+                    assertNotNull("Manage keeps its visible script icon", (manage as MaterialButton).icon)
                     assertEquals("Manage scripts", manage.contentDescription.toString())
                     assertEquals("Manage scripts", manage.tooltipText.toString())
                     for (control in listOf(add, manage)) {

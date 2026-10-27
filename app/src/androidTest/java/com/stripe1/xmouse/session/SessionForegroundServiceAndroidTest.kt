@@ -36,6 +36,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
+import androidx.test.uiautomator.UiScrollable
+import androidx.test.uiautomator.UiSelector
 import androidx.test.uiautomator.Until
 import androidx.core.content.edit
 import androidx.core.view.ViewCompat
@@ -52,6 +54,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import com.stripe1.xmouse.MainActivity
 import com.stripe1.xmouse.DatabaseHandler
@@ -66,6 +69,7 @@ import com.stripe1.xmouse.layout.LayoutButton
 import com.stripe1.xmouse.layout.LayoutEditorActivity
 import com.stripe1.xmouse.layout.LayoutProfile
 import com.stripe1.xmouse.layout.LayoutProfileRepository
+import com.stripe1.xmouse.layout.LayoutProfileXml
 import com.stripe1.xmouse.layout.LegacyLayoutProfileMigrator
 import com.stripe1.xmouse.connection.ConnectionFailure
 import com.stripe1.xmouse.connection.ConnectionState
@@ -1597,9 +1601,24 @@ class SessionForegroundServiceAndroidTest {
             compose.awaitEditorTag("layout-editor-undo")
             compose.awaitEditorTag("layout-editor-redo")
             compose.onNodeWithText("Add action").assertExists()
+
+            // XML source actions run only the local profile codec; the live recording transport sees none.
+            compose.onNodeWithTag("layout-editor-xml-mode").performScrollTo().performClick()
+            compose.awaitEditorTag("layout-editor-xml-source")
+            compose.onNodeWithTag("layout-editor-xml-source").performScrollTo()
+                .performTextReplacement(LayoutProfileXml.serialize(original))
+            compose.onNodeWithTag("layout-editor-xml-validate").performScrollTo().performClick()
+            compose.onNodeWithTag("layout-editor-xml-format").performScrollTo().performClick()
+            compose.onNodeWithTag("layout-editor-xml-apply").performClick()
+            compose.awaitEditorTag("layout-editor-button-source")
+            eventually { repository.loadDraft(original.id) == null }
+            assertEquals(original, repository.loadProfile(original.id))
+            assertTrue("XML Validate/Format/Apply must never dispatch", recordingOwner.backend.writes.isEmpty())
+            assertTrue(recordingOwner.backend.commandOrder.isEmpty())
+
             val sourceNode = compose.onNodeWithTag("layout-editor-button-source").performScrollTo()
             sourceNode.performClick()
-            compose.awaitEditorTag("layout-editor-move-earlier")
+            compose.awaitEditorTag("layout-editor-selected-button-controls")
             sourceNode.assertIsSelected()
             assertEquals("a preview tap only selects an editor button", original, repository.loadProfile(original.id))
             assertNull(repository.loadDraft(original.id))
@@ -1654,7 +1673,7 @@ class SessionForegroundServiceAndroidTest {
                 recordingOwner.backend.writes.isEmpty())
             assertTrue(recordingOwner.backend.commandOrder.isEmpty())
 
-            compose.onNodeWithTag("layout-editor-save").performScrollTo().performClick()
+            compose.onNodeWithTag("layout-editor-save").performClick()
             // The serial repository worker emits closed asynchronously; advance Compose's
             // test clock so the Activity's LaunchedEffect can actually finish the editor.
             compose.waitUntil(10_000) {
@@ -1732,10 +1751,21 @@ class SessionForegroundServiceAndroidTest {
                 activity.findViewById<EditText>(R.id.keyboard_input).setText("preset selection keeps this draft")
                 assertTrue(activity.findViewById<View>(R.id.actions_layout_picker).performClick())
             }
+            val pickerTitle = device.wait(
+                Until.findObject(By.text(context.getString(R.string.ng_actions_choose_layout))), 5_000,
+            )
+            assertNotNull("the native layout picker dialog must be visible", pickerTitle)
+            // The selected saved profile is below the presets; the native picker restores that
+            // checked row on open, so scroll its ListView to reach the first preset.
+            assertTrue("the native layout choices can scroll back to the built-in presets",
+                UiScrollable(UiSelector().scrollable(true)).scrollToBeginning(10))
             // Native single-choice AlertDialog rows are CheckedTextViews, which waitForText's
             // TextView/Button class allowlist omits. Find and click the accessible row directly.
             val commonChoice = device.wait(Until.findObject(By.text("Built-in · Common")), 5_000)
-            assertNotNull("Built-in · Common must be an accessible, visible native picker row", commonChoice)
+            val choicesOnScreen = device.findObjects(By.clazz("android.widget.CheckedTextView"))
+                .joinToString { it.text?.toString().orEmpty() }
+            assertNotNull("Built-in · Common must be an accessible, visible native picker row; " +
+                "picker choices=$choicesOnScreen", commonChoice)
             val visibleCommonChoice = requireNotNull(commonChoice)
             assertFalse("preset row must have visible screen bounds", visibleCommonChoice.visibleBounds.isEmpty())
             assertTrue("preset row should be clickable by the user", visibleCommonChoice.isClickable)
@@ -2217,6 +2247,7 @@ class SessionForegroundServiceAndroidTest {
         }
 
         ownedScriptAlias = scriptAlias
+        val commandOrderBeforeScriptCrud = recordingOwner.backend.commandOrder.toList()
         activityScenario.onActivity { activity ->
             val bottom = activity.findViewById<BottomNavigationView>(R.id.bottom_navigation)
             bottom.selectedItemId = R.id.nav_scripts
@@ -2227,14 +2258,58 @@ class SessionForegroundServiceAndroidTest {
             assertTrue("Scripts Add opens the existing script manager", add.performClick())
         }
         scriptEditorField("new_script_alias")
-        fillScriptEditor(scriptAlias, originalScriptCommand)
+        fillScriptEditor("cancelled $scriptAlias", "cancelled command text")
+        clickDialogButton("Cancel")
+        assertTrue("cancelling Add leaves no SQLite row", savedScriptRows().none { it[0] == "cancelled $scriptAlias" })
+        assertEquals("opening and cancelling Add dispatches no remote command",
+            commandOrderBeforeScriptCrud, recordingOwner.backend.commandOrder.toList())
+        returnToMainScripts()
+
+        activityScenario.onActivity { activity ->
+            assertTrue("Add can be reopened after cancellation",
+                activity.findViewById<View>(R.id.scripts_add).performClick())
+        }
+        scriptEditorField("new_script_alias").setText(" ")
+        scriptEditorField("new_script_command").setText(" ")
+        clickDialogButton("Save")
+        waitForText("Enter a script name")
+        assertTrue("blank Add validation leaves persistence unchanged", savedScriptRows().none { it[0] == scriptAlias })
+        scriptEditorField("new_script_alias").setText(scriptAlias)
+        clickDialogButton("Save")
+        waitForText("Enter an SSH command")
+        assertTrue("blank SSH command validation leaves persistence unchanged", savedScriptRows().none { it[0] == scriptAlias })
+        scriptEditorField("new_script_command").setText(originalScriptCommand)
         clickDialogButton("Save")
         waitForVisibleText(scriptAlias)
         returnToMainScripts()
         savedScriptId = savedScriptRows().single { it[0] == scriptAlias }.let { it[2].toInt() }
         assertEquals("the Scripts Add route durably stores the exact initial command",
             originalScriptCommand, savedScriptRows().single { it[0] == scriptAlias }[1])
+        assertEquals("successful Add still does not execute the command",
+            commandOrderBeforeScriptCrud, recordingOwner.backend.commandOrder.toList())
 
+        eventually {
+            var loaded = false
+            activityScenario.onActivity {
+                loaded = it.findViewById<ViewGroup>(R.id.scripts_list).findViewWithTag<View>(savedScriptId) != null
+            }
+            loaded
+        }
+        activityScenario.onActivity { activity ->
+            val run = requireNotNull(activity.findViewById<ViewGroup>(R.id.scripts_list)
+                .findViewWithTag<View>(savedScriptId))
+            val controls = run.parent as ViewGroup
+            assertTrue("the explicit row Edit action is available", controls.getChildAt(1).performClick())
+        }
+        scriptEditorField("new_script_alias")
+        fillScriptEditor("cancelled $editedScriptAlias", "cancelled edit command")
+        clickDialogButton("Cancel")
+        val afterCancelledEdit = savedScriptRows().single { it[2].toInt() == savedScriptId }
+        assertEquals("Cancel leaves the saved alias unchanged", scriptAlias, afterCancelledEdit[0])
+        assertEquals("Cancel leaves the saved command unchanged", originalScriptCommand, afterCancelledEdit[1])
+        assertEquals("editing and cancelling dispatches no remote command",
+            commandOrderBeforeScriptCrud, recordingOwner.backend.commandOrder.toList())
+        returnToMainScripts()
         eventually {
             var loaded = false
             activityScenario.onActivity {
@@ -2262,6 +2337,8 @@ class SessionForegroundServiceAndroidTest {
         val editedRow = savedScriptRows().single { it[0] == editedScriptAlias }
         assertEquals("editing preserves the script's stable SQLite identity", savedScriptId, editedRow[2].toInt())
         assertEquals("editing persists the exact replacement command", scriptCommand, editedRow[1])
+        assertEquals("saving an edit persists data without executing it",
+            commandOrderBeforeScriptCrud, recordingOwner.backend.commandOrder.toList())
         returnToMainScripts()
 
         // Once the foreground inputs are observed at the provider boundary, suspend controls before
@@ -2290,6 +2367,11 @@ class SessionForegroundServiceAndroidTest {
                 runReady = it.findViewById<View>(R.id.scripts_list).findViewWithTag<View>(savedScriptId)?.isShown == true
             }
             runReady
+        }
+        eventually(timeoutSeconds = 10, message = { "MainActivity window did not regain foreground focus before Run" }) {
+            var focused = false
+            activityScenario.onActivity { focused = it.window.decorView.hasWindowFocus() }
+            focused
         }
         activityScenario.onActivity {
             it.findViewById<android.widget.ScrollView>(R.id.scripts_scroll).apply {
@@ -2326,6 +2408,7 @@ class SessionForegroundServiceAndroidTest {
         }
         assertEquals("err oneerr twoout oneout two", copiedOutput)
 
+        val commandOrderBeforeManageDelete = recordingOwner.backend.commandOrder.toList()
         activityScenario.onActivity { activity ->
             val manage = activity.findViewById<View>(R.id.scripts_manage)
             assertTrue("Scripts Manage opens the existing manager", manage.performClick())
@@ -2337,9 +2420,19 @@ class SessionForegroundServiceAndroidTest {
         assertEquals(editedScriptAlias, scriptEditorField("new_script_alias").text)
         assertEquals(scriptCommand, scriptEditorField("new_script_command").text)
         clickDialogButton("Delete")
-        waitForVisibleText("Remove this saved script? This does not run its command.")
+        waitForVisibleText(context.getString(R.string.ng_script_delete_message, editedScriptAlias))
+        clickDialogButton("Cancel")
+        assertEquals("cancelling confirmed Delete leaves the stable row and exact command intact",
+            listOf(editedScriptAlias, scriptCommand, savedScriptId.toString()),
+            savedScriptRows().single { it[2].toIntOrNull() == savedScriptId })
+        assertEquals("opening Manage and cancelling Delete dispatches nothing",
+            commandOrderBeforeManageDelete, recordingOwner.backend.commandOrder.toList())
+        clickDialogButton("Delete")
+        waitForVisibleText(context.getString(R.string.ng_script_delete_message, editedScriptAlias))
         clickDialogButton("Delete")
         eventually { savedScriptRows().none { it[2].toIntOrNull() == savedScriptId } }
+        assertEquals("confirmed deletion is local SQLite CRUD, not remote execution",
+            commandOrderBeforeManageDelete, recordingOwner.backend.commandOrder.toList())
         returnToMainScripts()
         eventually {
             var empty = false

@@ -190,6 +190,33 @@ class LayoutEditorViewModelTest {
     }
 
     @Test
+    fun confirmedDeleteUsesTheCapturedButtonIdRatherThanTheCurrentSelection() {
+        val repository = LayoutProfileRepository(FakeLayoutProfileFileOps())
+        val saved = profile().copy(
+            buttons = listOf(
+                LayoutButton("confirmed", "Confirmed", "opaque one", 2, "#123456"),
+                LayoutButton("new-selection", "New selection", "opaque two", 7, "#ABCDEF"),
+            ),
+        )
+        repository.createProfile(saved)
+        val viewModel = LayoutEditorViewModel(saved.id, repository)
+
+        viewModel.selectButton("confirmed")
+        val capturedId = viewModel.state.value.selectedButtonId!!
+        viewModel.selectButton("new-selection")
+
+        assertTrue(viewModel.deleteButton(capturedId))
+        val changedDraft = saved.copy(buttons = listOf(saved.buttons.last()))
+        assertEquals(changedDraft, viewModel.state.value.draftProfile)
+        assertEquals("new-selection", viewModel.state.value.selectedButtonId)
+        assertEquals(saved, repository.loadProfile(saved.id))
+        assertFalse(viewModel.deleteButton("missing"))
+        assertTrue(viewModel.undo())
+        assertEquals(saved, viewModel.state.value.draftProfile)
+        assertEquals("new-selection", viewModel.state.value.selectedButtonId)
+    }
+
+    @Test
     fun invalidButtonFormRetainsInputAndNeverChangesDraftOrSavedProfile() {
         val files = FakeLayoutProfileFileOps()
         val repository = LayoutProfileRepository(files)

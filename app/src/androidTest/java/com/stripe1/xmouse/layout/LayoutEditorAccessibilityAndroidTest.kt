@@ -49,12 +49,15 @@ class LayoutEditorAccessibilityAndroidTest {
                     "Target, button 2 of 4, width 2 columns",
                 ).performScrollTo()
                 selected.performClick()
-                compose.awaitEditorTag("layout-editor-move-earlier")
+                compose.awaitEditorTag("layout-editor-selected-button-controls")
                 selected.assertIsSelected()
 
+                compose.onNodeWithTag("layout-editor-selection-more")
+                    .performScrollTo().performClick()
+                compose.awaitEditorTag("layout-editor-move-earlier")
                 val moveEarlier = compose.onNodeWithContentDescription(
                     "Target, button 2 of 4. Move earlier",
-                ).performScrollTo()
+                )
                 val targetBounds = moveEarlier.fetchSemanticsNode().boundsInRoot
                 val minimumTargetPx = 48f * context.resources.displayMetrics.density
                 assertTrue("Move action must be at least 48dp wide", targetBounds.width >= minimumTargetPx)
@@ -63,13 +66,17 @@ class LayoutEditorAccessibilityAndroidTest {
 
                 compose.waitUntil(5_000) { repository.loadDraft(saved.id)?.buttons?.firstOrNull()?.id == "target" }
 
-                compose.onNodeWithContentDescription("Target, button 1 of 4. Move later")
+                compose.onNodeWithTag("layout-editor-selection-more")
                     .performScrollTo().performClick()
+                compose.onNodeWithContentDescription("Target, button 1 of 4. Move later")
+                    .performClick()
                 // Returning exactly to the saved order intentionally has no pending draft.
                 compose.waitUntil(5_000) { repository.loadDraft(saved.id) == null }
                 assertEquals(saved, repository.loadProfile(saved.id))
-                compose.onNodeWithContentDescription("Target, button 2 of 4. Move later")
+                compose.onNodeWithTag("layout-editor-selection-more")
                     .performScrollTo().performClick()
+                compose.onNodeWithContentDescription("Target, button 2 of 4. Move later")
+                    .performClick()
                 compose.waitUntil(5_000) { repository.loadDraft(saved.id)?.buttons?.getOrNull(2)?.id == "target" }
                 compose.onNodeWithContentDescription("Target, width 2 columns. Increase width")
                     .performScrollTo().performClick()
@@ -84,7 +91,7 @@ class LayoutEditorAccessibilityAndroidTest {
                 )
                 compose.waitUntil(5_000) { repository.loadDraft(saved.id) == resized }
                 assertEquals(resized, repository.loadDraft(saved.id))
-                compose.onNodeWithTag("layout-editor-save").performScrollTo().performClick()
+                compose.onNodeWithTag("layout-editor-save").performClick()
                 compose.waitUntil(5_000) { repository.loadProfile(saved.id) == resized }
                 assertEquals(resized, repository.loadProfile(saved.id))
             }

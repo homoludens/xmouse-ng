@@ -7,6 +7,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.test.core.app.ActivityScenario
@@ -69,6 +70,8 @@ class LayoutProfileManagerAndroidTest {
             ActivityScenario.launch<LayoutProfileManagerActivity>(
                 Intent(context, LayoutProfileManagerActivity::class.java),
             ).use {
+                compose.onNodeWithTag("layout-profiles-back").assertExists()
+                compose.onNodeWithContentDescription("Back").assertExists()
                 compose.awaitEditorText("Selected layout ID: ${profiles.last().id}")
                 compose.onNodeWithText("Selected layout ID: ${profiles.last().id}").assertExists()
                 profiles.forEach { profile ->

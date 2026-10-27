@@ -228,6 +228,17 @@ public final class ActionsViewRenderer {
                                      List<SavedActionScript> scripts, boolean loading,
                                      boolean failed, boolean editMode, ScriptListener listener) {
         container.removeAllViews();
+        TextView count = container.getRootView().findViewById(R.id.scripts_count);
+        if (count != null) {
+            if (loading || failed || scripts == null) {
+                count.setVisibility(View.GONE);
+            } else {
+                count.setText(context.getResources().getQuantityString(
+                        R.plurals.ng_scripts_count, scripts.size(), scripts.size()));
+                count.setContentDescription(count.getText());
+                count.setVisibility(View.VISIBLE);
+            }
+        }
         if (loading) {
             addScriptMessage(context, container, R.string.ng_scripts_loading);
             return;
@@ -258,16 +269,20 @@ public final class ActionsViewRenderer {
             content.setPadding(dp(context, 12), dp(context, 8), dp(context, 12), dp(context, 8));
             LinearLayout labels = new LinearLayout(context);
             labels.setOrientation(LinearLayout.VERTICAL);
+            labels.setMinimumWidth(0);
             TextView name = new TextView(context);
             name.setText(script.getName());
             name.setTextColor(context.getColor(R.color.ng_text_primary));
             name.setTextSize(14);
             name.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            name.setMinWidth(0);
+            name.setMaxLines(2);
+            name.setEllipsize(TextUtils.TruncateAt.END);
             name.setContentDescription(context.getString(R.string.ng_script_named, script.getName()));
             labels.addView(name, matchWrap());
             TextView subtitle = new TextView(context);
             subtitle.setText(R.string.ng_script_ssh_label);
-            subtitle.setTextSize(11);
+            subtitle.setTextSize(12);
             subtitle.setTextColor(context.getColor(R.color.ng_text_secondary));
             labels.addView(subtitle, matchWrap());
             content.addView(labels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -277,14 +292,18 @@ public final class ActionsViewRenderer {
             controls.setBaselineAligned(false);
             controls.setGravity(Gravity.CENTER_VERTICAL);
             controls.setPadding(dp(context, 8), 0, 0, 0);
-            MaterialButton run = scriptButton(context, R.string.ng_run_script);
+            MaterialButton run = scriptButton(context, R.string.ng_run_script, R.drawable.ic_ng_play, false);
             run.setEnabled(!editMode);
             run.setTag(script.getId());
-            run.setContentDescription(context.getString(R.string.ng_run_named_script, script.getName()));
+            String runDescription = context.getString(R.string.ng_run_named_script, script.getName());
+            run.setContentDescription(runDescription);
+            run.setTooltipText(runDescription);
             run.setOnClickListener(view -> { if (listener != null) listener.onRun(view, script); });
-            MaterialButton edit = scriptButton(context, R.string.ng_edit_script);
+            MaterialButton edit = scriptButton(context, R.string.ng_edit_script, R.drawable.ic_ng_edit, true);
             edit.setTag(script.getId());
-            edit.setContentDescription(context.getString(R.string.ng_edit_named_script, script.getName()));
+            String editDescription = context.getString(R.string.ng_edit_named_script, script.getName());
+            edit.setContentDescription(editDescription);
+            edit.setTooltipText(editDescription);
             edit.setOnClickListener(view -> { if (listener != null) listener.onEdit(view, script); });
             controls.addView(run, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             LinearLayout.LayoutParams editParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -366,11 +385,17 @@ public final class ActionsViewRenderer {
                 (Color.blue(foreground) * alpha + Color.blue(background) * inverse) / 255);
     }
 
-    private static MaterialButton scriptButton(Context context, int label) {
+    private static MaterialButton scriptButton(Context context, int label, int icon, boolean accent) {
         MaterialButton button = new MaterialButton(context, null,
                 com.google.android.material.R.attr.materialButtonOutlinedStyle);
         button.setText(label);
+        button.setIconResource(icon);
+        button.setIconTint(ColorStateList.valueOf(context.getColor(
+                accent ? R.color.ng_accent : R.color.ng_text_secondary)));
+        button.setIconSize(dp(context, 16));
+        button.setIconPadding(dp(context, 4));
         button.setAllCaps(false);
+        button.setMaxLines(1);
         button.setMinWidth(dp(context, 48));
         button.setMinimumWidth(dp(context, 48));
         button.setPadding(dp(context, 8), dp(context, 8), dp(context, 8), dp(context, 8));
@@ -380,13 +405,16 @@ public final class ActionsViewRenderer {
         button.setStateListAnimator(null);
         button.setElevation(0f);
         button.setMinHeight(dp(context, 48));
+        button.setMinimumHeight(dp(context, 48));
         button.setInsetTop(0);
         button.setInsetBottom(0);
         button.setCornerRadius(dp(context, 12));
-        button.setStrokeColor(ColorStateList.valueOf(context.getColor(R.color.ng_border)));
-        button.setStrokeWidth(0);
-        button.setBackgroundTintList(ColorStateList.valueOf(context.getColor(R.color.ng_surface_soft)));
-        button.setTextColor(context.getColor(R.color.ng_text_primary));
+        button.setStrokeColor(ColorStateList.valueOf(context.getColor(
+                accent ? R.color.ng_accent : R.color.ng_border)));
+        button.setStrokeWidth(dp(context, 1));
+        button.setBackgroundTintList(ColorStateList.valueOf(context.getColor(
+                accent ? R.color.ng_accent_soft : R.color.ng_surface_soft)));
+        button.setTextColor(context.getColor(accent ? R.color.ng_accent : R.color.ng_text_primary));
         return button;
     }
 

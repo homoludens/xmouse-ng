@@ -79,13 +79,19 @@ class NativeSettingsAndroidTest {
                         root.layout(0, 0, width, height)
                         for (id in listOf(R.id.settings_back, R.id.settings_pointer_speed, R.id.settings_natural_scroll,
                             R.id.settings_auto_clear, R.id.settings_advanced)) {
-                            val control = root.findViewById<TextView>(id)
+                            val control = root.findViewById<View>(id)
                             assertTrue(control.width >= 48 * density - 1)
                             assertTrue(control.height >= 48 * density - 1)
-                            assertTrue(control.text.isNotBlank())
                             assertTrue(control.width <= width)
-                            control.layout?.let { layout ->
-                                for (line in 0 until layout.lineCount) assertEquals(0, layout.getEllipsisCount(line))
+                            if (id == R.id.settings_back) {
+                                assertEquals("Back", control.contentDescription)
+                                assertEquals("Back", control.tooltipText)
+                            } else {
+                                val textControl = control as TextView
+                                assertTrue(textControl.text.isNotBlank())
+                                textControl.layout?.let { layout ->
+                                    for (line in 0 until layout.lineCount) assertEquals(0, layout.getEllipsisCount(line))
+                                }
                             }
                         }
                         val scroll = root.findViewById<ScrollView>(R.id.settings_scroll)

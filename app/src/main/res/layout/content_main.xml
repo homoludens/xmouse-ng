@@ -113,25 +113,39 @@
         <ScrollView android:id="@+id/scripts_scroll" android:layout_width="match_parent"
             android:layout_height="0dp" android:layout_weight="1" android:fillViewport="true"
             android:clipToPadding="false">
-            <LinearLayout android:id="@+id/scripts_content" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:orientation="vertical"
-                android:paddingStart="@dimen/ng_page_gutter" android:paddingEnd="@dimen/ng_page_gutter"
-                android:paddingTop="@dimen/ng_page_heading_gap" android:paddingBottom="@dimen/ng_page_bottom">
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:layout_marginBottom="@dimen/ng_page_heading_gap" android:text="@string/ng_scripts"
-                    android:textColor="@color/ng_text_primary" android:textSize="20sp"
-                    android:fontFamily="sans-serif-medium" />
+             <LinearLayout android:id="@+id/scripts_content" android:layout_width="match_parent"
+                 android:layout_height="wrap_content" android:orientation="vertical"
+                 android:paddingStart="@dimen/ng_page_gutter" android:paddingEnd="@dimen/ng_page_gutter"
+                 android:paddingTop="@dimen/ng_page_heading_gap" android:paddingBottom="@dimen/ng_page_bottom">
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:gravity="center_vertical" android:orientation="horizontal">
+                    <TextView android:id="@+id/scripts_title" android:layout_width="0dp"
+                        android:layout_height="wrap_content" android:layout_weight="1"
+                        android:text="@string/ng_scripts" android:textColor="@color/ng_text_primary"
+                        android:textSize="20sp" android:fontFamily="sans-serif-medium" />
+                    <TextView android:id="@+id/scripts_count" android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" android:gravity="end|center_vertical"
+                        android:textColor="@color/ng_text_secondary" android:textSize="12sp"
+                        android:fontFamily="sans-serif" android:visibility="gone" />
+                </LinearLayout>
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:orientation="horizontal" android:baselineAligned="false"
+                    android:layout_marginTop="@dimen/ng_page_heading_gap"
                     android:layout_marginBottom="@dimen/ng_page_heading_gap">
-                    <Button android:id="@+id/scripts_add" style="@style/Widget.XMouseNg.ControlButton"
-                        android:layout_width="0dp" android:layout_height="@dimen/ng_min_touch_target"
+                    <com.google.android.material.button.MaterialButton android:id="@+id/scripts_add"
+                        style="@style/Widget.XMouseNg.ControlButton.Accent"
+                        android:layout_width="0dp" android:layout_height="wrap_content"
                         android:layout_weight="1" android:layout_marginEnd="@dimen/ng_touchpad_control_gap"
-                        android:text="@string/ng_add_script" />
-                    <Button android:id="@+id/scripts_manage" style="@style/Widget.XMouseNg.ControlButton.Text"
-                        android:layout_width="wrap_content" android:layout_height="@dimen/ng_min_touch_target"
-                        android:minWidth="@dimen/ng_min_touch_target" android:contentDescription="@string/ng_manage_scripts"
-                        android:tooltipText="@string/ng_manage_scripts" android:text="@string/ng_manage_scripts_short" />
+                        android:minHeight="@dimen/ng_min_touch_target" android:text="@string/ng_add_script"
+                        app:icon="@drawable/ic_ng_add" app:iconGravity="textStart" app:iconPadding="6dp"
+                        app:iconTint="@color/ng_on_accent" />
+                    <com.google.android.material.button.MaterialButton android:id="@+id/scripts_manage"
+                        style="@style/Widget.XMouseNg.ControlButton"
+                        android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:minHeight="@dimen/ng_min_touch_target" android:contentDescription="@string/ng_manage_scripts"
+                        android:tooltipText="@string/ng_manage_scripts" android:text="@string/ng_manage_scripts_short"
+                        app:icon="@drawable/ic_ng_scripts" app:iconGravity="textStart" app:iconPadding="6dp"
+                        app:iconTint="@color/ng_accent" />
                 </LinearLayout>
                 <LinearLayout android:id="@+id/scripts_list" android:layout_width="match_parent"
                     android:layout_height="wrap_content" android:orientation="vertical" />

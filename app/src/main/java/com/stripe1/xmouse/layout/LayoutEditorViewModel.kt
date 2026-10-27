@@ -49,14 +49,28 @@ data class LayoutEditorState(
     val buttonEditSaveError: String? = null,
     val canUndo: Boolean = false,
     val canRedo: Boolean = false,
+    val editMode: LayoutEditorMode = LayoutEditorMode.VISUAL,
+    val xmlSource: String = "",
+    val xmlBaseSource: String = "",
+    val xmlMessage: String? = null,
+    val xmlMessageIsError: Boolean = false,
+    val xmlExitConfirmation: XmlEditorExitAction? = null,
 ) {
     val selectedButton: LayoutButton?
         get() = LayoutEditorGrid.selectedButton(draftProfile?.buttons.orEmpty(), selectedButtonId)
 
     val isDirty: Boolean
         get() = savedProfile != null && draftProfile != null &&
-            (savedProfile != draftProfile || profileNameInput != draftProfile.name)
+            (savedProfile != draftProfile || profileNameInput != draftProfile.name ||
+                (editMode == LayoutEditorMode.XML && xmlSource != xmlBaseSource))
+
+    val hasPendingXmlChanges: Boolean
+        get() = editMode == LayoutEditorMode.XML && xmlSource != xmlBaseSource
 }
+
+enum class LayoutEditorMode { VISUAL, XML }
+
+enum class XmlEditorExitAction { BACK_TO_VISUAL, RESET_SOURCE }
 
 enum class LayoutEditorBackChoice {
     SAVE,
@@ -72,6 +86,182 @@ class LayoutEditorViewModel(
     private var history = LayoutEditorHistory()
     private val mutableState = MutableStateFlow(loadInitialState())
     val state = mutableState.asStateFlow()
+
+    /** Opens a transient XML buffer generated from the current valid draft; no disk write occurs. */
+    fun enterXmlMode(): Boolean {
+        val current = mutableState.value
+        if (current.isLoading || current.buttonEditInput != null || current.editMode != LayoutEditorMode.VISUAL) return false
+        val draft = current.draftProfile ?: return false
+        if (current.profileNameInput.isBlank()) {
+            mutableState.value = current.copy(errorMessage = "Enter a valid profile name before opening XML source.")
+            return false
+        }
+        return try {
+            val source = LayoutProfileXml.serialize(draft.copy(name = current.profileNameInput))
+            mutableState.value = current.copy(
+                editMode = LayoutEditorMode.XML,
+                xmlSource = source,
+                xmlBaseSource = source,
+                xmlMessage = null,
+                xmlMessageIsError = false,
+                xmlExitConfirmation = null,
+                errorMessage = null,
+            )
+            true
+        } catch (failure: LayoutXmlException) {
+            mutableState.value = current.copy(errorMessage = failure.displayMessage())
+            false
+        }
+    }
+
+    /** Retains at most the parser's bounded source size; an oversized paste is rejected, not truncated. */
+    fun updateXmlSource(value: String) {
+        val current = mutableState.value
+        if (current.editMode != LayoutEditorMode.XML || current.xmlExitConfirmation != null) return
+        if (value.length > LayoutProfileXml.MAX_SOURCE_CHARS) {
+            mutableState.value = current.copy(
+                xmlMessage = "XML source exceeds the ${LayoutProfileXml.MAX_SOURCE_CHARS} character limit; the pasted text was not accepted.",
+                xmlMessageIsError = true,
+            )
+            return
+        }
+        mutableState.value = current.copy(xmlSource = value, xmlMessage = null, xmlMessageIsError = false)
+    }
+
+    /** Explicit parse only: validating never writes either the recoverable draft or saved profile. */
+    fun validateXmlSource(): Boolean {
+        val current = mutableState.value
+        if (current.editMode != LayoutEditorMode.XML || current.xmlExitConfirmation != null) return false
+        return try {
+            LayoutProfileXml.parse(current.xmlSource, profileId)
+            mutableState.value = current.copy(
+                xmlMessage = "XML is valid for this layout. Nothing has been changed yet.",
+                xmlMessageIsError = false,
+            )
+            true
+        } catch (failure: LayoutXmlException) {
+            mutableState.value = current.copy(xmlMessage = failure.displayMessage(), xmlMessageIsError = true)
+            false
+        }
+    }
+
+    /** Formats valid markup only; parse/format errors leave the user's source byte-for-byte intact. */
+    fun formatXmlSource(): Boolean {
+        val current = mutableState.value
+        if (current.editMode != LayoutEditorMode.XML || current.xmlExitConfirmation != null) return false
+        return try {
+            val formatted = LayoutProfileXml.format(current.xmlSource, profileId)
+            if (formatted.length > LayoutProfileXml.MAX_SOURCE_CHARS) {
+                throw LayoutXmlException("Formatted XML exceeds the ${LayoutProfileXml.MAX_SOURCE_CHARS} character limit.")
+            }
+            mutableState.value = current.copy(xmlSource = formatted, xmlMessage = "XML formatted. Apply to update the draft.", xmlMessageIsError = false)
+            true
+        } catch (failure: LayoutXmlException) {
+            mutableState.value = current.copy(xmlMessage = failure.displayMessage(), xmlMessageIsError = true)
+            false
+        }
+    }
+
+    /** One atomic draft write; button changes add one existing button-history entry, names remain non-undoable. */
+    fun applyXmlSource(): Boolean {
+        val current = mutableState.value
+        if (current.editMode != LayoutEditorMode.XML || current.xmlExitConfirmation != null || current.buttonEditInput != null) return false
+        val draft = current.draftProfile ?: return false
+        val parsed = try {
+            LayoutProfileXml.parse(current.xmlSource, profileId)
+        } catch (failure: LayoutXmlException) {
+            mutableState.value = current.copy(xmlMessage = failure.displayMessage(), xmlMessageIsError = true)
+            return false
+        }
+        val nextProfile = immutableSnapshot(parsed)
+        val nextSelection = current.selectedButtonId?.takeIf { id -> nextProfile.buttons.any { it.id == id } }
+        val nextHistory = history.record(
+            LayoutEditorButtonSnapshot(draft.buttons, current.selectedButtonId),
+            LayoutEditorButtonSnapshot(nextProfile.buttons, nextSelection),
+        )
+        if (nextProfile != draft) {
+            try {
+                repository.saveDraft(nextProfile)
+            } catch (_: Exception) {
+                mutableState.value = current.copy(
+                    errorMessage = DRAFT_SAVE_ERROR,
+                    xmlMessage = "The draft could not be saved. XML source is unchanged; retry Apply.",
+                    xmlMessageIsError = true,
+                )
+                return false
+            }
+        }
+        history = nextHistory
+        mutableState.value = current.copy(
+            draftProfile = nextProfile,
+            profileNameInput = nextProfile.name,
+            selectedButtonId = nextSelection,
+            canUndo = history.canUndo,
+            canRedo = history.canRedo,
+            editMode = LayoutEditorMode.VISUAL,
+            xmlSource = "",
+            xmlBaseSource = "",
+            xmlMessage = null,
+            xmlMessageIsError = false,
+            xmlExitConfirmation = null,
+            errorMessage = null,
+            widthValidationMessage = null,
+            moveValidationMessage = null,
+        )
+        return true
+    }
+
+    /** Leaving/resetting a modified source requires an explicit confirmation; visual draft stays intact. */
+    fun requestXmlExit(action: XmlEditorExitAction) {
+        val current = mutableState.value
+        if (current.editMode != LayoutEditorMode.XML) return
+        if (current.xmlSource != current.xmlBaseSource) {
+            mutableState.value = current.copy(xmlExitConfirmation = action)
+        } else {
+            finishXmlExit(current, action)
+        }
+    }
+
+    fun resolveXmlExit(discardXmlChanges: Boolean) {
+        val current = mutableState.value
+        val action = current.xmlExitConfirmation ?: return
+        if (!discardXmlChanges) {
+            mutableState.value = current.copy(xmlExitConfirmation = null)
+        } else {
+            finishXmlExit(current.copy(xmlExitConfirmation = null), action)
+        }
+    }
+
+    private fun finishXmlExit(current: LayoutEditorState, action: XmlEditorExitAction) {
+        if (action == XmlEditorExitAction.BACK_TO_VISUAL) {
+            mutableState.value = current.copy(
+                editMode = LayoutEditorMode.VISUAL,
+                xmlSource = "",
+                xmlBaseSource = "",
+                xmlMessage = null,
+                xmlMessageIsError = false,
+                xmlExitConfirmation = null,
+            )
+        } else {
+            val draft = current.draftProfile ?: return
+            try {
+                val source = LayoutProfileXml.serialize(draft.copy(name = current.profileNameInput))
+                mutableState.value = current.copy(
+                    xmlSource = source,
+                    xmlBaseSource = source,
+                    xmlMessage = "XML reset to the current draft.",
+                    xmlMessageIsError = false,
+                    xmlExitConfirmation = null,
+                )
+            } catch (failure: LayoutXmlException) {
+                mutableState.value = current.copy(
+                    xmlMessage = failure.displayMessage(),
+                    xmlMessageIsError = true,
+                    xmlExitConfirmation = null,
+                )
+            }
+        }
+    }
 
     /** Name editing is the small, non-grid edit surface for this editor foundation. */
     fun updateProfileNameInput(value: String) {
@@ -221,13 +411,17 @@ class LayoutEditorViewModel(
     }
 
     /** Removes only the selected button from the recoverable draft, never the saved profile. */
-    fun deleteSelectedButton(): Boolean {
+    fun deleteSelectedButton(): Boolean =
+        mutableState.value.selectedButtonId?.let(::deleteButton) ?: false
+
+    /** Deletes the exact confirmed ID, even if selection changes while confirmation is open. */
+    fun deleteButton(buttonId: String): Boolean {
         val current = mutableState.value
         val draft = current.draftProfile ?: return false
-        val selectedId = current.selectedButtonId ?: return false
-        if (draft.buttons.none { it.id == selectedId }) return false
-        val changed = draft.copy(buttons = draft.buttons.filterNot { it.id == selectedId })
-        return persistButtonChange(current, changed, selectedButtonId = null)
+        if (draft.buttons.none { it.id == buttonId }) return false
+        val changed = draft.copy(buttons = draft.buttons.filterNot { it.id == buttonId })
+        val selectedAfterDelete = current.selectedButtonId?.takeUnless { it == buttonId }
+        return persistButtonChange(current, changed, selectedButtonId = selectedAfterDelete)
     }
 
     private inline fun updateButtonEditInput(transform: ButtonEditInput.() -> ButtonEditInput) {
@@ -425,6 +619,10 @@ class LayoutEditorViewModel(
 
     fun save(): Boolean {
         val current = mutableState.value
+        if (current.editMode == LayoutEditorMode.XML) {
+            mutableState.value = current.copy(errorMessage = "Apply XML to the draft and return to the visual editor before saving.")
+            return false
+        }
         if (current.buttonEditInput != null) return false
         val saved = current.savedProfile ?: return false
         var draft = current.draftProfile ?: return false
@@ -459,6 +657,12 @@ class LayoutEditorViewModel(
                 buttonEditSaveError = null,
                 canUndo = false,
                 canRedo = false,
+                editMode = LayoutEditorMode.VISUAL,
+                xmlSource = "",
+                xmlBaseSource = "",
+                xmlMessage = null,
+                xmlMessageIsError = false,
+                xmlExitConfirmation = null,
             )
             true
         } catch (_: Exception) {
@@ -491,6 +695,12 @@ class LayoutEditorViewModel(
                 buttonEditSaveError = null,
                 canUndo = false,
                 canRedo = false,
+                editMode = LayoutEditorMode.VISUAL,
+                xmlSource = "",
+                xmlBaseSource = "",
+                xmlMessage = null,
+                xmlMessageIsError = false,
+                xmlExitConfirmation = null,
             )
             true
         } catch (_: Exception) {

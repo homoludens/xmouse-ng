@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:clickable="true"
+    android:focusable="true"
+    android:minWidth="0dp"
+    android:foreground="?attr/selectableItemBackground"
+    app:cardBackgroundColor="@color/ng_surface"
+    app:cardCornerRadius="13dp"
+    app:cardElevation="0dp"
+    app:strokeColor="@color/ng_border"
+    app:strokeWidth="1dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:baselineAligned="false"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="12dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:minWidth="0dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/hostAlias"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:fontFamily="sans-serif-medium"
+                android:maxLines="2"
+                android:textColor="@color/ng_text_primary"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/hostDesc"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textColor="@color/ng_text_secondary"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/script_manager_edit"
+            style="@style/Widget.XMouseNg.ControlButton.AccentSoft"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:minHeight="48dp"
+            android:text="@string/ng_edit_script"
+            app:icon="@drawable/ic_ng_edit"
+            app:iconGravity="textStart"
+            app:iconPadding="4dp"
+            app:iconSize="16dp" />
+
+        <TextView
+            android:id="@+id/hostDBID"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:visibility="gone" />
+    </LinearLayout>
+</com.google.android.material.card.MaterialCardView>

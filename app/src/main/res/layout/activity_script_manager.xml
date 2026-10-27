@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/list_edit_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/ng_background"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="12dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp">
+
+        <ImageButton
+            android:id="@+id/scripts_manager_back"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/ng_back"
+            android:padding="12dp"
+            android:src="@drawable/ic_ng_arrow_back"
+            android:tooltipText="@string/ng_back"
+            app:tint="@color/ng_text_primary" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/scripts_manager_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/ng_script_manager_title"
+                android:textColor="@color/ng_text_primary"
+                android:textSize="18sp"
+                android:fontFamily="sans-serif-medium" />
+
+            <TextView
+                android:id="@+id/scripts_manager_count"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/ng_script_manager_loading"
+                android:textColor="@color/ng_text_secondary"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/scripts_manager_empty"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="12dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp"
+        android:text="@string/ng_script_manager_empty"
+        android:textColor="@color/ng_text_secondary"
+        android:textSize="14sp"
+        android:visibility="gone" />
+
+    <ListView
+        android:id="@+id/myListView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:divider="@android:color/transparent"
+        android:dividerHeight="8dp"
+        android:listSelector="@android:color/transparent"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp"
+        android:scrollbarStyle="outsideOverlay" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/scripts_manager_add"
+        style="@style/Widget.XMouseNg.ControlButton.Accent"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginEnd="12dp"
+        android:layout_marginBottom="12dp"
+        android:minHeight="48dp"
+        android:text="@string/ng_script_manager_add"
+        app:icon="@drawable/ic_ng_add"
+        app:iconGravity="textStart"
+        app:iconPadding="6dp"
+        app:iconTint="@color/ng_on_accent" />
+</LinearLayout>

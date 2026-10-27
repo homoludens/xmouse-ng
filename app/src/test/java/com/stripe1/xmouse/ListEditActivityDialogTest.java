@@ -6,6 +6,7 @@ import android.view.View;
 import android.text.Editable;
 import android.widget.EditText;
 import android.widget.Button;
+import com.google.android.material.textfield.TextInputLayout;
 import com.stripe1.xmouse.connection.EndpointLocator;
 import com.stripe1.xmouse.discovery.SshServiceDiscovery;
 import com.stripe1.xmouse.secrets.CredentialRepository;
@@ -28,6 +29,7 @@ import java.net.InetAddress;
 import static org.junit.Assert.assertEquals;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockConstruction;
@@ -39,6 +41,7 @@ import static org.mockito.Mockito.withSettings;
 import static org.mockito.Mockito.RETURNS_SELF;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.anyBoolean;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.isNull;
 
@@ -68,10 +71,20 @@ public class ListEditActivityDialogTest {
         EditText username = mock(EditText.class);
         EditText port = mock(EditText.class);
         EditText password = mock(EditText.class);
+        TextInputLayout scriptNameLayout = script ? mock(TextInputLayout.class) : null;
+        TextInputLayout scriptCommandLayout = script ? mock(TextInputLayout.class) : null;
         Button positive = mock(Button.class);
         Button negative = mock(Button.class);
         when(dialog.getButton(AlertDialog.BUTTON_POSITIVE)).thenReturn(positive);
         when(dialog.getButton(AlertDialog.BUTTON_NEGATIVE)).thenReturn(negative);
+        if (script) {
+            doNothing().when(activity).styleScriptEditorButtons(any(AlertDialog.class), anyBoolean());
+            doReturn("Add script").when(activity).getString(R.string.ng_script_manager_add_title);
+            doReturn("Edit script").when(activity).getString(R.string.ng_script_manager_edit_title);
+            doReturn("Cancel").when(activity).getString(R.string.ng_script_manager_cancel);
+            doReturn("Save").when(activity).getString(R.string.ng_script_manager_save);
+            doReturn("Delete").when(activity).getString(R.string.ng_script_manager_delete);
+        }
         int layoutId = script ? R.layout.manage_script_item : R.layout.manage_host_item;
         when(inflater.inflate(layoutId, null)).thenReturn(layout);
         Map<Integer, EditText> fields = new LinkedHashMap<>();
@@ -84,6 +97,10 @@ public class ListEditActivityDialogTest {
         }
         for (Map.Entry<Integer, EditText> field : fields.entrySet()) {
             when(layout.findViewById(field.getKey())).thenReturn(field.getValue());
+        }
+        if (script) {
+            when(layout.findViewById(R.id.new_script_alias_layout)).thenReturn(scriptNameLayout);
+            when(layout.findViewById(R.id.new_script_command_layout)).thenReturn(scriptCommandLayout);
         }
 
         HostItem record = new HostItem();
@@ -109,7 +126,8 @@ public class ListEditActivityDialogTest {
             assertEquals(1, builders.constructed().size());
             AlertDialog.Builder builder = builders.constructed().get(0);
             verify(builder).setView(layout);
-            verify(builder).setTitle((editing ? "Edit " : "New ") + (script ? "Script" : "Host"));
+            verify(builder).setTitle(script ? (editing ? "Edit script" : "Add script")
+                    : (editing ? "Edit Host" : "New Host"));
             verify(builder).setPositiveButton("Save", null);
             verify(builder).setNegativeButton(editing ? "Delete" : "Cancel", null);
             if (editing) verify(builder).setNeutralButton("Cancel", null);
@@ -119,6 +137,10 @@ public class ListEditActivityDialogTest {
             verifyNoMoreInteractions(inflater);
             for (Integer id : fields.keySet()) {
                 verify(layout).findViewById(id);
+            }
+            if (script) {
+                verify(layout).findViewById(R.id.new_script_alias_layout);
+                verify(layout).findViewById(R.id.new_script_command_layout);
             }
             verifyNoMoreInteractions(layout);
 
@@ -132,11 +154,16 @@ public class ListEditActivityDialogTest {
                     verify(password).setSaveEnabled(false);
                 }
             } else {
-                verifyNoInteractions(alias, endpointOrCommand, username, port);
-                if (!script) verify(password).setSaveEnabled(false);
+                verifyNoInteractions(alias);
+                if (!script) {
+                    verifyNoInteractions(endpointOrCommand, username, port);
+                    verify(password).setSaveEnabled(false);
+                }
             }
             if (script) {
                 verifyNoInteractions(username, port, password);
+                verify(endpointOrCommand).setSaveEnabled(false);
+                verify(endpointOrCommand).setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
             }
             if (!script && !editing) verifyNoInteractions(repository);
         }

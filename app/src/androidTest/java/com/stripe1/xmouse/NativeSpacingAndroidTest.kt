@@ -216,35 +216,65 @@ class NativeSpacingAndroidTest {
     }
 
     @Test fun savedScriptRowRemainsCompactAndKeepsExplicitRunAndEditTargets() {
-        ActivityScenario.launch<MainInsetsFixtureActivity>(MainInsetsFixtureActivity.configuredIntent(context, 1f, false, 390)).use { scenario ->
-            scenario.onActivity { activity ->
-                val root = activity.findViewById<ViewGroup>(R.id.native_shell)
-                activity.navigation.select(ShellNavigation.Destination.SCRIPTS)
-                val list = root.findViewById<LinearLayout>(R.id.scripts_list)
-                val script = SavedActionScript(41, "Synthetic script")
-                val events = mutableListOf<String>()
-                ActionsViewRenderer.renderScripts(activity, list, listOf(script), false, false, false,
-                    object : ActionsViewRenderer.ScriptListener {
-                        override fun onRun(view: View, selected: SavedActionScript) { assertEquals(script, selected); events += "run" }
-                        override fun onEdit(view: View, selected: SavedActionScript) { assertEquals(script, selected); events += "edit" }
-                    })
-                measure(root, 390, 800)
-                val density = root.resources.displayMetrics.density
-                val card = list.getChildAt(0) as ViewGroup
-                assertTrue("normal script row uses one 48dp control row plus 8dp insets", card.height <= 66 * density)
-                val content = card.getChildAt(0) as LinearLayout
-                assertEquals(LinearLayout.HORIZONTAL, content.orientation)
-                val controls = content.getChildAt(1) as ViewGroup
-                assertEquals(2, controls.childCount)
-                assertTrue(events.isEmpty())
-                for (i in 0 until controls.childCount) {
-                    val button = controls.getChildAt(i) as Button
-                    assertTrue(button.width >= 48 * density - 1)
-                    assertTrue(button.height >= 48 * density - 1)
-                    assertTrue(button.contentDescription.isNotBlank())
-                    button.performClick()
+        for (dark in listOf(false, true)) {
+            for ((fontScale, width, height) in listOf(Triple(1f, 390, 800), Triple(1.5f, 320, 720))) {
+                ActivityScenario.launch<MainInsetsFixtureActivity>(
+                    MainInsetsFixtureActivity.configuredIntent(context, fontScale, dark, width),
+                ).use { scenario ->
+                    scenario.onActivity { activity ->
+                        val root = activity.findViewById<ViewGroup>(R.id.native_shell)
+                        activity.navigation.select(ShellNavigation.Destination.SCRIPTS)
+                        val list = root.findViewById<LinearLayout>(R.id.scripts_list)
+                        val fullName = "Synthetic script name that wraps without losing its accessible text"
+                        val script = SavedActionScript(41, fullName)
+                        val events = mutableListOf<String>()
+                        ActionsViewRenderer.renderScripts(activity, list, listOf(script), false, false, false,
+                            object : ActionsViewRenderer.ScriptListener {
+                                override fun onRun(view: View, selected: SavedActionScript) {
+                                    assertEquals(script, selected); events += "run"
+                                }
+                                override fun onEdit(view: View, selected: SavedActionScript) {
+                                    assertEquals(script, selected); events += "edit"
+                                }
+                            })
+                        measure(root, width, height)
+                        val density = root.resources.displayMetrics.density
+                        val card = list.getChildAt(0) as ViewGroup
+                        val maxCardDp = if (fontScale == 1f) 68 else 96
+                        assertTrue("script row remains compact while accommodating fontScale=$fontScale " +
+                            "(measured ${card.height / density}dp, maximum ${maxCardDp}dp)",
+                            card.height <= maxCardDp * density)
+                        val cardBounds = Rect()
+                        assertTrue("script card is visible", card.getGlobalVisibleRect(cardBounds))
+                        assertTrue("script card stays within the viewport", cardBounds.left >= 0 && cardBounds.right <= width * density)
+                        val content = card.getChildAt(0) as LinearLayout
+                        assertEquals(LinearLayout.HORIZONTAL, content.orientation)
+                        val labels = content.getChildAt(0) as ViewGroup
+                        val title = labels.getChildAt(0) as TextView
+                        assertEquals(2, title.maxLines)
+                        assertEquals(android.text.TextUtils.TruncateAt.END, title.ellipsize)
+                        assertEquals(activity.getString(R.string.ng_script_named, fullName), title.contentDescription)
+                        assertEquals(activity.resources.getQuantityString(R.plurals.ng_scripts_count, 1, 1),
+                            root.findViewById<TextView>(R.id.scripts_count).text.toString())
+                        val controls = content.getChildAt(1) as ViewGroup
+                        assertEquals(2, controls.childCount)
+                        assertTrue(events.isEmpty())
+                        for ((index, label) in listOf("Run", "Edit").withIndex()) {
+                            val button = controls.getChildAt(index) as com.google.android.material.button.MaterialButton
+                            assertEquals(label, button.text.toString())
+                            assertNotNull("script action keeps a visible icon and text label", button.icon)
+                            assertTrue(button.width >= 48 * density - 1)
+                            assertTrue(button.height >= 48 * density - 1)
+                            assertTrue(button.contentDescription.isNotBlank())
+                            val bounds = Rect()
+                            assertTrue("script action is visible", button.getGlobalVisibleRect(bounds))
+                            assertTrue("script action remains within the viewport",
+                                bounds.left >= 0 && bounds.right <= width * density)
+                            button.performClick()
+                        }
+                        assertEquals(listOf("run", "edit"), events)
+                    }
                 }
-                assertEquals(listOf("run", "edit"), events)
             }
         }
     }

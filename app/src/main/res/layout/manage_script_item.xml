@@ -1,41 +1,81 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:fillViewport="true">
+    android:fillViewport="false"
+    android:saveEnabled="false">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:padding="16dp"
-        android:orientation="vertical">
+        android:orientation="vertical"
+        android:padding="12dp">
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:labelFor="@id/new_script_alias"
-            android:text="@string/ng_script_name" />
+            android:text="@string/ng_script_name"
+            android:textColor="@color/ng_text_primary"
+            android:textSize="12sp"
+            android:fontFamily="sans-serif-medium" />
 
-        <EditText
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/new_script_alias_layout"
+            style="@style/Widget.XMouseNg.TextInputLayout"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:minHeight="48dp"
-            android:inputType="textCapSentences"
-            android:id="@+id/new_script_alias" />
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="12dp"
+            app:hintEnabled="false">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/new_script_alias"
+                style="@style/Widget.XMouseNg.TextInputEditText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textCapSentences|textNoSuggestions"
+                android:minHeight="48dp"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:saveEnabled="false"
+                android:textSize="14sp" />
+        </com.google.android.material.textfield.TextInputLayout>
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:labelFor="@id/new_script_command"
-            android:text="@string/ng_script_command" />
+            android:text="@string/ng_script_command"
+            android:textColor="@color/ng_text_primary"
+            android:textSize="12sp"
+            android:fontFamily="sans-serif-medium" />
 
-        <EditText
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/new_script_command_layout"
+            style="@style/Widget.XMouseNg.TextInputLayout"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:minHeight="96dp"
-            android:gravity="top|start"
-            android:inputType="textMultiLine|textNoSuggestions"
-            android:id="@+id/new_script_command" />
+            android:layout_marginTop="4dp"
+            app:hintEnabled="false">
 
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/new_script_command"
+                style="@style/Widget.XMouseNg.TextInputEditText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:gravity="top|start"
+                android:importantForAutofill="no"
+                android:inputType="textMultiLine|textNoSuggestions"
+                android:minHeight="112dp"
+                android:paddingStart="12dp"
+                android:paddingTop="10dp"
+                android:paddingEnd="12dp"
+                android:paddingBottom="10dp"
+                android:saveEnabled="false"
+                android:textSize="13sp" />
+        </com.google.android.material.textfield.TextInputLayout>
     </LinearLayout>
 </ScrollView>
