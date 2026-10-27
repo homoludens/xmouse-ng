@@ -2,14 +2,18 @@
 
 Use an Android phone or tablet to control a Linux desktop over SSH.
 
-XMouse-NG **2.1.0 (26)** keeps the original `com.stripe1.xmouse` application identity and Android 8/API 26 minimum. The native interface has **Touchpad**, **Keys**, and **Actions** destinations; the computer header opens Computers, and the settings icon opens Settings. See [release and upgrade guidance](docs/releasing-xmouse-ng.md) for signing compatibility, data preservation, and validation limits.
+XMouse-NG **2.1.0 (26)** keeps the original `com.stripe1.xmouse` application identity and Android 8/API 26 minimum. The native interface has three tabs: **Touchpad**, **Actions**, and **Scripts**. The shared inline text composer and explicit Send are available on Touchpad and Actions, and hidden (without losing the in-memory draft) on Scripts. Actions uses a ten-column title-only grid that retains saved order, widths, and colors. The computer header opens Computers; the navigation drawer contains computer management and settings. Actions can also show read-only Common, Navigate, Media, and F1–F12 presets without changing saved layouts. See [release and upgrade guidance](docs/releasing-xmouse-ng.md) for signing compatibility, data preservation, and validation limits.
 
 ## Features
 
 - Control the desktop with the on-screen keyboard and mouse; send volume-key shortcuts and other special keys.
 - Create custom keyboard buttons and run saved scripts or custom SSH commands.
-- Tap **Send clipboard to Linux** to send plain text from Android's clipboard to the connected Linux desktop clipboard.
+- On Touchpad, tap the clipboard control in the five-button quick-key row to send plain text from Android's clipboard to the connected Linux desktop clipboard.
 - Free with no ads.
+
+## Type text
+
+Use the shared **Type on computer** composer from **Touchpad** or **Actions**. It accepts multiline text and paste; tap the adjacent **Send** button or the keyboard's **Send** action to send nonblank text while connected. Unsent text is shared in memory across tabs, including while hidden on **Scripts**, and is not saved as a draft.
 
 ## Requirements
 
@@ -17,7 +21,11 @@ XMouse-NG **2.1.0 (26)** keeps the original `com.stripe1.xmouse` application ide
 - A Linux host reachable by SSH, with an OpenSSH server and the existing `xdotool` (X11) or `ydotool` (Wayland) command setup. XMouse-NG sends commands directly over SSH; it needs no XMouse-specific replacement daemon or cloud account.
 - For clipboard sharing, the Linux user needs `wl-copy` on a usable Wayland desktop, or `xclip`/`xsel` on X11. XMouse-NG does not install clipboard tools; a usable desktop session/display must be available.
 
-Clipboard sharing is a deliberate, one-way action: tap the toolbar button while connected to send the current plain-text clip. XMouse-NG does not monitor the clipboard in the background, send clipboard text as simulated typing, or replay it after a disconnect. Empty, non-text, and over-64-KiB clips are not sent.
+Clipboard sharing is a deliberate, one-way action: on **Touchpad**, tap **Send clipboard to computer** while connected to send the current plain-text clip. XMouse-NG does not monitor the clipboard in the background, send clipboard text as simulated typing, or replay it after a disconnect. Empty, non-text, and over-64-KiB clips are not sent.
+
+## Saved scripts
+
+Open the **Scripts** tab to review saved SSH scripts. Navigation to Scripts never runs a script; tap its explicit **Run** action to execute it. Use **Add script** or **Manage** to open the existing script manager, and use a row's **Edit** action to update a saved script. The shared text composer is hidden on this tab, but its unsent in-memory draft remains available when returning to Touchpad or Actions.
 
 ## Connect to a host
 
@@ -27,21 +35,21 @@ On first connection, XMouse-NG shows the SSH host-key fingerprint before sending
 
 ## Private keys and restored credentials
 
-For key authentication, enable **Use an SSH Key** in **Settings → Advanced**. For an encrypted key, set **Optional Key Passphrase** first, then tap **Private Key** and choose the file with Android's document picker. XMouse-NG keeps a protected app-private copy, so the source document can later be moved or removed.
+For key authentication, open **hamburger → Authentication & SSH settings** and enable **Use an SSH Key**. For an encrypted key, set **Optional Key Passphrase** first, then tap **Private Key** and choose the file with Android's document picker. XMouse-NG keeps a protected app-private copy, so the source document can later be moved or removed.
 
-An old external key path may no longer be readable, and a device-key loss or backup restore may leave host metadata without usable secrets. You may need to select the private key again or re-enter passwords/passphrases. Secret bytes are not included in XMouse-NG's metadata backup, and there is no plaintext credential backup. If XMouse-NG offers a one-time credential re-entry prompt, the value is used only for that connection and is not saved. To save credentials again, edit the computer in **Computers**, or use **Settings → Advanced** for global key/passphrase controls, as applicable. A blank replacement password on an existing computer means unchanged.
+An old external key path may no longer be readable, and a device-key loss or backup restore may leave host metadata without usable secrets. You may need to select the private key again or re-enter passwords/passphrases. Secret bytes are not included in XMouse-NG's metadata backup, and there is no plaintext credential backup. If XMouse-NG offers a one-time credential re-entry prompt, the value is used only for that connection and is not saved. To save credentials again, edit the computer in **Computers**, or use **hamburger → Authentication & SSH settings** for global key/passphrase controls, as applicable. A blank replacement password on an existing computer means unchanged.
 
 ## Keep a session while switching apps
 
-Start a session from XMouse-NG while it is visible. With the device awake and the Android process, network, and SSH host still available, the foreground session can remain active while you switch apps; returning to XMouse-NG reattaches to it. The session notification provides **Open controls** and **Disconnect**. On Android 13 (API 33) and later, notification permission controls whether those actions appear in the notification drawer. If permission is denied, Android still discloses the foreground service in Task Manager, and **Session controls** in XMouse-NG still provides an in-app Disconnect option.
+Start a session from XMouse-NG while it is visible. With the device awake and the Android process, network, and SSH host still available, the foreground session can remain active while you switch apps; returning to XMouse-NG reattaches to it. Use the prominent **Disconnect** button in the app header, or **Open controls** and **Disconnect** in the session notification when available. On Android 13 (API 33) and later, notification permission controls whether those notification actions appear. If permission is denied, Android still discloses the foreground service in Task Manager, and the session remains controllable with the header **Disconnect** button.
 
-Use **Disconnect** from the notification or **Session controls** when finished. Screen-off, extended background, process termination, and force-stop can interrupt a session; indefinite connectivity or automatic restart is not promised.
+Use **Disconnect** from the app header or notification when finished. Screen-off, extended background, process termination, and force-stop can interrupt a session; indefinite connectivity or automatic restart is not promised.
 
 ## Existing keyboard layouts
 
 On upgrade, each valid legacy active layout and each of the three preset CSV files is migrated into its own named layout. The original CSV files remain unchanged as recovery sources. If a source is unreadable or malformed, XMouse-NG warns and retains it rather than silently replacing it with defaults.
 
-Open **Actions → More → Manage layouts** to create and name layouts, rename or duplicate any profile, select/load it for normal controls, or delete it after confirmation. Profiles are identified independently of their names, so duplicate names are allowed; the manager lists all profiles, including the migrated active layout and all three presets, without a three-layout limit. At least one layout must remain. Use **Actions → Edit** for action forms or **More → Advanced editor** for ten-column reorder, drafts, and history. Existing custom widths, colors, and commands remain stored unchanged.
+Use the **Actions** layout picker to choose one of four read-only virtual presets—Common, Navigate, Media, or F1–F12—or a saved layout. Presets dispatch fixed supported key/xdotool commands and do not create or modify repository data. Profiles are identified independently of their names, so duplicate names are allowed; existing custom widths, colors, commands, and saved order remain unchanged. Select **Actions → Edit** to enter the advanced ten-column editor, where **Add action** creates a custom button; the Actions landing page does not expose action creation.
 
 ## Optional: find computers with Avahi
 
