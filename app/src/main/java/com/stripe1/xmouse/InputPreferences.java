@@ -8,6 +8,7 @@ public final class InputPreferences {
     public static final String POINTER_SPEED = "sensitivity_list";
     public static final String INVERT_SCROLL = "mouse_invert_scroll";
     public static final String KEYBOARD_AUTO_CLEAR = "keyboard_autoclear";
+    public static final String KEYBOARD_SEND_ENTER_AFTER_TEXT = "keyboard_send_enter_after_text";
     public static final float DEFAULT_POINTER_SPEED = 1.0f;
     private static final String[] POINTER_CHOICES = {
             ".25f", ".3333f", ".5f", "1.0f", "1.5f", "2.0f", "3.0f"
@@ -16,11 +17,14 @@ public final class InputPreferences {
     public final float pointerSpeed;
     public final boolean invertScroll;
     public final boolean keyboardAutoClear;
+    public final boolean keyboardSendEnterAfterText;
 
-    private InputPreferences(float pointerSpeed, boolean invertScroll, boolean keyboardAutoClear) {
+    private InputPreferences(float pointerSpeed, boolean invertScroll, boolean keyboardAutoClear,
+                             boolean keyboardSendEnterAfterText) {
         this.pointerSpeed = pointerSpeed;
         this.invertScroll = invertScroll;
         this.keyboardAutoClear = keyboardAutoClear;
+        this.keyboardSendEnterAfterText = keyboardSendEnterAfterText;
     }
 
     public static InputPreferences read(Map<String, ?> saved) {
@@ -34,7 +38,8 @@ public final class InputPreferences {
             } catch (NumberFormatException ignored) { /* Invalid data uses the runtime default only. */ }
         }
         return new InputPreferences(speed, bool(saved.get(INVERT_SCROLL), false),
-                bool(saved.get(KEYBOARD_AUTO_CLEAR), true));
+                bool(saved.get(KEYBOARD_AUTO_CLEAR), true),
+                bool(saved.get(KEYBOARD_SEND_ENTER_AFTER_TEXT), false));
     }
 
     private static boolean bool(Object value, boolean fallback) {

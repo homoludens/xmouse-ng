@@ -66,7 +66,8 @@ class ComputerEditorActivity : AppCompatActivity(), ConnectionProbe.Listener, Se
         SystemWindowInsets.applyTo(window, findViewById(R.id.computer_editor_root))
         setSupportActionBar(findViewById<Toolbar>(R.id.computer_editor_toolbar))
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
-        title = if (intent.hasExtra(HOST_ID)) "Edit computer" else "Add computer"
+        title = getString(if (intent.hasExtra(HOST_ID)) R.string.computer_editor_edit_title
+            else R.string.computer_editor_add_title)
         repository = AndroidCredentials.get(this)
         probe = AndroidComputerProbe(this)
         credentialUi = CredentialUi(this)
@@ -77,7 +78,7 @@ class ComputerEditorActivity : AppCompatActivity(), ConnectionProbe.Listener, Se
         }
         findViewById<View>(R.id.computer_advanced).setOnClickListener {
             val port = findViewById<View>(R.id.computer_port_field)
-            port.visibility = if (port.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            setAdvancedVisible(port.visibility != View.VISIBLE)
         }
         findViewById<View>(R.id.computer_save).setOnClickListener { save() }
         findViewById<View>(R.id.computer_test).setOnClickListener {
@@ -133,15 +134,35 @@ class ComputerEditorActivity : AppCompatActivity(), ConnectionProbe.Listener, Se
             R.id.new_host_ip to originalEndpoint, R.id.new_host_username to host?.user.orEmpty(),
             R.id.new_host_port to (host?.port ?: intent.getStringExtra(PORT) ?: "22"))
         defaults.forEach { (id, value) -> field(id).setText(restored?.getString("field_$id") ?: value) }
-        if (restored?.getBoolean("advanced") == true) findViewById<View>(R.id.computer_port_field).visibility = View.VISIBLE
+        setAdvancedVisible(restored?.getBoolean("advanced") == true)
         restored = null
-        box(R.id.computer_password_field).helperText = if (host == null) "Used only with global password authentication."
-            else if (host.credentialReentryRequired) "Leave blank to keep the backup's password re-entry requirement."
-            else "Leave blank to keep the saved password unchanged."
+        val hasSavedPassword = host?.passwordReference != null || host?.legacyPasswordPresent == true
+        field(R.id.new_host_password).hint = getString(if (hasSavedPassword)
+            R.string.computer_editor_password_saved_hint else R.string.computer_editor_password_new_hint)
+        box(R.id.computer_password_field).helperText = when {
+            host == null -> "Used only with global password authentication."
+            host.credentialReentryRequired -> "Leave blank to keep the backup's password re-entry requirement."
+            hasSavedPassword -> "Leave blank to keep the saved password unchanged."
+            else -> "Leave blank to keep password authentication unset."
+        }
         locator?.let { box(R.id.computer_host_field).helperText = "Discovered service: ${it.instanceName}. Keep this field unchanged to resolve the service afresh." }
         findViewById<View>(R.id.computer_delete).visibility = if (host == null) View.GONE else View.VISIBLE
-        findViewById<Button>(R.id.computer_save).text = if (host == null) "Save computer" else "Save changes"
+        findViewById<Button>(R.id.computer_save).setText(if (host == null)
+            R.string.computer_editor_save_new else R.string.computer_editor_save_edit)
         loaded = true; controls()
+    }
+
+    private fun setAdvancedVisible(visible: Boolean) {
+        val visibility = if (visible) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.computer_port_field).visibility = visibility
+        findViewById<View>(R.id.computer_port_label).visibility = visibility
+        findViewById<View>(R.id.computer_port_help).visibility = visibility
+        findViewById<Button>(R.id.computer_advanced).apply {
+            isSelected = visible
+            setText(if (visible) R.string.computer_editor_advanced_hide else R.string.computer_editor_advanced)
+            contentDescription = getString(if (visible) R.string.computer_editor_advanced_hide
+                else R.string.computer_editor_advanced)
+        }
     }
 
     override fun onSaveInstanceState(out: Bundle) {
@@ -164,7 +185,7 @@ class ComputerEditorActivity : AppCompatActivity(), ConnectionProbe.Listener, Se
         val user = text(R.id.new_host_username)
         if (!ComputerDraft.validUsername(user)) { box(R.id.computer_user_field).error = "Enter a username without leading or trailing whitespace"; valid = false }
         val port = try { Endpoint.parsePort(text(R.id.new_host_port)) } catch (_: IllegalArgumentException) {
-            findViewById<View>(R.id.computer_port_field).visibility = View.VISIBLE
+            setAdvancedVisible(true)
             box(R.id.computer_port_field).error = "Port must be between 1 and 65535"; valid = false; 22
         }
         val entered = text(R.id.new_host_ip)
@@ -260,7 +281,10 @@ class ComputerEditorActivity : AppCompatActivity(), ConnectionProbe.Listener, Se
     }
     private fun controls() {
         val busy = probe.owner.busy || pendingPermission
-        findViewById<Button>(R.id.computer_test).apply { isEnabled = loaded && !saving && !probe.owner.blocked; text = if (busy) "Cancel test" else "Test connection / Retry" }
+        findViewById<Button>(R.id.computer_test).apply {
+            isEnabled = loaded && !saving && !probe.owner.blocked
+            text = if (busy) "Cancel test" else getString(R.string.computer_editor_test)
+        }
         findViewById<View>(R.id.computer_save).isEnabled = loaded && !saving && !busy
         findViewById<View>(R.id.computer_delete).isEnabled = loaded && !saving && !busy
     }

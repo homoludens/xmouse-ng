@@ -2,6 +2,7 @@ package com.stripe1.xmouse
 
 import android.content.Context
 import android.content.Intent
+import android.preference.PreferenceManager
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -20,9 +21,10 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** Production binding, unique fixture preferences only. Never starts Main/settings credential code. */
 @RunWith(AndroidJUnit4::class)
 class NativeSettingsAndroidTest {
+    private val context get() = ApplicationProvider.getApplicationContext<android.content.Context>()
+
     @Test fun savedBindingsChoicesBackAndAdvancedRemainReachableWithInsetsAndLargeFontsInBothThemes() {
         for (dark in listOf(false, true)) {
             val intent = MainInsetsFixtureActivity.configuredIntent(ApplicationProvider.getApplicationContext(), 1.5f, dark)
@@ -97,7 +99,6 @@ class NativeSettingsAndroidTest {
                             (root.background as android.graphics.drawable.ColorDrawable).color)
                         binding.dismissDialog()
                     } finally {
-                        // Only this test's unique preference file is removed; no default preferences/vault/DB access.
                         activity.deleteSharedPreferences(preferenceName)
                     }
                 }
@@ -142,6 +143,74 @@ class NativeSettingsAndroidTest {
                     MainActivity.setting_invert_scroll = oldInvert
                 }
             }
+        }
+    }
+
+    @Test fun drawerSectionsShowOnlyTheirOwnControlsAndSendEnterPersistsAcrossReopen() {
+        val preferences = PreferenceManager.getDefaultSharedPreferences(context)
+        val keys = listOf(
+            InputPreferences.POINTER_SPEED to preferences.getString(InputPreferences.POINTER_SPEED, null),
+            InputPreferences.INVERT_SCROLL to if (preferences.contains(InputPreferences.INVERT_SCROLL))
+                preferences.getBoolean(InputPreferences.INVERT_SCROLL, false) else null,
+            InputPreferences.KEYBOARD_AUTO_CLEAR to if (preferences.contains(InputPreferences.KEYBOARD_AUTO_CLEAR))
+                preferences.getBoolean(InputPreferences.KEYBOARD_AUTO_CLEAR, true) else null,
+            InputPreferences.KEYBOARD_SEND_ENTER_AFTER_TEXT to if (preferences.contains(InputPreferences.KEYBOARD_SEND_ENTER_AFTER_TEXT))
+                preferences.getBoolean(InputPreferences.KEYBOARD_SEND_ENTER_AFTER_TEXT, false) else null,
+        )
+        try {
+            preferences.edit().putBoolean(InputPreferences.KEYBOARD_SEND_ENTER_AFTER_TEXT, false).commit()
+            val keyboardIntent = Intent(context, NativeSettingsActivity::class.java)
+                .putExtra(NativeSettingsActivity.EXTRA_SECTION, NativeSettingsActivity.SECTION_KEYBOARD)
+            ActivityScenario.launch<NativeSettingsActivity>(keyboardIntent).use { scenario ->
+                scenario.onActivity { activity ->
+                    assertEquals("Keyboard settings", activity.findViewById<android.widget.TextView>(R.id.settings_title).text.toString())
+                    assertEquals(android.view.View.GONE, activity.findViewById<android.view.View>(R.id.settings_pointer_section).visibility)
+                    assertEquals(android.view.View.VISIBLE, activity.findViewById<android.view.View>(R.id.settings_keyboard_section).visibility)
+                    assertEquals(android.view.View.GONE, activity.findViewById<android.view.View>(R.id.settings_advanced_section).visibility)
+                    val sendEnter = activity.findViewById<SwitchMaterial>(R.id.settings_send_enter)
+                    assertFalse(sendEnter.isChecked)
+                    sendEnter.performClick()
+                    assertTrue(sendEnter.isChecked)
+                    assertTrue(preferences.getBoolean(InputPreferences.KEYBOARD_SEND_ENTER_AFTER_TEXT, false))
+                }
+            }
+            ActivityScenario.launch<NativeSettingsActivity>(keyboardIntent).use { scenario ->
+                scenario.onActivity { activity ->
+                    assertTrue(activity.findViewById<SwitchMaterial>(R.id.settings_send_enter).isChecked)
+                    assertTrue(activity.findViewById<SwitchMaterial>(R.id.settings_auto_clear).isShown)
+                }
+            }
+
+            val touchpadIntent = Intent(context, NativeSettingsActivity::class.java)
+                .putExtra(NativeSettingsActivity.EXTRA_SECTION, NativeSettingsActivity.SECTION_POINTER)
+            ActivityScenario.launch<NativeSettingsActivity>(touchpadIntent).use { scenario ->
+                scenario.onActivity { activity ->
+                    assertEquals("Touchpad settings", activity.findViewById<android.widget.TextView>(R.id.settings_title).text.toString())
+                    assertEquals(android.view.View.VISIBLE, activity.findViewById<android.view.View>(R.id.settings_pointer_section).visibility)
+                    assertEquals(android.view.View.GONE, activity.findViewById<android.view.View>(R.id.settings_keyboard_section).visibility)
+                    assertEquals(android.view.View.GONE, activity.findViewById<android.view.View>(R.id.settings_advanced_section).visibility)
+                    assertTrue(activity.findViewById<SwitchMaterial>(R.id.settings_natural_scroll).isShown)
+                }
+            }
+
+            val allIntent = Intent(context, NativeSettingsActivity::class.java)
+            ActivityScenario.launch<NativeSettingsActivity>(allIntent).use { scenario ->
+                scenario.onActivity { activity ->
+                    assertEquals("Settings", activity.findViewById<android.widget.TextView>(R.id.settings_title).text.toString())
+                    assertTrue(activity.findViewById<android.view.View>(R.id.settings_pointer_section).isShown)
+                    assertTrue(activity.findViewById<android.view.View>(R.id.settings_keyboard_section).isShown)
+                    assertTrue(activity.findViewById<android.view.View>(R.id.settings_advanced).isShown)
+                }
+            }
+        } finally {
+            val editor = preferences.edit()
+            for ((key, value) in keys) when (value) {
+                null -> editor.remove(key)
+                is String -> editor.putString(key, value)
+                is Boolean -> editor.putBoolean(key, value)
+                else -> editor.remove(key)
+            }
+            editor.commit()
         }
     }
 }

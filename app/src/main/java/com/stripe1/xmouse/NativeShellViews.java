@@ -1,50 +1,72 @@
 package com.stripe1.xmouse;
 
 import android.content.res.ColorStateList;
-import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
-import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.HorizontalScrollView;
-import android.widget.LinearLayout;
 import android.widget.TextView;
-import com.google.android.material.button.MaterialButton;
-import com.google.android.material.button.MaterialButtonToggleGroup;
+import androidx.core.view.GravityCompat;
+import androidx.drawerlayout.widget.DrawerLayout;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
 import com.google.android.material.shape.ShapeAppearanceModel;
-import java.util.List;
 
 /** Shared production/isolated-fixture rendering. Input is retired by ShellNavigation before render. */
 public final class NativeShellViews {
-    public interface KeyButtonBinder {
-        void bind(View button, String command);
-    }
-
-    private static final KeyButtonBinder NO_KEY_BINDER = (button, command) -> { };
-
     private NativeShellViews() { }
 
     public static void bind(View root, ShellNavigation navigation) {
-        bind(root, navigation, NO_KEY_BINDER);
-    }
-
-    public static void bind(View root, ShellNavigation navigation, KeyButtonBinder keyButtonBinder) {
-        // Keep the reference's compact header at normal scale; give status its own row
-        // only when narrow widths or enlarged text need the additional room.
         android.content.res.Configuration configuration = root.getResources().getConfiguration();
-        LinearLayout headerControls = root.findViewById(R.id.header_controls);
-        boolean compact = configuration.screenWidthDp < 360 || configuration.fontScale > 1.2f;
-        ((TextView) root.findViewById(R.id.computer_name)).setMaxLines(compact ? 2 : 1);
-        TextView status = root.findViewById(R.id.connection_status);
-        status.setTextSize(compact ? 10 : 11);
-        status.setMaxWidth(dp(root, compact ? 112 : 100));
-        headerControls.setOrientation(compact ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
-        if (compact) {
-            ViewGroup.LayoutParams params = headerControls.getLayoutParams();
-            params.width = dp(root, 112);
-            headerControls.setLayoutParams(params);
+        ((TextView) root.findViewById(R.id.computer_name)).setMaxLines(1);
+        View drawerContent = root.getRootView().findViewById(R.id.shell_navigation_drawer);
+        DrawerLayout drawer = root.getRootView().findViewById(R.id.main_safe_area);
+        if (drawerContent != null && drawer != null) {
+            ViewGroup.LayoutParams params = drawerContent.getLayoutParams();
+            params.width = dp(root, Math.min(318, Math.max(240, configuration.screenWidthDp - 42)));
+            drawerContent.setLayoutParams(params);
+            View headerMenu = root.findViewById(R.id.header_menu);
+            headerMenu.setOnClickListener(v -> {
+                if (drawer.isDrawerOpen(GravityCompat.START)) {
+                    drawer.closeDrawer(GravityCompat.START);
+                } else {
+                    if (navigation.topOverlay() != ShellNavigation.Overlay.MENU)
+                        navigation.open(ShellNavigation.Overlay.MENU);
+                    drawer.openDrawer(GravityCompat.START);
+                }
+            });
+            root.getRootView().findViewById(R.id.drawer_close).setOnClickListener(
+                    v -> drawer.closeDrawer(GravityCompat.START));
+            drawer.addDrawerListener(new DrawerLayout.SimpleDrawerListener() {
+                @Override public void onDrawerOpened(View drawerView) {
+                    if (navigation.topOverlay() != ShellNavigation.Overlay.MENU)
+                        navigation.open(ShellNavigation.Overlay.MENU);
+                    View first = root.getRootView().findViewById(R.id.drawer_computers);
+                    if (first != null && !root.isInTouchMode()) first.requestFocus();
+                }
+
+                @Override public void onDrawerClosed(View drawerView) {
+                    if (navigation.topOverlay() == ShellNavigation.Overlay.MENU)
+                        navigation.close(ShellNavigation.Overlay.MENU);
+                    if (navigation.topOverlay() == ShellNavigation.Overlay.COMPUTERS) {
+                        View close = root.findViewById(R.id.overlay_close);
+                        if (!root.isInTouchMode()) close.post(() -> {
+                            if (navigation.topOverlay() == ShellNavigation.Overlay.COMPUTERS && close.isShown())
+                                close.requestFocus();
+                        });
+                    } else if (navigation.topOverlay() == null) {
+                        if (!root.isInTouchMode()) headerMenu.requestFocus();
+                    } else if (navigation.topOverlay() == ShellNavigation.Overlay.ACTION_EDIT) {
+                        if (!root.isInTouchMode()) headerMenu.requestFocus();
+                    }
+                }
+            });
         }
+        View shellOverlay = root.findViewById(R.id.shell_overlay);
+        View computersSheet = root.findViewById(R.id.computers_sheet);
+        shellOverlay.setOnClickListener(v -> {
+            if (navigation.topOverlay() == ShellNavigation.Overlay.COMPUTERS)
+                navigation.close(ShellNavigation.Overlay.COMPUTERS);
+        });
+        computersSheet.setOnClickListener(v -> { });
         BottomNavigationView bottom = root.findViewById(R.id.bottom_navigation);
         // A flat navigation surface must not acquire Material's dark elevation overlay.
         bottom.setBackground(new ColorDrawable(root.getContext().getColor(R.color.ng_surface)));
@@ -63,216 +85,67 @@ public final class NativeShellViews {
             return navigation.topOverlay() == null;
         });
         root.findViewById(R.id.computer_selector).setOnClickListener(v -> navigation.open(ShellNavigation.Overlay.COMPUTERS));
-        root.findViewById(R.id.type_on_computer).setOnClickListener(v -> navigation.open(ShellNavigation.Overlay.TYPING));
-        root.findViewById(R.id.keys_type).setOnClickListener(v -> navigation.open(ShellNavigation.Overlay.TYPING));
         root.findViewById(R.id.overlay_close).setOnClickListener(v -> navigation.closeTop());
-        root.findViewById(R.id.jsToggle).setOnClickListener(v -> navigation.setJoystick(true));
-        root.findViewById(R.id.js_jsToggle).setOnClickListener(v -> navigation.setJoystick(false));
-        MaterialButtonToggleGroup categories = root.findViewById(R.id.keys_category_group);
-        categories.addOnButtonCheckedListener((group, checkedId, checked) -> {
-            if (!checked || Boolean.TRUE.equals(group.getTag())) return;
-            KeyCatalog.Category category = categoryForId(checkedId);
-            if (category != null) navigation.selectKeyCategory(category);
-        });
-        render(root, navigation, keyButtonBinder);
+        render(root, navigation);
     }
 
     public static ShellNavigation.Destination destination(int id) {
-        if (id == R.id.nav_keys) return ShellNavigation.Destination.KEYS;
         if (id == R.id.nav_actions) return ShellNavigation.Destination.ACTIONS;
+        if (id == R.id.nav_scripts) return ShellNavigation.Destination.SCRIPTS;
         return ShellNavigation.Destination.TOUCHPAD;
     }
 
     public static void render(View root, ShellNavigation state) {
-        render(root, state, NO_KEY_BINDER);
+        render(root, state, false);
     }
 
-    public static void render(View root, ShellNavigation state, KeyButtonBinder keyButtonBinder) {
+    /** ACTION_EDIT is an inline mode unless an owned modal dialog is currently showing. */
+    public static void render(View root, ShellNavigation state, boolean modalActionEdit) {
         boolean overlay = state.topOverlay() != null;
-        boolean panel = state.topOverlay() == ShellNavigation.Overlay.COMPUTERS || state.topOverlay() == ShellNavigation.Overlay.TYPING;
+        boolean panel = state.topOverlay() == ShellNavigation.Overlay.COMPUTERS;
+        boolean blockingHeader = overlay && (state.topOverlay() != ShellNavigation.Overlay.ACTION_EDIT || modalActionEdit);
+        View shellOverlay = root.findViewById(R.id.shell_overlay);
+        boolean wasPanel = shellOverlay.getVisibility() == View.VISIBLE;
+        if (!panel && wasPanel) root.findViewById(R.id.overlay_close).clearFocus();
+        View computersSheet = root.findViewById(R.id.computers_sheet);
+        ViewGroup.LayoutParams sheetParams = computersSheet.getLayoutParams();
+        int availableHeight = root.getHeight() > 0 ? root.getHeight() : root.getResources().getDisplayMetrics().heightPixels;
+        sheetParams.height = Math.min(availableHeight, Math.max(dp(root, 320), Math.round(availableHeight * .82f)));
+        computersSheet.setLayoutParams(sheetParams);
         visible(root, R.id.destination_container, !panel);
+        visible(root, R.id.typing_dock, !panel && state.destination() != ShellNavigation.Destination.SCRIPTS);
         visible(root, R.id.shell_overlay, panel);
         visible(root, R.id.computers_content, state.topOverlay() == ShellNavigation.Overlay.COMPUTERS);
-        visible(root, R.id.typing_content, state.topOverlay() == ShellNavigation.Overlay.TYPING);
-        ((android.widget.TextView) root.findViewById(R.id.overlay_title)).setText(
-                state.topOverlay() == ShellNavigation.Overlay.TYPING ? R.string.ng_typing : R.string.ng_computers);
-        ((android.widget.TextView) root.findViewById(R.id.touchpad_title)).setText(
-                state.joystick() ? R.string.mouse_control_joystick_short : R.string.ng_touchpad);
+        ((TextView) root.findViewById(R.id.overlay_title)).setText(R.string.ng_computers);
         visible(root, R.id.touchpad_destination, state.destination() == ShellNavigation.Destination.TOUCHPAD);
-        root.findViewById(R.id.mouse).setVisibility(state.joystick() ? View.INVISIBLE : View.VISIBLE);
-        root.findViewById(R.id.js).setVisibility(state.joystick() ? View.VISIBLE : View.INVISIBLE);
-        visible(root, R.id.jsToggle, !state.joystick());
-        visible(root, R.id.keys_destination, state.destination() == ShellNavigation.Destination.KEYS);
-        renderKeyCategory(root, state, keyButtonBinder);
         visible(root, R.id.actions_destination, state.destination() == ShellNavigation.Destination.ACTIONS);
+        visible(root, R.id.scripts_destination, state.destination() == ShellNavigation.Destination.SCRIPTS);
         View header = root.findViewById(R.id.shell_header);
-        header.setImportantForAccessibility(overlay ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        header.setImportantForAccessibility(blockingHeader ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
                 : View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
         root.findViewById(R.id.computer_selector).setEnabled(!overlay);
-        root.findViewById(R.id.header_settings).setEnabled(!overlay);
-        root.findViewById(R.id.connection_status).setEnabled(!overlay);
-        root.findViewById(R.id.toolbar).setEnabled(!overlay);
-        // A parent's enabled flag does not disable Toolbar's child overflow button. Keep the
-        // popup anchor while its own menu is open, but remove background access behind layers.
-        root.findViewById(R.id.toolbar).setVisibility(overlay && state.topOverlay() != ShellNavigation.Overlay.MENU
-                ? View.INVISIBLE : View.VISIBLE);
+        root.findViewById(R.id.header_menu).setEnabled(!blockingHeader);
+        View connectionButton = root.findViewById(R.id.header_connection_button);
+        connectionButton.setClickable(!overlay);
+        connectionButton.setFocusable(!overlay);
         BottomNavigationView bottom = root.findViewById(R.id.bottom_navigation);
-        int selected = state.destination() == ShellNavigation.Destination.KEYS ? R.id.nav_keys
-                : state.destination() == ShellNavigation.Destination.ACTIONS ? R.id.nav_actions : R.id.nav_touchpad;
+        bottom.setImportantForAccessibility(overlay ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                : View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
+        int selected = state.destination() == ShellNavigation.Destination.ACTIONS ? R.id.nav_actions
+                : state.destination() == ShellNavigation.Destination.SCRIPTS ? R.id.nav_scripts : R.id.nav_touchpad;
         bottom.getMenu().findItem(selected).setChecked(true);
         for (int i = 0; i < bottom.getMenu().size(); i++) bottom.getMenu().getItem(i).setEnabled(!overlay);
-    }
-
-    private static void renderKeyCategory(View root, ShellNavigation state, KeyButtonBinder binder) {
-        MaterialButtonToggleGroup group = root.findViewById(R.id.keys_category_group);
-        int selectedId = categoryId(state.keyCategory());
-        if (group.getCheckedButtonId() != selectedId) {
-            group.setTag(Boolean.TRUE);
-            group.check(selectedId);
-            group.setTag(null);
+        if (panel && !wasPanel) {
+            View close = root.findViewById(R.id.overlay_close);
+            if (!root.isInTouchMode()) close.post(() -> {
+                if (root.findViewById(R.id.shell_overlay).getVisibility() == View.VISIBLE && close.isShown())
+                    close.requestFocus();
+            });
         }
-
-        LinearLayout content = root.findViewById(R.id.keys_catalog_content);
-        if (state.keyCategory().equals(content.getTag())) return;
-
-        // ShellNavigation retires the old KEYS capability before calling this renderer. Rebuild
-        // only when the category actually changes, then let its normal refresh hook issue a fresh one.
-        content.removeAllViews();
-        List<KeyCatalog.Section> sections = KeyCatalog.sections(state.keyCategory());
-        for (int sectionIndex = 0; sectionIndex < sections.size(); sectionIndex++) {
-            KeyCatalog.Section section = sections.get(sectionIndex);
-            if (!section.label().isEmpty()) {
-                TextView heading = new TextView(root.getContext());
-                heading.setText(section.label());
-                heading.setTextAppearance(R.style.TextAppearance_XMouseNg_KeySection);
-                heading.setPadding(0, dp(root, sectionIndex == 0 ? 20 : 15), 0, dp(root, 10));
-                content.addView(heading, new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-            }
-            int columns = state.keyCategory() == KeyCatalog.Category.COMMON &&
-                    root.getResources().getConfiguration().screenWidthDp >= 360 &&
-                    root.getResources().getConfiguration().fontScale <= 1.2f ? 3 : section.columns();
-            addSectionGrid(root, content, section, columns, binder);
+        else if (!panel && wasPanel) {
+            View selector = root.findViewById(R.id.computer_selector);
+            if (state.topOverlay() == null && !root.isInTouchMode()) selector.requestFocus();
         }
-        content.setTag(state.keyCategory());
-    }
-
-    private static void addSectionGrid(View root, LinearLayout content, KeyCatalog.Section section, int columns,
-                                       KeyButtonBinder binder) {
-        List<KeyCatalog.Entry> entries = section.entries();
-        int gap = root.getResources().getDimensionPixelSize(R.dimen.ng_grid_gap);
-        for (int start = 0; start < entries.size(); start += columns) {
-            LinearLayout row = new LinearLayout(root.getContext());
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setBaselineAligned(false);
-            LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            rowParams.bottomMargin = gap;
-            content.addView(row, rowParams);
-
-            int end = Math.min(start + columns, entries.size());
-            for (int i = start; i < end; i++) {
-                KeyCatalog.Entry entry = entries.get(i);
-                MaterialButton button = createKeyButton(root, entry);
-                binder.bind(button, entry.command());
-                LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(
-                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-                if (i > start) buttonParams.setMarginStart(gap);
-                row.addView(button, buttonParams);
-            }
-            // A short last row retains the same cell widths as the rows above it.
-            for (int i = end - start; i < columns; i++) {
-                LinearLayout.LayoutParams spacer = new LinearLayout.LayoutParams(0, 1, 1f);
-                spacer.setMarginStart(gap);
-                row.addView(new View(root.getContext()), spacer);
-            }
-        }
-    }
-
-    private static MaterialButton createKeyButton(View root, KeyCatalog.Entry entry) {
-        MaterialButton button = new MaterialButton(root.getContext());
-        boolean destructive = entry.destructive();
-        int background = root.getContext().getColor(destructive ? R.color.ng_danger_soft : R.color.ng_surface);
-        int foreground = root.getContext().getColor(destructive ? R.color.ng_danger : R.color.ng_text_primary);
-        int border = root.getContext().getColor(destructive ? R.color.ng_danger_soft : R.color.ng_border);
-        button.setText("key alt+Tab".equals(entry.command()) ? "Switch" : entry.label());
-        button.setContentDescription(entry.label());
-        button.setAllCaps(false);
-        button.setSingleLine(false);
-        button.setMaxLines(3);
-        button.setEllipsize(null);
-        button.setTextSize(12);
-        button.setLetterSpacing(0f);
-        button.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
-        button.setGravity(Gravity.CENTER);
-        button.setPadding(dp(root, 5), dp(root, 8), dp(root, 5), dp(root, 8));
-        button.setMinHeight(dp(root, 58));
-        button.setStateListAnimator(null);
-        button.setElevation(0f);
-        button.setInsetTop(0);
-        button.setInsetBottom(0);
-        button.setCornerRadius(dp(root, 12));
-        button.setStrokeWidth(dp(root, 1));
-        button.setStrokeColor(ColorStateList.valueOf(border));
-        button.setBackgroundTintList(ColorStateList.valueOf(background));
-        button.setTextColor(foreground);
-        int icon = keyIcon(entry.command());
-        if (icon != 0) {
-            button.setIconResource(icon);
-            button.setIconTint(ColorStateList.valueOf(foreground));
-            button.setIconSize(dp(root, 18));
-            button.setIconPadding(dp(root, 5));
-            button.setIconGravity(MaterialButton.ICON_GRAVITY_TEXT_TOP);
-        }
-        button.setId(legacyId(entry.command()));
-        return button;
-    }
-
-    private static int keyIcon(String command) {
-        switch (command) {
-            case "key super": return R.drawable.ic_ng_window;
-            case "key alt+Tab": return R.drawable.ic_ng_switch;
-            case "xdotool windowminimize $(xdotool getactivewindow)": return R.drawable.ic_ng_minimize;
-            case "xdotool windowsize $(xdotool getactivewindow) 100% 100%": return R.drawable.ic_ng_maximize;
-            case "key alt+F4": return R.drawable.ic_ng_close;
-            case "key ctrl+c": return R.drawable.ic_ng_copy;
-            case "key ctrl+x": return R.drawable.ic_ng_cut;
-            case "key ctrl+v": return R.drawable.ic_ng_paste;
-            case "key ctrl+z": return R.drawable.ic_ng_undo;
-            case "key ctrl+y": return R.drawable.ic_ng_redo;
-            case "key ctrl+a": return R.drawable.ic_ng_select_all;
-            case "key ctrl+n": return R.drawable.ic_ng_file_new;
-            case "key ctrl+o": return R.drawable.ic_ng_folder;
-            case "key ctrl+s": return R.drawable.ic_ng_save;
-            case "key ctrl+f": return R.drawable.ic_ng_find;
-            case "key ctrl+p": return R.drawable.ic_ng_print;
-            default: return 0;
-        }
-    }
-
-    private static int legacyId(String command) {
-        if ("key Escape".equals(command)) return R.id.key_escape;
-        if ("key alt+Tab".equals(command)) return R.id.key_switch;
-        if ("key super".equals(command)) return R.id.key_super;
-        return View.generateViewId();
-    }
-
-    private static int categoryId(KeyCatalog.Category category) {
-        switch (category) {
-            case COMMON: return R.id.keys_category_common;
-            case NAVIGATE: return R.id.keys_category_navigate;
-            case MEDIA: return R.id.keys_category_media;
-            case FUNCTION: return R.id.keys_category_function;
-            default: throw new IllegalArgumentException("unsupported Keys category");
-        }
-    }
-
-    private static KeyCatalog.Category categoryForId(int id) {
-        if (id == R.id.keys_category_common) return KeyCatalog.Category.COMMON;
-        if (id == R.id.keys_category_navigate) return KeyCatalog.Category.NAVIGATE;
-        if (id == R.id.keys_category_media) return KeyCatalog.Category.MEDIA;
-        if (id == R.id.keys_category_function) return KeyCatalog.Category.FUNCTION;
-        return null;
     }
 
     private static int dp(View view, int value) {

@@ -1,0 +1,25 @@
+<resources>
+    <string name="computer_editor_add_title">Add computer</string>
+    <string name="computer_editor_edit_title">Edit computer</string>
+    <string name="computer_editor_back">Back</string>
+    <string name="computer_editor_display_name">Display name (optional)</string>
+    <string name="computer_editor_display_name_hint">My Linux computer</string>
+    <string name="computer_editor_host">Hostname or IP address</string>
+    <string name="computer_editor_host_hint">192.168.1.100</string>
+    <string name="computer_editor_username">Username</string>
+    <string name="computer_editor_username_hint">Your Linux username</string>
+    <string name="computer_editor_password">Password</string>
+    <string name="computer_editor_password_new_hint">SSH password</string>
+    <string name="computer_editor_password_saved_hint">Leave blank to keep the saved password</string>
+    <string name="computer_editor_advanced">Advanced · SSH port</string>
+    <string name="computer_editor_advanced_hide">Hide advanced</string>
+    <string name="computer_editor_port">SSH port</string>
+    <string name="computer_editor_port_hint">22</string>
+    <string name="computer_editor_port_help">Use the SSH server’s port. Most computers use 22.</string>
+    <string name="computer_editor_auth_settings">Authentication settings</string>
+    <string name="computer_editor_test">Test connection / Retry</string>
+    <string name="computer_editor_save_new">Save computer</string>
+    <string name="computer_editor_save_edit">Save changes</string>
+    <string name="computer_editor_delete">Delete computer</string>
+    <string name="computer_editor_test_help">Test checks SSH authentication and channel readiness. It does not save or run a command.</string>
+</resources>

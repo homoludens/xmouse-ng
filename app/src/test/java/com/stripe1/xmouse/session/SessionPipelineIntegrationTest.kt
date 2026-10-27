@@ -580,6 +580,7 @@ class SessionPipelineIntegrationTest {
                     f.controller.deactivateControlSurface(surface)
                     surface = null
                 }
+                override fun retireLocalText() {}
                 override fun render() {
                     assertFalse(f.controller.isControlSurfaceActive(oldSurface))
                     assertNull(surface)
@@ -591,11 +592,14 @@ class SessionPipelineIntegrationTest {
                     order += "refresh"
                 }
             })
-            navigation.select(com.stripe1.xmouse.ShellNavigation.Destination.KEYS)
+            navigation.select(com.stripe1.xmouse.ShellNavigation.Destination.ACTIONS)
             f.await { backend.writes.contains("xdotool mouseup 1\r\n") }
             assertFalse(f.controller.executeInputCommand("xdotool click 1", gesture))
             assertFalse(f.controller.executeInputCommand("xdotool mousemove_relative -- 9 9", oldSurface))
-            navigation.select(com.stripe1.xmouse.ShellNavigation.Destination.ACTIONS)
+            navigation.select(com.stripe1.xmouse.ShellNavigation.Destination.SCRIPTS)
+            assertEquals(com.stripe1.xmouse.ShellNavigation.InputRole.NONE, navigation.inputRole())
+            assertFalse(navigation.eligible(true, true, f.controller.current.connection.isReady))
+            assertNull("Scripts does not activate a stale Actions input surface", surface)
             navigation.select(com.stripe1.xmouse.ShellNavigation.Destination.TOUCHPAD)
             for (overlay in listOf(com.stripe1.xmouse.ShellNavigation.Overlay.COMPUTERS,
                 com.stripe1.xmouse.ShellNavigation.Overlay.EXTERNAL,
@@ -610,14 +614,8 @@ class SessionPipelineIntegrationTest {
                 assertNotSame(previous, surface)
             }
             val pointer = surface
-            navigation.open(com.stripe1.xmouse.ShellNavigation.Overlay.TYPING)
-            assertEquals(com.stripe1.xmouse.ShellNavigation.InputRole.TYPING, navigation.inputRole())
-            assertNotNull(surface)
-            assertNotSame(pointer, surface)
-            assertFalse(f.controller.isControlSurfaceActive(pointer))
-            val typing = surface
-            navigation.back()
-            assertFalse(f.controller.isControlSurfaceActive(typing))
+            assertEquals(com.stripe1.xmouse.ShellNavigation.InputRole.POINTER, navigation.inputRole())
+            assertSame("inline text editing does not change the scoped Touchpad role", pointer, surface)
             f.queue.drain()
             assertEquals(listOf("xdotool mousedown 1\r\n", "xdotool mouseup 1\r\n"), backend.writes.toList())
             assertTrue(backend.commandOrder.none { it.startsWith("exec:") })
@@ -639,6 +637,7 @@ class SessionPipelineIntegrationTest {
             lateinit var navigation: com.stripe1.xmouse.ShellNavigation
             navigation = com.stripe1.xmouse.ShellNavigation(object : com.stripe1.xmouse.ShellNavigation.Listener {
                 override fun retireInput() { f.controller.deactivateControlSurface(surface); surface = null }
+                override fun retireLocalText() {}
                 override fun render() { assertNull(surface) }
                 override fun refreshInput() {
                     if (navigation.eligible(true, true, f.controller.current.connection.isReady))
@@ -667,7 +666,7 @@ class SessionPipelineIntegrationTest {
             assertTrue(editor.state.value.saved)
             assertEquals(saved.copy(buttons = saved.buttons.map { it.copy(title = "Renamed") }), repository.loadSelectedProfile())
             navigation.replaceContent {
-                com.stripe1.xmouse.layout.ActionPresentation.tileRows(repository.loadSelectedProfile()!!)
+                com.stripe1.xmouse.layout.LayoutEditorGrid.placements(repository.loadSelectedProfile()!!)
             }
             navigation.open(com.stripe1.xmouse.ShellNavigation.Overlay.EXTERNAL)
             navigation.close(com.stripe1.xmouse.ShellNavigation.Overlay.ACTION_EDIT)
@@ -690,6 +689,15 @@ class SessionPipelineIntegrationTest {
             assertEquals(listOf("xdotool key Alt+F4\r\n", "$opaque\r\n"), backend.writes.toList())
             assertTrue(f.execResults.isEmpty())
             val script = "printf 'raw script'\nsecond line  "
+            val staleActionsSurface = requireNotNull(surface)
+            val staleActionsGesture = requireNotNull(f.controller.beginInputGesture(staleActionsSurface))
+            navigation.select(com.stripe1.xmouse.ShellNavigation.Destination.SCRIPTS)
+            assertEquals(com.stripe1.xmouse.ShellNavigation.InputRole.NONE, navigation.inputRole())
+            assertNull(surface)
+            assertFalse("Scripts rejects a stale Actions gesture", f.controller.executeInputCommand(
+                "xdotool key Escape", staleActionsGesture))
+            assertEquals("tab selection alone never executes a saved script", listOf(
+                "shell:xdotool key Alt+F4", "shell:$opaque"), backend.commandOrder.toList())
             assertTrue(f.controller.executeExecCommand(script, f.presentation))
             f.await { f.execResults.any { it.first == script } }
             assertEquals(listOf("shell:xdotool key Alt+F4", "shell:$opaque", "exec:$script"), backend.commandOrder.toList())

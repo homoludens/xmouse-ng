@@ -3,9 +3,9 @@ package com.stripe1.xmouse.layout
 import android.annotation.SuppressLint
 import android.os.Bundle
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -85,7 +85,7 @@ import com.stripe1.xmouse.ui.XMouseNgTheme
 import java.io.File
 
 /** Separate editor surface; it never receives or invokes the remote command sink. */
-class LayoutEditorActivity : ComponentActivity() {
+class LayoutEditorActivity : AppCompatActivity() {
     private lateinit var editorViewModel: LayoutEditorWorkerViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -330,7 +330,7 @@ private fun ButtonEditActions(
                 onClick = onNewButton,
                 modifier = Modifier.weight(1f).editorTouchTarget().testTag("layout-editor-add-button"),
             ) {
-                Text("Add button")
+                Text(stringResource(R.string.layout_editor_add_action))
             }
             TextButton(
                 onClick = onEditButton,

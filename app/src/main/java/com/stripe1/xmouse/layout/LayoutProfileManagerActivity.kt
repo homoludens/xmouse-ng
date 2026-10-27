@@ -3,9 +3,9 @@ package com.stripe1.xmouse.layout
 import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -44,7 +44,7 @@ import com.stripe1.xmouse.ui.XMouseNgTheme
 import java.io.File
 
 /** User-facing CRUD and selection screen for saved named layouts. */
-class LayoutProfileManagerActivity : ComponentActivity() {
+class LayoutProfileManagerActivity : AppCompatActivity() {
     private lateinit var managerViewModel: LayoutProfileManagerWorkerViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {

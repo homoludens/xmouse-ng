@@ -17,8 +17,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.xmlpull.v1.XmlPullParser
 import java.io.Closeable
+import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
 import java.io.File
 import java.io.IOException
+import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -78,6 +81,39 @@ class CredentialMetadataBackupAndroidTest {
         }
     }
 
+    @Test fun retiredInputPreferencesAreNotExportedAndAreIgnoredInExistingVersionOneBackups() {
+        Fixture().use { source ->
+            source.preferences.edit(commit = true) {
+                putString("setting_host", "current.fixture.invalid")
+                legacyRemovedPreferenceKeys.forEach { putString(it, "retired-value") }
+            }
+            val repository = CredentialRepository(source.helper, source.preferences, source.store)
+            val snapshot = source.onRepositoryWorker(repository) { repository.snapshotForBackup() }
+            val exported = snapshot.toString(Charsets.ISO_8859_1)
+            legacyRemovedPreferenceKeys.forEach { key ->
+                assertFalse("new backups must not export retired preference key $key", exported.contains(key))
+            }
+            assertFalse("new backups must not export retired preference values", exported.contains("retired-value"))
+
+            Fixture().use { destination ->
+                val oldBackup = legacyVersionOneSnapshot()
+                destination.preferences.edit(commit = true) {
+                    putString("appearance_mode", "light")
+                    putBoolean("keyboard_send_enter_after_text", false)
+                }
+                CredentialMetadataBackup.restore(destination.context, oldBackup, destination.preferences)
+                assertEquals("legacy.fixture.invalid", destination.preferences.getString("setting_host", null))
+                assertEquals("light", destination.preferences.getString("appearance_mode", null))
+                assertFalse(destination.preferences.getBoolean("keyboard_send_enter_after_text", true))
+                legacyRemovedPreferenceKeys.forEach { key ->
+                    assertFalse("old backup preference $key is recognized but not restored",
+                        destination.preferences.contains(key))
+                }
+            }
+            snapshot.fill(0)
+        }
+    }
+
     @Test fun partialMigrationBackupOmitsOldAndNewSecretsAndRestoresMetadataWithReentryOnly() = Fixture().use { source ->
         source.insertLegacyV2()
         source.upgradeToCurrent()
@@ -87,7 +123,9 @@ class CredentialMetadataBackupAndroidTest {
             putString("setting_host", "fallback.fixture.invalid")
             putString("setting_user", "fallback-user")
             putString("setting_port", "2200")
+            putString("appearance_mode", "dark")
             putBoolean("pref_usekeyauth", false)
+            putBoolean("keyboard_send_enter_after_text", true)
             putString("setting_pass", OLD_DEFAULT_PASSWORD)
             putString("pref_key_passphrase_credential_ref", NEW_PASSPHRASE_REFERENCE)
             putString("pref_addkeybutton", OLD_PRIVATE_KEY_PATH)
@@ -137,6 +175,8 @@ class CredentialMetadataBackupAndroidTest {
             assertEquals("42", restored.getString("hostPreferenceList", null))
             assertEquals("fallback.fixture.invalid", restored.getString("setting_host", null))
             assertFalse(restored.getBoolean("pref_usekeyauth", true))
+            assertEquals("dark", restored.getString("appearance_mode", null))
+            assertTrue(restored.getBoolean("keyboard_send_enter_after_text", false))
             listOf("setting_pass", "pref_key_passphrase", "pref_addkeybutton",
                 LegacyCredentialReferences.DEFAULT_PASSWORD, LegacyCredentialReferences.GLOBAL_PASSPHRASE,
                 LegacyCredentialReferences.GLOBAL_PRIVATE_KEY, "pref_key_passphrase_credential_ref",
@@ -270,6 +310,30 @@ class CredentialMetadataBackupAndroidTest {
 
     private data class Rules(val includes: MutableSet<String>, val excludes: MutableSet<String>)
 
+    private fun legacyVersionOneSnapshot(): ByteArray = ByteArrayOutputStream().also { bytes ->
+        DataOutputStream(bytes).use { output ->
+            output.writeInt(0x584d5342) // XMSB
+            output.writeInt(1)
+            output.writeInt(0) // hosts
+            output.writeInt(0) // scripts
+            output.writeInt(legacyRemovedPreferenceKeys.size + 1)
+            (legacyRemovedPreferenceKeys + "setting_host").forEach { key ->
+                output.writeLegacyString(key)
+                output.writeByte(1)
+                output.writeLegacyString(if (key == "setting_host") "legacy.fixture.invalid" else "old-$key")
+            }
+            output.writeBoolean(false) // default password re-entry
+            output.writeBoolean(false) // passphrase re-entry
+            output.writeBoolean(false) // private-key re-entry
+        }
+    }.toByteArray()
+
+    private fun DataOutputStream.writeLegacyString(value: String) {
+        val encoded = value.toByteArray(StandardCharsets.UTF_8)
+        writeInt(encoded.size)
+        write(encoded)
+    }
+
     private fun parseRules(resource: Int): Rules {
         val parser = target.resources.getXml(resource)
         val rules = Rules(mutableSetOf(), mutableSetOf())
@@ -402,6 +466,11 @@ class CredentialMetadataBackupAndroidTest {
     }
 
     companion object {
+        private val legacyRemovedPreferenceKeys = listOf(
+            "gyro_z_sensitivity_list", "gyro_y_sensitivity_list",
+            "gyro_z_threshold_list", "gyro_y_threshold_list",
+            "js_sensitivity_list", "js_size_list", "js_dead_zone_list",
+        )
         private const val OLD_HOST_PASSWORD_7 = "SYNTHETIC_FIXTURE_PASSWORD_FOR_HOST_7_NOT_REAL"
         private const val OLD_HOST_PASSWORD = "SYNTHETIC_FIXTURE_PASSWORD_FOR_HOST_42_NOT_REAL"
         private const val OLD_DEFAULT_PASSWORD = "NOT_REAL_default_backup_fixture"

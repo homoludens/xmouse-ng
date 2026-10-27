@@ -44,33 +44,6 @@ class ActionPresentationTest {
     }
 
     @Test
-    fun twoColumnPresentationKeepsLegacyWidthsAndOrderVerbatim() {
-        val source = LayoutProfile(
-            id = "presentation-profile",
-            name = "Duplicate name",
-            buttons = listOf(5, 2, 10, 7, 1).mapIndexed { index, width ->
-                LayoutButton(
-                    id = "action-$index",
-                    title = "Action $index",
-                    command = if (index == 0) "key alt+F4" else "printf '$index'",
-                    width = width,
-                    color = if (index == 1) "#80aBcDeF" else "#FFFFFF",
-                )
-            },
-        )
-
-        val rows = ActionPresentation.tileRows(source)
-        assertEquals(listOf(listOf("action-0", "action-1"), listOf("action-2"), listOf("action-3", "action-4")),
-            rows.map { row -> row.map { it.button.id } })
-        assertEquals(ActionTileSize.REGULAR, rows[0][0].size)
-        assertEquals(ActionTileSize.WIDE, rows[1][0].size)
-        assertEquals("alt+F4", rows[0][0].subtitle)
-        assertTrue(rows[0][1].subtitle.contains("Custom size (2/10)"))
-        assertTrue(rows[2][0].subtitle.contains("Custom size (7/10)"))
-        assertEquals(listOf(5, 2, 10, 7, 1), rows.flatten().map { it.button.width })
-    }
-
-    @Test
     fun realRepositoryRestartRoundTripsIdsOrderRawCommandsCustomWidthsAndRgb() {
         val directory = Files.createTempDirectory("actions-round-trip").toFile()
         try {

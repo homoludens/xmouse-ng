@@ -4,70 +4,115 @@
     android:id="@+id/computer_editor_root" android:layout_width="match_parent" android:layout_height="match_parent"
     android:orientation="vertical" android:background="@color/ng_background">
     <androidx.appcompat.widget.Toolbar android:id="@+id/computer_editor_toolbar"
-        android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="56dp" />
-    <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
-        android:fillViewport="true">
+        android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="56dp"
+        app:titleTextAppearance="@style/TextAppearance.XMouseNg.Heading" />
+    <ScrollView android:id="@+id/computer_editor_scroll" android:layout_width="match_parent" android:layout_height="0dp"
+        android:layout_weight="1" android:fillViewport="false" android:clipToPadding="false">
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:orientation="vertical" android:padding="18dp">
+            android:orientation="vertical" android:paddingStart="@dimen/ng_page_gutter"
+            android:paddingEnd="@dimen/ng_page_gutter" android:paddingTop="8dp" android:paddingBottom="16dp">
+
+            <TextView android:id="@+id/computer_name_label" style="@style/TextAppearance.XMouseNg.FieldLabel"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginBottom="6dp" android:text="@string/computer_editor_display_name" />
             <com.google.android.material.textfield.TextInputLayout android:id="@+id/computer_name_field"
-                style="@style/Widget.XMouseNg.TextInputLayout" app:expandedHintEnabled="false" android:layout_marginBottom="12dp"
-                android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Display name (optional)">
+                style="@style/Widget.XMouseNg.TextInputLayout" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:layout_marginBottom="14dp">
                 <com.google.android.material.textfield.TextInputEditText android:id="@+id/new_host_alias"
-                    android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="56dp"
+                    style="@style/Widget.XMouseNg.TextInputEditText" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:hint="@string/computer_editor_display_name_hint"
                     android:inputType="textCapWords" android:saveEnabled="false" />
             </com.google.android.material.textfield.TextInputLayout>
+
+            <TextView android:id="@+id/computer_host_label" style="@style/TextAppearance.XMouseNg.FieldLabel"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginBottom="6dp" android:text="@string/computer_editor_host" />
             <com.google.android.material.textfield.TextInputLayout android:id="@+id/computer_host_field"
-                style="@style/Widget.XMouseNg.TextInputLayout" app:expandedHintEnabled="false" android:layout_marginBottom="12dp"
-                android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Hostname or IP address">
+                style="@style/Widget.XMouseNg.TextInputLayout" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:layout_marginBottom="14dp">
                 <com.google.android.material.textfield.TextInputEditText android:id="@+id/new_host_ip"
-                    android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="56dp"
+                    style="@style/Widget.XMouseNg.TextInputEditText" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:hint="@string/computer_editor_host_hint"
                     android:inputType="textUri" android:saveEnabled="false" />
             </com.google.android.material.textfield.TextInputLayout>
+
+            <TextView android:id="@+id/computer_user_label" style="@style/TextAppearance.XMouseNg.FieldLabel"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginBottom="6dp" android:text="@string/computer_editor_username" />
             <com.google.android.material.textfield.TextInputLayout android:id="@+id/computer_user_field"
-                style="@style/Widget.XMouseNg.TextInputLayout" app:expandedHintEnabled="false" android:layout_marginBottom="12dp"
-                android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Username">
+                style="@style/Widget.XMouseNg.TextInputLayout" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:layout_marginBottom="14dp">
                 <com.google.android.material.textfield.TextInputEditText android:id="@+id/new_host_username"
-                    android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="56dp"
-                    android:inputType="textVisiblePassword" android:saveEnabled="false" />
+                    style="@style/Widget.XMouseNg.TextInputEditText" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:hint="@string/computer_editor_username_hint"
+                    android:inputType="textVisiblePassword|textNoSuggestions" android:saveEnabled="false" />
             </com.google.android.material.textfield.TextInputLayout>
+
+            <TextView android:id="@+id/computer_password_label" style="@style/TextAppearance.XMouseNg.FieldLabel"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginBottom="6dp" android:text="@string/computer_editor_password" />
             <com.google.android.material.textfield.TextInputLayout android:id="@+id/computer_password_field"
-                style="@style/Widget.XMouseNg.TextInputLayout" app:expandedHintEnabled="false" android:layout_marginBottom="12dp"
-                android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Password"
+                style="@style/Widget.XMouseNg.TextInputLayout" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:layout_marginBottom="4dp"
                 app:endIconMode="password_toggle">
                 <com.google.android.material.textfield.TextInputEditText android:id="@+id/new_host_password"
-                    android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="56dp"
+                    style="@style/Widget.XMouseNg.TextInputEditText" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:hint="@string/computer_editor_password_new_hint"
                     android:inputType="textPassword" android:saveEnabled="false"
                     android:importantForAutofill="noExcludeDescendants" />
             </com.google.android.material.textfield.TextInputLayout>
             <TextView android:id="@+id/computer_auth_description" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:textColor="@color/ng_text_secondary" android:paddingTop="12dp" />
+                android:layout_height="wrap_content" android:layout_marginTop="2dp" android:paddingBottom="4dp"
+                android:textColor="@color/ng_text_secondary" android:textSize="12sp" />
             <com.google.android.material.button.MaterialButton android:id="@+id/computer_auth_settings"
-                style="@style/Widget.XMouseNg.ControlButton.Soft" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:text="Authentication settings" />
+                style="@style/Widget.XMouseNg.ControlButton.Text" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:gravity="start|center_vertical"
+                android:text="@string/computer_editor_auth_settings" />
+
             <com.google.android.material.button.MaterialButton android:id="@+id/computer_advanced"
-                style="@style/Widget.XMouseNg.ControlButton.Soft" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:text="Advanced · SSH port" />
+                style="@style/Widget.XMouseNg.ControlButton.Text" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:layout_marginTop="8dp" android:gravity="start|center_vertical"
+                android:text="@string/computer_editor_advanced" />
+            <TextView android:id="@+id/computer_port_label" style="@style/TextAppearance.XMouseNg.FieldLabel"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="8dp" android:layout_marginBottom="6dp"
+                android:text="@string/computer_editor_port" android:visibility="gone" />
             <com.google.android.material.textfield.TextInputLayout android:id="@+id/computer_port_field"
-                style="@style/Widget.XMouseNg.TextInputLayout" app:expandedHintEnabled="false" android:layout_marginBottom="12dp"
-                android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="SSH port" android:visibility="gone">
+                style="@style/Widget.XMouseNg.TextInputLayout" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:visibility="gone">
                 <com.google.android.material.textfield.TextInputEditText android:id="@+id/new_host_port"
-                    android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="56dp"
-                    android:text="22" android:inputType="number" android:saveEnabled="false" />
+                    style="@style/Widget.XMouseNg.TextInputEditText" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:hint="@string/computer_editor_port_hint"
+                    android:inputType="number" android:saveEnabled="false" />
             </com.google.android.material.textfield.TextInputLayout>
-            <TextView android:id="@+id/computer_test_status" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:paddingTop="16dp" android:paddingBottom="8dp"
-                android:accessibilityLiveRegion="polite" android:textColor="@color/ng_text_secondary"
-                android:text="Test checks SSH authentication and channel readiness. It does not save or run a command." />
-            <com.google.android.material.button.MaterialButton android:id="@+id/computer_test"
-                style="@style/Widget.XMouseNg.ControlButton.Soft" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:text="Test connection" />
-            <com.google.android.material.button.MaterialButton android:id="@+id/computer_save"
-                style="@style/Widget.XMouseNg.ControlButton.Accent" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:text="Save computer" />
-            <com.google.android.material.button.MaterialButton android:id="@+id/computer_delete"
-                style="@style/Widget.XMouseNg.ControlButton.Danger" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:text="Delete computer" android:textColor="@color/ng_danger"
+            <TextView android:id="@+id/computer_port_help" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:layout_marginTop="4dp" android:textSize="12sp"
+                android:textColor="@color/ng_text_secondary" android:text="@string/computer_editor_port_help"
                 android:visibility="gone" />
         </LinearLayout>
     </ScrollView>
+
+    <LinearLayout android:id="@+id/computer_editor_actions" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:orientation="vertical"
+        android:background="@color/ng_background" android:paddingStart="@dimen/ng_page_gutter"
+        android:paddingEnd="@dimen/ng_page_gutter" android:paddingTop="8dp" android:paddingBottom="8dp">
+        <TextView android:id="@+id/computer_test_status" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:paddingBottom="8dp" android:textSize="12sp"
+            android:accessibilityLiveRegion="polite" android:textColor="@color/ng_text_secondary"
+            android:text="@string/computer_editor_test_help" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="horizontal" android:baselineAligned="false">
+            <com.google.android.material.button.MaterialButton android:id="@+id/computer_test"
+                style="@style/Widget.XMouseNg.ControlButton.Soft" android:layout_width="0dp"
+                android:layout_height="wrap_content" android:layout_weight="1" android:text="@string/computer_editor_test" />
+            <com.google.android.material.button.MaterialButton android:id="@+id/computer_save"
+                style="@style/Widget.XMouseNg.ControlButton.Accent" android:layout_width="0dp"
+                android:layout_height="wrap_content" android:layout_marginStart="8dp" android:layout_weight="1"
+                android:text="@string/computer_editor_save_new" />
+        </LinearLayout>
+        <com.google.android.material.button.MaterialButton android:id="@+id/computer_delete"
+            style="@style/Widget.XMouseNg.ControlButton.Text" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:layout_marginTop="2dp" android:text="@string/computer_editor_delete"
+            android:textColor="@color/ng_danger" app:iconTint="@color/ng_danger" android:visibility="gone" />
+    </LinearLayout>
 </LinearLayout>

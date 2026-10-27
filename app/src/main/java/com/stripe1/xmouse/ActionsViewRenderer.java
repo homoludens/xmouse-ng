@@ -8,7 +8,7 @@ import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ImageView;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Button;
@@ -16,15 +16,17 @@ import android.app.AlertDialog;
 
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.card.MaterialCardView;
-import com.stripe1.xmouse.layout.ActionTilePresentation;
-import com.stripe1.xmouse.layout.ActionTileSize;
+import com.stripe1.xmouse.layout.LayoutButton;
+import com.stripe1.xmouse.layout.LayoutButtonPlacement;
+import com.stripe1.xmouse.layout.LayoutEditorGrid;
 import com.stripe1.xmouse.layout.LayoutProfile;
+import com.stripe1.xmouse.layout.ActionPresetCatalog;
 import com.stripe1.xmouse.layout.SavedActionScript;
 
 import java.util.List;
 import java.util.function.Consumer;
 
-/** Native View renderer shared by the Actions screen and its isolated test fixture. */
+/** Native View renderer shared by the shell destinations and their isolated test fixtures. */
 public final class ActionsViewRenderer {
     public interface ActionListener {
         void onAction(View tile, com.stripe1.xmouse.layout.LayoutButton button);
@@ -38,34 +40,74 @@ public final class ActionsViewRenderer {
     private ActionsViewRenderer() { }
 
     public static void renderProfileControls(View root, LayoutProfile profile, boolean editing, boolean canEdit) {
-        Context context = root.getContext();
-        Button picker = root.findViewById(R.id.actions_layout_picker);
-        picker.setText(profile == null ? context.getString(R.string.ng_actions_choose_layout) : profile.getName());
-        picker.setContentDescription(profile == null ? context.getString(R.string.ng_actions_choose_layout)
-                : context.getString(R.string.ng_actions_selected_layout, profile.getName(), profile.getId()));
-        picker.setEnabled(canEdit);
-        Button edit = root.findViewById(R.id.actions_edit);
-        edit.setText(editing ? R.string.ng_done_actions : R.string.ng_edit_actions_short);
-        edit.setContentDescription(context.getString(editing ? R.string.ng_actions_editing_hint : R.string.ng_edit_actions));
-        edit.setEnabled(canEdit);
-        root.findViewById(R.id.actions_add).setEnabled(canEdit);
+        renderProfileControls(root, profile, editing, canEdit, canEdit, false);
     }
 
-    public static AlertDialog profilePicker(Context context, List<LayoutProfile> profiles, LayoutProfile selected,
-                                             Consumer<String> onSelected, Runnable onManage) {
-        String[] labels = new String[profiles.size()];
+    public static void renderProfileControls(View root, LayoutProfile profile, boolean editing, boolean canEdit,
+                                             boolean canChoose, boolean builtInReadOnly) {
+        Context context = root.getContext();
+        Button picker = root.findViewById(R.id.actions_layout_picker);
+        picker.setText(profile == null ? context.getString(R.string.ng_actions_choose_layout)
+                : builtInReadOnly ? context.getString(R.string.ng_actions_builtin_selected, profile.getName())
+                : profile.getName());
+        picker.setContentDescription(profile == null ? context.getString(R.string.ng_actions_choose_layout)
+                : builtInReadOnly ? context.getString(R.string.ng_actions_selected_builtin, profile.getName())
+                : context.getString(R.string.ng_actions_selected_layout, profile.getName(), profile.getId()));
+        picker.setEnabled(canChoose);
+        Button edit = root.findViewById(R.id.actions_edit);
+        edit.setText(builtInReadOnly ? R.string.ng_actions_read_only
+                : editing ? R.string.ng_done_actions : R.string.ng_edit_actions_short);
+        edit.setContentDescription(context.getString(builtInReadOnly ? R.string.ng_actions_read_only_hint
+                : editing ? R.string.ng_actions_editing_hint : R.string.ng_edit_actions));
+        edit.setEnabled(canEdit);
+    }
+
+    /** Tagged choice so a virtual preset can never be mistaken for a same-ID saved profile. */
+    public static final class PickerChoice {
+        private final String presetId;
+        private final String profileId;
+        private final String label;
+
+        private PickerChoice(String presetId, String profileId, String label) {
+            this.presetId = presetId;
+            this.profileId = profileId;
+            this.label = label;
+        }
+
+        public String presetId() { return presetId; }
+        public String profileId() { return profileId; }
+        public String label() { return label; }
+        public boolean isPreset() { return presetId != null; }
+    }
+
+    public static AlertDialog profilePicker(Context context, List<ActionPresetCatalog.Preset> presets,
+                                             List<LayoutProfile> profiles, LayoutProfile selected,
+                                             String selectedPresetId, Consumer<PickerChoice> onSelected,
+                                             Runnable onManage) {
+        List<PickerChoice> choices = new java.util.ArrayList<>();
+        List<String> choiceLabels = new java.util.ArrayList<>();
         int selectedIndex = -1;
+        for (ActionPresetCatalog.Preset preset : presets) {
+            String label = context.getString(R.string.ng_actions_builtin_choice, preset.title());
+            if (selectedPresetId != null && selectedPresetId.equals(preset.id())) selectedIndex = choices.size();
+            choices.add(new PickerChoice(preset.id(), null, label));
+            choiceLabels.add(label);
+        }
         for (int index = 0; index < profiles.size(); index++) {
             LayoutProfile profile = profiles.get(index);
-            labels[index] = context.getString(R.string.ng_actions_layout_id, profile.getName(), profile.getId());
-            if (selected != null && profile.getId().equals(selected.getId())) selectedIndex = index;
+            String label = context.getString(R.string.ng_actions_layout_id, profile.getName(), profile.getId());
+            if (selectedPresetId == null && selected != null && profile.getId().equals(selected.getId()))
+                selectedIndex = choices.size();
+            choices.add(new PickerChoice(null, profile.getId(), label));
+            choiceLabels.add(label);
         }
+        String[] labels = choiceLabels.toArray(new String[0]);
         return new AlertDialog.Builder(context).setTitle(R.string.ng_actions_choose_layout)
                 .setSingleChoiceItems(labels, selectedIndex, (dialog, which) -> {
-                    if (which >= 0 && which < profiles.size()) onSelected.accept(profiles.get(which).getId());
+                    if (which >= 0 && which < choices.size()) onSelected.accept(choices.get(which));
                     dialog.dismiss();
                 })
-                .setNeutralButton(R.string.ng_actions_more_manage_layouts, (dialog, which) -> onManage.run())
+                .setNeutralButton(R.string.ng_layout_action_manage, (dialog, which) -> onManage.run())
                 .setNegativeButton(R.string.ng_action_editor_cancel, null).create();
     }
 
@@ -86,38 +128,91 @@ public final class ActionsViewRenderer {
             return;
         }
 
-        List<List<ActionTilePresentation>> rows = com.stripe1.xmouse.layout.ActionPresentation.INSTANCE.tileRows(profile);
+        List<LayoutButtonPlacement> placements = LayoutEditorGrid.INSTANCE.placements(profile);
+        int rowCount = placements.get(placements.size() - 1).getRow() + 1;
+        java.util.Map<String, LayoutButton> buttonsById = new java.util.HashMap<>();
+        for (LayoutButton button : profile.getButtons()) buttonsById.put(button.getId(), button);
+
         int gap = context.getResources().getDimensionPixelSize(R.dimen.ng_action_gap);
-        for (List<ActionTilePresentation> tiles : rows) {
+        int buttonHeight = dp(context, 56);
+        for (int rowIndex = 0; rowIndex < rowCount; rowIndex++) {
             LinearLayout row = new LinearLayout(context);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setBaselineAligned(false);
-            row.setGravity(Gravity.TOP);
+            row.setGravity(Gravity.CENTER_VERTICAL);
             LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            rowParams.bottomMargin = gap;
+                    ViewGroup.LayoutParams.MATCH_PARENT, buttonHeight);
+            if (rowIndex < rowCount - 1) rowParams.bottomMargin = gap;
             container.addView(row, rowParams);
 
-            for (int index = 0; index < tiles.size(); index++) {
-                ActionTilePresentation presentation = tiles.get(index);
-                View tile = createActionTile(context, presentation, editMode);
-                if (listener != null) listener.onAction(tile, presentation.getButton());
-                LinearLayout.LayoutParams tileParams;
-                if (presentation.getSize() == ActionTileSize.WIDE) {
-                    tileParams = new LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-                } else {
-                    tileParams = new LinearLayout.LayoutParams(0,
-                            ViewGroup.LayoutParams.MATCH_PARENT, 1f);
+            int nextColumn = 0;
+            for (LayoutButtonPlacement placement : placements) {
+                if (placement.getRow() != rowIndex) continue;
+                if (placement.getColumn() > nextColumn) {
+                    addGridSpacer(context, row, placement.getColumn() - nextColumn, buttonHeight);
                 }
-                if (index > 0) tileParams.setMarginStart(gap);
-                row.addView(tile, tileParams);
+                LayoutButton button = buttonsById.get(placement.getButtonId());
+                int position = profile.getButtons().indexOf(button) + 1;
+                FrameLayout slot = new FrameLayout(context);
+                LinearLayout.LayoutParams slotParams = new LinearLayout.LayoutParams(
+                        0, buttonHeight, placement.getWidthColumns());
+                View tile = createActionTile(context, button, position, profile.getButtons().size(), editMode);
+                FrameLayout.LayoutParams tileParams = new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+                tileParams.setMargins(dp(context, 2), 0, dp(context, 2), 0);
+                slot.addView(tile, tileParams);
+                row.addView(slot, slotParams);
+                if (listener != null) listener.onAction(tile, button);
+                nextColumn = placement.getColumn() + placement.getWidthColumns();
             }
-            if (tiles.size() == 1 && tiles.get(0).getSize() == ActionTileSize.REGULAR) {
-                View spacer = new View(context);
-                row.addView(spacer, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+            if (nextColumn < profile.getColumnCount()) {
+                addGridSpacer(context, row,
+                        profile.getColumnCount() - nextColumn, buttonHeight);
             }
         }
+    }
+
+    /** Render a virtual category with the same ten-column, title-only action tiles as saved data. */
+    public static void renderPreset(Context context, LinearLayout container,
+                                    ActionPresetCatalog.Preset preset, LayoutProfile profile,
+                                    ActionListener listener) {
+        container.removeAllViews();
+        if (preset == null || profile == null) {
+            addTileMessage(context, container, R.string.ng_actions_empty);
+            return;
+        }
+        java.util.Map<String, LayoutButton> buttons = new java.util.HashMap<>();
+        for (LayoutButton button : profile.getButtons()) buttons.put(button.getId(), button);
+        boolean renderedSection = false;
+        for (ActionPresetCatalog.Section section : preset.sections()) {
+            if (!section.title().isEmpty()) {
+                TextView heading = new TextView(context);
+                heading.setText(section.title());
+                heading.setTextAppearance(context, R.style.TextAppearance_XMouseNg_Section);
+                LinearLayout.LayoutParams headingParams = matchWrap();
+                headingParams.topMargin = renderedSection ? dp(context, 14) : dp(context, 2);
+                headingParams.bottomMargin = dp(context, 6);
+                container.addView(heading, headingParams);
+            }
+            LinearLayout sectionTiles = new LinearLayout(context);
+            sectionTiles.setOrientation(LinearLayout.VERTICAL);
+            container.addView(sectionTiles, matchWrap());
+            java.util.List<LayoutButton> sectionButtons = new java.util.ArrayList<>();
+            for (ActionPresetCatalog.Entry entry : section.entries()) {
+                LayoutButton button = buttons.get(entry.id());
+                if (button != null) sectionButtons.add(button);
+            }
+            LayoutProfile sectionProfile = new LayoutProfile(profile.getId(), profile.getName(),
+                    profile.getColumnCount(), sectionButtons);
+            renderTiles(context, sectionTiles, sectionProfile, false, R.string.ng_actions_empty, listener);
+            renderedSection = true;
+        }
+    }
+
+    private static void addGridSpacer(Context context, LinearLayout row, int columns, int height) {
+        View spacer = new View(context);
+        spacer.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        row.addView(spacer, new LinearLayout.LayoutParams(0, height, columns));
     }
 
     private static void addTileMessage(Context context, LinearLayout container, int message) {
@@ -202,8 +297,8 @@ public final class ActionsViewRenderer {
         }
     }
 
-    private static View createActionTile(Context context, ActionTilePresentation presentation, boolean editMode) {
-        com.stripe1.xmouse.layout.LayoutButton action = presentation.getButton();
+    private static View createActionTile(Context context, LayoutButton action, int position,
+                                         int total, boolean editMode) {
         MaterialCardView card = new MaterialCardView(context);
         int background;
         try { background = Color.parseColor(action.getColor()); }
@@ -213,47 +308,33 @@ public final class ActionsViewRenderer {
         card.setCardBackgroundColor(background);
         card.setStrokeColor(ColorStateList.valueOf(context.getColor(R.color.ng_border)));
         card.setStrokeWidth(dp(context, 1));
-        card.setRadius(dp(context, 14));
+        card.setRadius(dp(context, 8));
         card.setCardElevation(0f);
         card.setClickable(true);
         card.setFocusable(true);
-        card.setMinimumHeight(dp(context, 104));
+        card.setMinimumWidth(0);
+        card.setMinimumHeight(dp(context, 56));
         card.setTag(action.getId());
-        card.setContentDescription(context.getString(R.string.ng_action_tile_accessibility,
-                action.getTitle(), presentation.getSubtitle(), action.getId()));
-
-        LinearLayout body = new LinearLayout(context);
-        body.setOrientation(LinearLayout.VERTICAL);
-        body.setGravity(Gravity.START);
-        body.setPadding(dp(context, 15), dp(context, 15), dp(context, 15), dp(context, 15));
-        ImageView icon = new ImageView(context);
-        icon.setImageResource(R.drawable.ic_ng_actions);
-        icon.setImageTintList(ColorStateList.valueOf(foreground));
-        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(context, 20), dp(context, 20));
-        iconParams.bottomMargin = dp(context, 14);
-        body.addView(icon, iconParams);
-
-        LinearLayout labels = new LinearLayout(context);
-        labels.setOrientation(LinearLayout.VERTICAL);
         TextView title = new TextView(context);
         title.setText(action.getTitle());
         title.setTextColor(foreground);
-        title.setTextSize(13);
+        title.setTextSize(11);
+        title.setLetterSpacing(0.04f);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        title.setMaxLines(2);
+        title.setGravity(Gravity.CENTER);
+        title.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+        title.setMinWidth(0);
+        title.setMaxLines(1);
         title.setEllipsize(TextUtils.TruncateAt.END);
-        labels.addView(title, matchWrap());
-        TextView subtitle = new TextView(context);
-        subtitle.setText(editMode ? context.getString(R.string.ng_tap_to_edit_action) : presentation.getSubtitle());
-        subtitle.setTextColor(foreground);
-        subtitle.setTextSize(11);
-        subtitle.setMaxLines(2);
-        subtitle.setEllipsize(TextUtils.TruncateAt.END);
-        LinearLayout.LayoutParams subtitleParams = matchWrap();
-        subtitleParams.topMargin = dp(context, 3);
-        labels.addView(subtitle, subtitleParams);
-        body.addView(labels, matchWrap());
-        card.addView(body);
+        title.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        card.setContentPadding(dp(context, 2), 0, dp(context, 2), 0);
+        card.addView(title, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        String accessibility = context.getString(R.string.ng_action_tile_accessibility,
+                action.getTitle(), position, total, action.getWidth(), action.getId());
+        if (editMode) accessibility += ", " + context.getString(R.string.ng_tap_to_edit_action);
+        card.setContentDescription(accessibility);
+        card.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
         return card;
     }
 

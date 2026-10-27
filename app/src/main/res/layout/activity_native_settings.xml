@@ -21,6 +21,7 @@
             android:textAllCaps="false"
             android:text="@string/ng_settings_back" />
         <TextView
+            android:id="@+id/settings_title"
             style="@style/TextAppearance.XMouseNg.Heading"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
@@ -44,88 +45,57 @@
             android:paddingEnd="@dimen/ng_page_gutter"
             android:paddingBottom="@dimen/ng_page_bottom">
 
-            <Button
-                android:id="@+id/settings_pointer_speed"
-                style="@style/Widget.XMouseNg.ControlButton.Soft"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="start|center_vertical"
-                android:singleLine="false"
-                android:textAllCaps="false"
-                android:saveEnabled="false"
-                android:text="@string/ng_settings_pointer_speed" />
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:textColor="@color/ng_text_secondary"
-                android:textSize="12sp"
-                android:text="@string/ng_settings_pointer_help" />
+            <LinearLayout android:id="@+id/settings_pointer_section" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:orientation="vertical">
+                <Button android:id="@+id/settings_pointer_speed" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:gravity="start|center_vertical" android:singleLine="false" android:textAllCaps="false"
+                    android:saveEnabled="false" android:text="@string/ng_settings_pointer_speed" />
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp" android:textColor="@color/ng_text_secondary"
+                    android:textSize="12sp" android:text="@string/ng_settings_pointer_help" />
+                <com.google.android.material.switchmaterial.SwitchMaterial android:id="@+id/settings_natural_scroll"
+                    android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp"
+                    android:minWidth="48dp" android:minHeight="48dp" android:saveEnabled="false"
+                    android:textColor="@color/ng_text_primary" android:textSize="14sp"
+                    android:text="@string/ng_settings_natural" />
+                <TextView android:id="@+id/settings_scroll_description" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:textColor="@color/ng_text_secondary" android:textSize="12sp" />
+            </LinearLayout>
 
-            <com.google.android.material.switchmaterial.SwitchMaterial
-                android:id="@+id/settings_natural_scroll"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:minWidth="48dp"
-                android:minHeight="48dp"
-                android:saveEnabled="false"
-                android:textColor="@color/ng_text_primary"
-                android:textSize="14sp"
-                android:text="@string/ng_settings_natural" />
-            <TextView
-                android:id="@+id/settings_scroll_description"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:textColor="@color/ng_text_secondary" android:textSize="12sp" />
+            <LinearLayout android:id="@+id/settings_keyboard_section" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:layout_marginTop="24dp" android:orientation="vertical">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:textColor="@color/ng_text_secondary" android:textSize="12sp"
+                    android:text="@string/ng_settings_keyboard" />
+                <com.google.android.material.switchmaterial.SwitchMaterial android:id="@+id/settings_auto_clear"
+                    android:layout_width="match_parent" android:layout_height="wrap_content" android:minWidth="48dp"
+                    android:minHeight="48dp" android:saveEnabled="false" android:textColor="@color/ng_text_primary"
+                    android:textSize="14sp" android:text="@string/ng_settings_auto_clear" />
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:textColor="@color/ng_text_secondary" android:textSize="12sp"
+                    android:text="@string/ng_settings_auto_clear_help" />
+                <com.google.android.material.switchmaterial.SwitchMaterial android:id="@+id/settings_send_enter"
+                    android:layout_width="match_parent" android:layout_height="wrap_content" android:minWidth="48dp"
+                    android:minHeight="48dp" android:saveEnabled="false" android:textColor="@color/ng_text_primary"
+                    android:textSize="14sp" android:text="@string/ng_settings_send_enter" />
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:textColor="@color/ng_text_secondary" android:textSize="12sp"
+                    android:text="@string/ng_settings_send_enter_help" />
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp" android:textColor="@color/ng_text_secondary"
+                    android:textSize="12sp" android:text="@string/ng_settings_explicit_send" />
+            </LinearLayout>
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
-                android:textColor="@color/ng_text_secondary"
-                android:textSize="12sp"
-                android:text="@string/ng_settings_keyboard" />
-            <com.google.android.material.switchmaterial.SwitchMaterial
-                android:id="@+id/settings_auto_clear"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:minWidth="48dp"
-                android:minHeight="48dp"
-                android:saveEnabled="false"
-                android:textColor="@color/ng_text_primary"
-                android:textSize="14sp"
-                android:text="@string/ng_settings_auto_clear" />
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:textColor="@color/ng_text_secondary"
-                android:textSize="12sp"
-                android:text="@string/ng_settings_explicit_send" />
-
-            <Button
-                android:id="@+id/settings_advanced"
-                style="@style/Widget.XMouseNg.ControlButton.Soft"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
-                android:singleLine="false"
-                android:textAllCaps="false"
-                android:text="@string/ng_settings_advanced" />
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:textColor="@color/ng_text_secondary"
-                android:textSize="12sp"
-                android:text="@string/ng_settings_advanced_help" />
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:textColor="@color/ng_text_secondary"
-                android:textSize="12sp"
-                android:text="@string/ng_settings_appearance" />
+            <LinearLayout android:id="@+id/settings_advanced_section" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:layout_marginTop="24dp" android:orientation="vertical">
+                <Button android:id="@+id/settings_advanced" style="@style/Widget.XMouseNg.ControlButton.Soft"
+                    android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="false"
+                    android:textAllCaps="false" android:text="@string/ng_settings_advanced" />
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp" android:textColor="@color/ng_text_secondary"
+                    android:textSize="12sp" android:text="@string/ng_settings_advanced_help" />
+            </LinearLayout>
         </LinearLayout>
     </ScrollView>
 </LinearLayout>

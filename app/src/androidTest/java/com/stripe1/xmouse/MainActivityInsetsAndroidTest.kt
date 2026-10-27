@@ -2,9 +2,9 @@ package com.stripe1.xmouse
 
 import android.os.Build
 import android.view.View
-import android.widget.FrameLayout
+import android.view.ViewGroup
 import android.widget.ScrollView
-import androidx.appcompat.widget.Toolbar
+import androidx.drawerlayout.widget.DrawerLayout
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.core.graphics.Insets
@@ -46,10 +46,8 @@ class MainActivityInsetsAndroidTest {
             assertMainControlsReachable(scenario)
             assertTouchpadControlsReachable(scenario)
 
-            scenario.onActivity { it.findViewById<View>(R.id.type_on_computer).performClick() }
             dispatch(scenario, portraitBars, portraitCutout, visibleIme)
-            assertTypingControlsReachable(scenario)
-            scenario.onActivity { it.navigation.closeTop() }
+            assertInlineTypingControlsReachable(scenario)
             dispatch(scenario, portraitBars, portraitCutout, Insets.NONE)
 
             // Landscape-shaped system/cutout insets exercise the physical left and right edges.
@@ -99,7 +97,7 @@ class MainActivityInsetsAndroidTest {
         expected: Insets,
     ) {
         scenario.onActivity { activity ->
-            val safeArea = activity.findViewById<FrameLayout>(R.id.main_safe_area)
+            val safeArea = activity.findViewById<DrawerLayout>(R.id.main_safe_area)
             assertEquals(expected.left, safeArea.paddingLeft)
             assertEquals(expected.top, safeArea.paddingTop)
             assertEquals(expected.right, safeArea.paddingRight)
@@ -109,9 +107,8 @@ class MainActivityInsetsAndroidTest {
 
     private fun assertMainControlsReachable(scenario: ActivityScenario<MainInsetsFixtureActivity>) {
         scenario.onActivity { activity ->
-            val safeArea = activity.findViewById<FrameLayout>(R.id.main_safe_area)
+            val safeArea = activity.findViewById<DrawerLayout>(R.id.main_safe_area)
             val shell = activity.findViewById<View>(R.id.native_shell)
-            val toolbar = activity.findViewById<Toolbar>(R.id.toolbar)
             val bottom = activity.findViewById<BottomNavigationView>(R.id.bottom_navigation)
             assertEquals(safeArea.paddingLeft, shell.left)
             assertEquals(safeArea.paddingTop, shell.top)
@@ -119,23 +116,28 @@ class MainActivityInsetsAndroidTest {
             assertEquals(safeArea.height - safeArea.paddingBottom, shell.bottom)
 
             val safeLocation = IntArray(2)
-            val toolbarLocation = IntArray(2)
             val bottomLocation = IntArray(2)
+            val header = activity.findViewById<View>(R.id.shell_header)
             safeArea.getLocationOnScreen(safeLocation)
-            toolbar.getLocationOnScreen(toolbarLocation)
             bottom.getLocationOnScreen(bottomLocation)
             val safeLeft = safeLocation[0] + safeArea.paddingLeft
             val safeRight = safeLocation[0] + safeArea.width - safeArea.paddingRight
             val safeTop = safeLocation[1] + safeArea.paddingTop
             val safeBottom = safeLocation[1] + safeArea.height - safeArea.paddingBottom
-            assertTrue("toolbar starts left of the safe area", toolbarLocation[0] >= safeLeft)
-            assertTrue(
-                "toolbar extends right of the safe area",
-                toolbarLocation[0] + toolbar.width <= safeRight)
-            assertTrue("toolbar begins above the safe area", toolbarLocation[1] >= safeTop)
-            assertTrue(
-                "toolbar extends below the safe area",
-                toolbarLocation[1] + toolbar.height <= safeBottom)
+            val headerLocation = IntArray(2)
+            header.getLocationOnScreen(headerLocation)
+            assertTrue("header stays inside the safe height", headerLocation[1] >= safeTop &&
+                headerLocation[1] + header.height <= safeBottom)
+            for (id in listOf(R.id.header_menu, R.id.computer_selector, R.id.header_connection_button)) {
+                val control = activity.findViewById<View>(id)
+                val location = IntArray(2)
+                control.getLocationOnScreen(location)
+                assertTrue("header control $id stays inside the safe width", location[0] >= safeLeft &&
+                    location[0] + control.width <= safeRight)
+                assertTrue("header control $id stays inside the safe height", location[1] >= safeTop &&
+                    location[1] >= headerLocation[1] &&
+                    location[1] + control.height <= headerLocation[1] + header.height)
+            }
             assertTrue("bottom control starts left of the safe area", bottomLocation[0] >= safeLeft)
             assertTrue(
                 "bottom control extends right of the safe area",
@@ -148,7 +150,7 @@ class MainActivityInsetsAndroidTest {
 
     private fun assertOverlayReachable(scenario: ActivityScenario<MainInsetsFixtureActivity>) {
         scenario.onActivity { activity ->
-            val safeArea = activity.findViewById<FrameLayout>(R.id.main_safe_area)
+            val safeArea = activity.findViewById<DrawerLayout>(R.id.main_safe_area)
             val overlay = activity.findViewById<View>(R.id.shell_overlay)
             assertTrue(overlay.isShown)
 
@@ -169,7 +171,7 @@ class MainActivityInsetsAndroidTest {
 
     private fun assertTouchpadControlsReachable(scenario: ActivityScenario<MainInsetsFixtureActivity>) {
         scenario.onActivity { activity ->
-            val safeArea = activity.findViewById<FrameLayout>(R.id.main_safe_area)
+            val safeArea = activity.findViewById<DrawerLayout>(R.id.main_safe_area)
             val bottom = activity.findViewById<BottomNavigationView>(R.id.bottom_navigation)
             val safeLocation = IntArray(2)
             val bottomLocation = IntArray(2)
@@ -177,8 +179,8 @@ class MainActivityInsetsAndroidTest {
             bottom.getLocationOnScreen(bottomLocation)
             for (id in listOf(
                 R.id.mouse_surface_host, R.id.firstMouseButton, R.id.secondMouseButton, R.id.thirdMouseButton,
-                R.id.fourthMouseButton, R.id.fifthMouseButton, R.id.gyroToggle, R.id.jsToggle,
-                R.id.touchpad_key_escape, R.id.touchpad_key_switch, R.id.touchpad_key_super, R.id.type_on_computer,
+                R.id.fourthMouseButton, R.id.fifthMouseButton,
+                R.id.typing_key_escape, R.id.typing_key_tab, R.id.typing_key_backspace, R.id.typing_key_enter,
             )) {
                 val control = activity.findViewById<View>(id)
                 val location = IntArray(2)
@@ -194,24 +196,42 @@ class MainActivityInsetsAndroidTest {
         }
     }
 
-    private fun assertTypingControlsReachable(scenario: ActivityScenario<MainInsetsFixtureActivity>) {
+    private fun assertInlineTypingControlsReachable(scenario: ActivityScenario<MainInsetsFixtureActivity>) {
         scenario.onActivity { activity ->
-            val typing = activity.findViewById<ScrollView>(R.id.typing_content)
+            activity.findViewById<ScrollView>(R.id.touchpad_destination).apply {
+                isSmoothScrollingEnabled = false
+                fullScroll(View.FOCUS_DOWN)
+            }
+        }
+        instrumentation.waitForIdleSync()
+        scenario.onActivity { activity ->
+            val typing = activity.findViewById<ScrollView>(R.id.touchpad_destination)
+            val root = activity.findViewById<ViewGroup>(R.id.native_shell)
             val input = activity.findViewById<View>(R.id.keyboard_input)
             val send = activity.findViewById<View>(R.id.keyboard_send)
+            val quickKeys = activity.findViewById<View>(R.id.touchpad_quick_keys)
+            val composer = activity.findViewById<View>(R.id.typing_dock)
             val bottom = activity.findViewById<BottomNavigationView>(R.id.bottom_navigation)
             val typingLocation = IntArray(2)
             val bottomLocation = IntArray(2)
+            val quickKeysLocation = IntArray(2)
+            val inputLocation = IntArray(2)
+            val composerLocation = IntArray(2)
             typing.getLocationOnScreen(typingLocation)
             bottom.getLocationOnScreen(bottomLocation)
-            assertTrue("typing panel stays above the IME-adjusted navigation",
+            quickKeys.getLocationOnScreen(quickKeysLocation)
+            input.getLocationOnScreen(inputLocation)
+            composer.getLocationOnScreen(composerLocation)
+            assertTrue("inline panel stays above the IME-adjusted navigation",
                 typingLocation[1] + typing.height <= bottomLocation[1])
-            assertTrue("the multiline field remains visible after IME resize", input.isShown && input.height > 0)
+            assertTrue("the shared multiline field remains visible after IME resize", input.isShown && input.height > 0)
+            assertTrue("quick keys are above the shared composer", quickKeysLocation[1] < inputLocation[1])
+            assertTrue("shared composer stays above the IME-adjusted navigation",
+                composerLocation[1] + composer.height <= bottomLocation[1])
             val sendBounds = android.graphics.Rect()
             send.getDrawingRect(sendBounds)
-            typing.offsetDescendantRectToMyCoords(send, sendBounds)
-            assertTrue("Send is visible or reachable by scrolling when the IME reduces the panel",
-                typing.canScrollVertically(1) || sendBounds.bottom <= typing.height)
+            root.offsetDescendantRectToMyCoords(send, sendBounds)
+            assertTrue("Send remains visible beside the field when the IME is open", sendBounds.bottom <= root.height)
             for (id in listOf(
                 R.id.typing_key_escape, R.id.typing_key_tab, R.id.typing_key_backspace,
                 R.id.typing_key_enter, R.id.keyboard_send,

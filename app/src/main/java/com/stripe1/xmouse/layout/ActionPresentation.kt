@@ -46,56 +46,10 @@ object ActionCommandCodec {
     const val MAX_CHORD_LENGTH = 64
 }
 
-enum class ActionTileSize {
-    REGULAR,
-    WIDE,
-}
-
-data class ActionTilePresentation(
-    val button: LayoutButton,
-    val size: ActionTileSize,
-    val subtitle: String,
-)
-
-/** Display models retain source buttons verbatim; the two-column view never rewrites stored spans. */
+/** Small presentation helpers shared by the native Actions screen and layout manager. */
 object ActionPresentation {
     fun layoutChoices(profiles: List<LayoutProfile>): List<LayoutProfileChoice> =
         profiles.map { LayoutProfileChoice(it.id, it.name) }
-
-    /** Width 10 is full-row; other legacy widths occupy one visual cell and remain stored as-is. */
-    fun tileRows(profile: LayoutProfile): List<List<ActionTilePresentation>> {
-        val rows = mutableListOf<List<ActionTilePresentation>>()
-        var regularRow = mutableListOf<ActionTilePresentation>()
-
-        fun finishRegularRow() {
-            if (regularRow.isNotEmpty()) {
-                rows += regularRow.toList()
-                regularRow = mutableListOf()
-            }
-        }
-
-        profile.buttons.forEach { button ->
-            val size = if (button.width == LAYOUT_COLUMN_COUNT) ActionTileSize.WIDE else ActionTileSize.REGULAR
-            val command = ActionCommandCodec.classify(button.command)
-            val subtitle = when (command.type) {
-                ActionCommandType.KEYBOARD_SHORTCUT -> command.value
-                ActionCommandType.ADVANCED_CUSTOM_COMMAND -> "Advanced custom command"
-            }.let { value ->
-                if (button.width == 5 || button.width == 10) value
-                else "$value · Custom size (${button.width}/$LAYOUT_COLUMN_COUNT)"
-            }
-            val tile = ActionTilePresentation(button, size, subtitle)
-            if (size == ActionTileSize.WIDE) {
-                finishRegularRow()
-                rows += listOf(tile)
-            } else {
-                regularRow += tile
-                if (regularRow.size == 2) finishRegularRow()
-            }
-        }
-        finishRegularRow()
-        return rows
-    }
 }
 
 data class LayoutProfileChoice(val id: String, val name: String)

@@ -15,4 +15,5 @@
     <color name="ng_danger_soft">#462B2C</color>
     <color name="ng_action_blue_soft">#273548</color>
     <color name="ng_on_action_blue">#B2CEFA</color>
+    <color name="ng_overlay">#88000000</color>
 </resources>

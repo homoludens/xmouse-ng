@@ -15,6 +15,11 @@ final class DrawerBackCallback extends OnBackPressedCallback {
         this.drawer = drawer;
         drawer.addDrawerListener(new DrawerLayout.SimpleDrawerListener() {
             @Override
+            public void onDrawerSlide(View drawerView, float slideOffset) {
+                setEnabled(slideOffset > 0f || drawer.isDrawerOpen(GravityCompat.START));
+            }
+
+            @Override
             public void onDrawerOpened(View drawerView) {
                 updateEnabledState();
             }

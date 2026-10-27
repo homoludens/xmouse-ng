@@ -34,7 +34,11 @@ internal object CredentialMetadataBackup {
     private val stringPreferences = listOf(
         "setting_host", "setting_user", "setting_port", "hostPreferenceList",
         "setting_shell", "setting_dotool_initial", "setting_xdotool_initial",
-        "sensitivity_list", "delay_list", "mdelay_list",
+        "sensitivity_list", "delay_list", "mdelay_list", "appearance_mode",
+    )
+    // Version 1 backups already in the field can contain these retired setting keys. Decode and
+    // ignore them for compatibility; they must never enter a new snapshot or be restored.
+    private val legacyRemovedStringPreferences = setOf(
         "gyro_z_sensitivity_list", "gyro_y_sensitivity_list",
         "gyro_z_threshold_list", "gyro_y_threshold_list",
         "js_sensitivity_list", "js_size_list", "js_dead_zone_list",
@@ -42,6 +46,7 @@ internal object CredentialMetadataBackup {
     private val booleanPreferences = listOf(
         "pref_usekeyauth", "autologin_checkbox", "keyboard_autoclear",
         "setting_keyboard_batch", "keyboard_layout_locked", "mouse_invert_scroll",
+        "keyboard_send_enter_after_text",
     )
     private val allowedPreferences = (stringPreferences + booleanPreferences).toSet()
 
@@ -272,14 +277,17 @@ internal object CredentialMetadataBackup {
             val preferenceKeys = HashSet<String>()
             repeat(preferenceCount) {
                 val key = input.readNullableString() ?: throw IOException("Invalid configuration backup")
-                if (key !in allowedPreferences || !preferenceKeys.add(key)) throw IOException("Invalid configuration backup")
+                if ((key !in allowedPreferences && key !in legacyRemovedStringPreferences) ||
+                    !preferenceKeys.add(key)) throw IOException("Invalid configuration backup")
                 val value = when (input.readUnsignedByte()) {
                     1 -> input.readNullableString() ?: throw IOException("Invalid configuration backup")
                     2 -> input.readBoolean()
                     else -> throw IOException("Invalid configuration backup")
                 }
-                if ((key in stringPreferences) != (value is String)) throw IOException("Invalid configuration backup")
-                preferences.add(PreferenceValue(key, value))
+                if ((key in stringPreferences || key in legacyRemovedStringPreferences) != (value is String)) {
+                    throw IOException("Invalid configuration backup")
+                }
+                if (key !in legacyRemovedStringPreferences) preferences.add(PreferenceValue(key, value))
             }
             val snapshot = Snapshot(hosts, scripts, preferences, input.readBoolean(), input.readBoolean(), input.readBoolean())
             if (input.read() != -1) throw IOException("Invalid configuration backup")

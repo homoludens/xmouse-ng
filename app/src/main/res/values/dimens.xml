@@ -12,9 +12,9 @@
     <dimen name="ng_radius_surface">16dp</dimen>
     <dimen name="ng_radius_touchpad">20dp</dimen>
     <dimen name="ng_radius_sheet">24dp</dimen>
-    <dimen name="ng_page_gutter">14dp</dimen>
+    <dimen name="ng_page_gutter">12dp</dimen>
     <dimen name="ng_page_bottom">20dp</dimen>
     <dimen name="ng_page_heading_gap">12dp</dimen>
-    <dimen name="ng_grid_gap">8dp</dimen>
-    <dimen name="ng_action_gap">10dp</dimen>
+    <dimen name="ng_action_gap">8dp</dimen>
+    <dimen name="ng_touchpad_control_gap">12dp</dimen>
 </resources>

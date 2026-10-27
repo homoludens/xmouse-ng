@@ -119,15 +119,15 @@
         <item name="android:textColor">@color/ng_danger</item>
     </style>
 
-    <style name="Widget.XMouseNg.KeyCategory" parent="Widget.MaterialComponents.Button.OutlinedButton">
+    <style name="Widget.XMouseNg.ActionColorOption" parent="Widget.MaterialComponents.Button.OutlinedButton">
         <item name="android:minWidth">68dp</item>
         <item name="android:minHeight">48dp</item>
         <item name="android:insetTop">0dp</item>
         <item name="android:insetBottom">0dp</item>
         <item name="cornerRadius">12dp</item>
         <item name="strokeWidth">0dp</item>
-        <item name="backgroundTint">@color/ng_key_category_background</item>
-        <item name="android:textColor">@color/ng_key_category_text</item>
+        <item name="backgroundTint">@color/ng_action_color_option_background</item>
+        <item name="android:textColor">@color/ng_action_color_option_text</item>
         <item name="android:textAllCaps">false</item>
         <item name="android:textSize">12sp</item>
         <item name="android:fontFamily">sans-serif</item>
@@ -138,11 +138,18 @@
         <item name="android:paddingEnd">8dp</item>
     </style>
 
-    <style name="TextAppearance.XMouseNg.KeySection" parent="TextAppearance.MaterialComponents.Body2">
+    <style name="TextAppearance.XMouseNg.Section" parent="TextAppearance.MaterialComponents.Body2">
         <item name="android:textColor">@color/ng_text_secondary</item>
         <item name="android:textSize">12sp</item>
         <item name="android:fontFamily">sans-serif</item>
         <item name="android:textStyle">normal</item>
+    </style>
+
+    <style name="TextAppearance.XMouseNg.FieldLabel" parent="TextAppearance.MaterialComponents.Body2">
+        <item name="android:textColor">@color/ng_text_primary</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:includeFontPadding">false</item>
     </style>
 
     <style name="TextAppearance.XMouseNg.Navigation" parent="TextAppearance.MaterialComponents.Caption">

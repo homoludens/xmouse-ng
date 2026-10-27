@@ -205,30 +205,6 @@ public class SettingsActivity extends AppCompatPreferenceActivity {
 
 
         fakeHeader = new PreferenceCategory(this);
-        fakeHeader.setTitle("Gyro");
-        getPreferenceScreen().addPreference(fakeHeader);
-        addPreferencesFromResource(R.xml.pref_gyro);
-
-
-        bindPreferenceSummaryToValue(findPreference("gyro_z_sensitivity_list"));
-        bindPreferenceSummaryToValue(findPreference("gyro_y_sensitivity_list"));
-        bindPreferenceSummaryToValue(findPreference("gyro_z_threshold_list"));
-        bindPreferenceSummaryToValue(findPreference("gyro_y_threshold_list"));
-
-
-        fakeHeader = new PreferenceCategory(this);
-        fakeHeader.setTitle("Joystick");
-        getPreferenceScreen().addPreference(fakeHeader);
-        addPreferencesFromResource(R.xml.pref_js);
-
-
-        bindPreferenceSummaryToValue(findPreference("js_sensitivity_list"));
-        bindPreferenceSummaryToValue(findPreference("js_size_list"));
-        bindPreferenceSummaryToValue(findPreference("js_dead_zone_list"));
-
-
-
-        fakeHeader = new PreferenceCategory(this);
         fakeHeader.setTitle("Keyboard");
         getPreferenceScreen().addPreference(fakeHeader);
         addPreferencesFromResource(R.xml.pref_keyboard);

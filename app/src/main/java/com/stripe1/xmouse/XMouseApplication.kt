@@ -1,6 +1,8 @@
 package com.stripe1.xmouse
 
 import android.app.Application
+import android.preference.PreferenceManager
+import androidx.appcompat.app.AppCompatDelegate
 import com.stripe1.xmouse.session.AndroidSessionOwner
 import com.stripe1.xmouse.session.SessionOwnerRegistry
 
@@ -8,5 +10,11 @@ import com.stripe1.xmouse.session.SessionOwnerRegistry
 class XMouseApplication : Application() {
     val sessionOwners: SessionOwnerRegistry by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         SessionOwnerRegistry { AndroidSessionOwner.create(applicationContext) }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        val preferences = PreferenceManager.getDefaultSharedPreferences(this)
+        AppearancePreferences.apply(AppearancePreferences.read(preferences))
     }
 }

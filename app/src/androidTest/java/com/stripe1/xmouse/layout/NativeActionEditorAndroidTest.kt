@@ -50,7 +50,12 @@ class NativeActionEditorAndroidTest {
             }
             assertEquals(expected, repository.loadProfile(original.id))
             assertNull(repository.loadDraft(original.id))
-        } finally { repository.deleteProfile(original.id, confirmed = true) }
+        } finally {
+            if (repository.listProfiles().size == 1) {
+                repository.createProfile(LayoutProfile(id = "instrumented-test-anchor", name = "Test baseline"))
+            }
+            repository.deleteProfile(original.id, confirmed = true)
+        }
     }
 
     private fun awaitForm(scenario: ActivityScenario<ActionEditorActivity>, title: String) = eventually {

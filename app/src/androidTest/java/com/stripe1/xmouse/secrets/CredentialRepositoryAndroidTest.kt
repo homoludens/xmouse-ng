@@ -438,8 +438,8 @@ class CredentialRepositoryAndroidTest {
         ActivityScenario.launch<ComputerEditorActivity>(ComputerEditorActivity.intent(target, host.id)).use { scenario ->
             barrier()
             scenario.onActivity { activity ->
-                assertEquals("Hostname or IP address", activity.findViewById<TextInputLayout>(R.id.computer_host_field).hint.toString())
-                assertEquals("Username", activity.findViewById<TextInputLayout>(R.id.computer_user_field).hint.toString())
+                assertEquals("Hostname or IP address", activity.findViewById<TextView>(R.id.computer_host_label).text.toString())
+                assertEquals("Username", activity.findViewById<TextView>(R.id.computer_user_label).text.toString())
                 val password = activity.findViewById<EditText>(R.id.new_host_password)
                 assertEquals("", password.text.toString()); assertFalse(password.isSaveEnabled)
                 assertTrue(activity.findViewById<TextInputLayout>(R.id.computer_password_field).helperText.toString().contains("unchanged"))
@@ -447,10 +447,15 @@ class CredentialRepositoryAndroidTest {
                 activity.findViewById<View>(R.id.computer_advanced).performClick()
                 assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.computer_port_field).visibility)
                 enter(activity.findViewById(R.id.new_host_username), " user ")
+                // Invalid local input must stop Test before permission, authentication, DNS, or SSH.
+                activity.findViewById<View>(R.id.computer_test).performClick()
+                assertNotNull(activity.findViewById<TextInputLayout>(R.id.computer_user_field).error)
                 activity.findViewById<View>(R.id.computer_save).performClick()
                 assertNotNull(activity.findViewById<TextInputLayout>(R.id.computer_user_field).error)
                 enter(activity.findViewById(R.id.new_host_username), "new-user")
                 enter(activity.findViewById(R.id.new_host_port), "65536")
+                activity.findViewById<View>(R.id.computer_test).performClick()
+                assertNotNull(activity.findViewById<TextInputLayout>(R.id.computer_port_field).error)
                 activity.findViewById<View>(R.id.computer_save).performClick()
                 assertNotNull(activity.findViewById<TextInputLayout>(R.id.computer_port_field).error)
                 enter(activity.findViewById(R.id.new_host_port), "2222")

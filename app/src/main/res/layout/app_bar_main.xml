@@ -1,63 +1,84 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:id="@+id/native_shell" android:layout_width="match_parent"
-    android:layout_height="match_parent" android:orientation="vertical">
-    <LinearLayout android:id="@+id/shell_header" android:layout_width="match_parent"
-        android:layout_height="wrap_content" android:orientation="horizontal"
-        android:paddingStart="@dimen/ng_page_gutter" android:paddingEnd="6dp" android:paddingTop="12dp" android:paddingBottom="16dp"
-        android:gravity="center_vertical" android:baselineAligned="false">
-        <LinearLayout android:id="@+id/computer_selector" android:layout_width="0dp"
-            android:layout_weight="1" android:layout_height="wrap_content" android:minHeight="48dp"
-            android:background="?attr/selectableItemBackground" android:gravity="center_vertical"
-            android:focusable="true" android:clickable="true" android:orientation="horizontal"
-            android:contentDescription="@string/ng_choose_computer">
-            <ImageView android:layout_width="44dp" android:layout_height="44dp" android:padding="11dp"
-                android:src="@drawable/ic_ng_computer" android:background="@drawable/ng_accent_surface"
-                android:importantForAccessibility="no" android:contentDescription="@null" />
-            <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
-                android:orientation="vertical" android:paddingStart="11dp" android:paddingEnd="4dp">
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:text="@string/app_name" android:textSize="11sp" android:includeFontPadding="false" android:textColor="@color/ng_text_secondary" />
-                <TextView android:id="@+id/computer_name" android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:text="@string/ng_choose_computer" android:textSize="19sp" android:maxLines="2" android:ellipsize="end"
-                    android:fontFamily="sans-serif-medium" android:includeFontPadding="false"
-                    android:drawableEnd="@drawable/ic_ng_chevron_down" android:drawablePadding="4dp"
-                    android:textColor="@color/ng_text_primary" />
+    android:id="@+id/native_shell" android:layout_width="match_parent" android:layout_height="match_parent">
+    <LinearLayout android:id="@+id/shell_stack" android:layout_width="match_parent"
+        android:layout_height="match_parent" android:orientation="vertical">
+        <LinearLayout android:id="@+id/shell_header" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:orientation="horizontal"
+            android:paddingStart="@dimen/ng_page_gutter" android:paddingEnd="@dimen/ng_page_gutter" android:paddingTop="12dp" android:paddingBottom="12dp"
+            android:gravity="center_vertical" android:baselineAligned="false">
+            <ImageButton android:id="@+id/header_menu" android:layout_width="48dp" android:layout_height="48dp"
+                android:layout_marginEnd="4dp" android:background="?attr/selectableItemBackgroundBorderless"
+                android:padding="13dp" android:src="@drawable/ic_ng_menu" android:contentDescription="@string/ng_open_menu" />
+            <LinearLayout android:id="@+id/computer_selector" android:layout_width="0dp"
+                android:layout_weight="1" android:layout_height="wrap_content" android:minHeight="48dp"
+                android:background="?attr/selectableItemBackground" android:gravity="center_vertical"
+                android:focusable="true" android:clickable="true" android:orientation="horizontal"
+                android:contentDescription="@string/ng_choose_computer">
+                <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+                    android:orientation="vertical" android:paddingStart="4dp" android:paddingEnd="4dp">
+                    <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:text="@string/app_name" android:textSize="11sp" android:includeFontPadding="false" android:textColor="@color/ng_text_secondary" />
+                    <TextView android:id="@+id/computer_name" android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:text="@string/ng_choose_computer" android:textSize="18sp" android:maxLines="1" android:ellipsize="end"
+                        android:fontFamily="sans-serif-medium" android:includeFontPadding="false"
+                        android:drawableEnd="@drawable/ic_ng_chevron_down" android:drawablePadding="4dp"
+                        android:textColor="@color/ng_text_primary" />
+                </LinearLayout>
             </LinearLayout>
+            <com.google.android.material.button.MaterialButton android:id="@+id/header_connection_button"
+                style="@style/Widget.XMouseNg.ControlButton.Accent" android:layout_width="wrap_content"
+                android:layout_height="48dp" android:layout_marginStart="4dp" android:maxWidth="148dp"
+                android:minWidth="48dp" android:singleLine="false" android:maxLines="2"
+                android:text="@string/ng_connection_connect" android:contentDescription="@string/ng_connection_connect"
+                app:icon="@drawable/ic_ng_plug" app:iconGravity="textStart" app:iconPadding="6dp"
+                app:iconTint="@color/ng_on_accent" />
         </LinearLayout>
-        <LinearLayout android:id="@+id/header_controls" android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:orientation="horizontal" android:gravity="center_vertical" android:baselineAligned="false">
-            <TextView android:id="@+id/connection_status" android:layout_width="wrap_content"
-                android:layout_height="wrap_content" android:minHeight="48dp" android:minWidth="48dp" android:maxWidth="100dp" android:gravity="center"
-                android:padding="2dp" android:textSize="11sp" android:text="@string/ng_disconnected" android:includeFontPadding="false"
-                android:accessibilityLiveRegion="polite"
-                android:textColor="@color/ng_text_secondary" android:background="?attr/selectableItemBackground"
-                android:clickable="true" android:focusable="true" />
-            <LinearLayout android:layout_width="match_parent" android:layout_height="48dp" android:orientation="horizontal">
-                <ImageButton android:id="@+id/header_settings" android:layout_width="48dp" android:layout_height="48dp"
-                    android:background="?attr/selectableItemBackgroundBorderless" android:padding="14dp"
-                    app:tint="@color/ng_text_secondary"
-                    android:src="@drawable/ic_ng_settings" android:contentDescription="@string/action_settings" />
-                <androidx.appcompat.widget.Toolbar android:id="@+id/toolbar" android:layout_width="48dp"
-                    android:layout_height="48dp" app:contentInsetStart="0dp" app:contentInsetEnd="0dp"
-                    android:minHeight="48dp" app:popupTheme="@style/AppTheme.PopupOverlay" />
+        <FrameLayout android:id="@+id/shell_content" android:layout_width="match_parent"
+            android:layout_height="0dp" android:layout_weight="1">
+            <include layout="@layout/content_main" />
+        </FrameLayout>
+        <LinearLayout android:id="@+id/typing_dock" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:orientation="vertical"
+            android:paddingStart="@dimen/ng_page_gutter" android:paddingEnd="@dimen/ng_page_gutter"
+            android:paddingTop="@dimen/ng_touchpad_control_gap" android:paddingBottom="@dimen/ng_touchpad_control_gap" android:background="@color/ng_background">
+            <LinearLayout android:id="@+id/typing_composer_row" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
+                <com.stripe1.xmouse.SendImeEditText android:id="@+id/keyboard_input" android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:minHeight="52dp" android:maxLines="3"
+                    android:gravity="center_vertical|start" android:paddingStart="14dp" android:paddingEnd="14dp"
+                    android:background="@drawable/ng_surface_rounded"
+                    android:inputType="textMultiLine|textNoSuggestions" android:imeOptions="actionSend|flagNoExtractUi"
+                    android:textSize="16sp" android:textColor="@color/ng_text_primary" android:textColorHint="@color/ng_text_secondary"
+                    android:hint="@string/ng_typing_hint" android:contentDescription="@string/ng_typing_accessibility"
+                    android:saveEnabled="false" android:importantForAutofill="no" />
+                <com.google.android.material.button.MaterialButton android:id="@+id/keyboard_send"
+                    style="@style/Widget.XMouseNg.ControlButton.Accent" android:layout_width="wrap_content"
+                    android:layout_height="52dp" android:layout_marginStart="@dimen/ng_touchpad_control_gap" android:minWidth="48dp"
+                    android:text="@string/ng_send" android:onClick="xMouseKeyboardSend" />
             </LinearLayout>
+            <TextView android:id="@+id/typing_connection_hint" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:layout_marginTop="4dp" android:paddingStart="2dp"
+                android:text="@string/ng_composer_disconnected_hint" android:textColor="@color/ng_text_secondary"
+                android:textSize="12sp" android:visibility="gone" />
         </LinearLayout>
+        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/ng_border" />
+        <com.google.android.material.bottomnavigation.BottomNavigationView android:id="@+id/bottom_navigation"
+            android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="72dp"
+            android:elevation="0dp"
+            android:background="@color/ng_surface" app:menu="@menu/ng_bottom_navigation"
+            app:itemTextAppearanceActiveBoldEnabled="false"
+            app:itemTextAppearanceActive="@style/TextAppearance.XMouseNg.Navigation"
+            app:itemTextAppearanceInactive="@style/TextAppearance.XMouseNg.Navigation"
+            app:labelVisibilityMode="labeled" app:itemHorizontalTranslationEnabled="false"
+            app:itemIconTint="@color/ng_navigation_tint" app:itemTextColor="@color/ng_navigation_tint" />
+        <!-- Kept hidden for legacy Android instrumentation/menu callbacks. No shell overflow is exposed. -->
+        <androidx.appcompat.widget.Toolbar android:id="@+id/toolbar" android:layout_width="0dp"
+            android:layout_height="0dp" android:visibility="gone" app:contentInsetStart="0dp"
+            app:contentInsetEnd="0dp" app:popupTheme="@style/AppTheme.PopupOverlay" />
+        <TextView android:id="@+id/connection_status" android:layout_width="0dp" android:layout_height="0dp"
+            android:visibility="gone" android:importantForAccessibility="no" />
     </LinearLayout>
-    <FrameLayout android:id="@+id/shell_content" android:layout_width="match_parent"
-        android:layout_height="0dp" android:layout_weight="1">
-        <include layout="@layout/content_main" />
-        <include layout="@layout/ng_shell_overlay" />
-    </FrameLayout>
-    <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/ng_border" />
-    <com.google.android.material.bottomnavigation.BottomNavigationView android:id="@+id/bottom_navigation"
-        android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="72dp"
-        android:elevation="0dp"
-        android:background="@color/ng_surface" app:menu="@menu/ng_bottom_navigation"
-        app:itemTextAppearanceActiveBoldEnabled="false"
-        app:itemTextAppearanceActive="@style/TextAppearance.XMouseNg.Navigation"
-        app:itemTextAppearanceInactive="@style/TextAppearance.XMouseNg.Navigation"
-        app:labelVisibilityMode="labeled" app:itemHorizontalTranslationEnabled="false"
-        app:itemIconTint="@color/ng_navigation_tint" app:itemTextColor="@color/ng_navigation_tint" />
-</LinearLayout>
+    <include layout="@layout/ng_shell_overlay" />
+</FrameLayout>

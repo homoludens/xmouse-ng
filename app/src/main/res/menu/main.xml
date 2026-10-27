@@ -3,12 +3,6 @@
     xmlns:tools="http://schemas.android.com/tools" tools:context=".MainActivity">
 
     <item
-        android:id="@+id/action_send_clipboard"
-        android:orderInCategory="99"
-        android:icon="@drawable/ic_clipboard_send"
-        android:title="@string/clipboard_send_title"
-        app:showAsAction="never" />
-    <item
         android:id="@+id/action_conn_disc"
         android:orderInCategory="100"
         app:showAsAction="never"
@@ -21,9 +15,6 @@
     <item android:id="@+id/action_session_controls"
         android:title="@string/session_controls_menu"
          android:orderInCategory="101" app:showAsAction="never" />
-    <item android:id="@+id/action_joystick" android:title="@string/ng_joystick" />
-    <item android:id="@+id/action_scripts" android:title="@string/ng_scripts" />
-    <item android:id="@+id/action_add_button" android:title="@string/ng_add_action" />
     <item android:id="@+id/action_load_preset_one" android:title="@string/ng_load_preset_one" />
     <item android:id="@+id/action_load_preset_two" android:title="@string/ng_load_preset_two" />
     <item android:id="@+id/action_load_preset_three" android:title="@string/ng_load_preset_three" />

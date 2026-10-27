@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.ComponentName
 import android.content.Context
+import android.content.ClipData
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.ClipboardManager
@@ -22,6 +23,8 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import com.stripe1.xmouse.layout.awaitEditorTag
 import android.widget.EditText
 import android.widget.ListView
@@ -32,8 +35,11 @@ import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import androidx.core.content.edit
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.appcompat.widget.Toolbar
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.stripe1.xmouse.ShellNavigation
@@ -51,9 +57,9 @@ import com.stripe1.xmouse.MainActivity
 import com.stripe1.xmouse.DatabaseHandler
 import com.stripe1.xmouse.CustomKeyboardButtonAdapter
 import com.stripe1.xmouse.ListEditActivity
-import com.stripe1.xmouse.MyJSView
 import com.stripe1.xmouse.MyMouseView
 import com.stripe1.xmouse.R
+import com.stripe1.xmouse.ShellTextEncoder
 import com.stripe1.xmouse.SpanVariableGridView
 import com.stripe1.xmouse.XMouseApplication
 import com.stripe1.xmouse.layout.LayoutButton
@@ -72,6 +78,8 @@ import com.stripe1.xmouse.secrets.CredentialReentryRequest
 import com.stripe1.xmouse.secrets.SecretId
 import com.stripe1.xmouse.secrets.AndroidSecretFileIo
 import com.stripe1.xmouse.transport.RecordingSshBackend
+import com.stripe1.xmouse.transport.LinuxClipboardHelper
+import com.stripe1.xmouse.transport.ClipboardTextBounds
 import com.stripe1.xmouse.transport.SshBackend
 import com.stripe1.xmouse.transport.SshConnectionRequest
 import com.stripe1.xmouse.transport.SshLimits
@@ -137,10 +145,9 @@ class SessionForegroundServiceAndroidTest {
     private var oldKeyboardBatchPresent = false
     private var oldInputBackend: String? = null
     private var oldInitialCommand: String? = null
-    private var oldGyroEnabled: Boolean? = null
-    private val oldGyroSettings = mutableMapOf<String, String?>()
     private var oldSettingDelay: Int? = null
     private var savedScriptId = 0
+    private var ownedScriptAlias: String? = null
     private var ownedControlProfileId: String? = null
     private var previousControlProfileId: String? = null
     private var oldPermissionRequestedPreference: Boolean? = null
@@ -476,17 +483,45 @@ class SessionForegroundServiceAndroidTest {
         ownedControlProfileId = profile.id
     }
 
-    private fun addSavedScript(activity: MainActivity, alias: String, command: String): Int {
-        val database = MainActivity::class.java.getDeclaredField("db").apply { isAccessible = true }
-            .get(activity) as DatabaseHandler
-        val fields = ArrayList<ArrayList<String>>().apply {
-            add(arrayListOf("Alias", alias))
-            add(arrayListOf("Script", command))
+    private fun savedScriptRows(): ArrayList<ArrayList<String>> {
+        val database = DatabaseHandler(context)
+        return try {
+            database.listAll(DatabaseHandler.SCRIPT_TABLE_NAME, arrayOf("Alias", "Script", "id"))
+        } finally {
+            database.close()
         }
-        database.addRow(DatabaseHandler.SCRIPT_TABLE_NAME, fields)
-        val row = database.listAll(DatabaseHandler.SCRIPT_TABLE_NAME, arrayOf("Alias", "Script", "id"))
-            .single { it[0] == alias }
-        return row[2].toInt().also { savedScriptId = it; activity.initMenu() }
+    }
+
+    private fun scriptEditorField(id: String): UiObject2 = requireNotNull(
+        device.wait(Until.findObject(By.res(context.packageName, id)), 5_000),
+    ) { "Script editor field did not appear: $id" }
+
+    private fun fillScriptEditor(alias: String, command: String) {
+        scriptEditorField("new_script_alias").setText(alias)
+        scriptEditorField("new_script_command").setText(command)
+    }
+
+    private fun waitForVisibleText(text: String, timeoutMillis: Long = 5_000): UiObject2 = requireNotNull(
+        device.wait(Until.findObject(By.text(text)), timeoutMillis),
+    ) { "Visible UI text did not appear: $text" }
+
+    private fun returnToMainScripts() {
+        repeat(3) {
+            if (device.findObject(By.res(context.packageName, "scripts_add")) != null) return
+            device.pressBack()
+            instrumentation.waitForIdleSync()
+        }
+        waitForText("Scripts")
+    }
+
+    private fun tapVisibleText(text: String) {
+        val target = requireNotNull(device.wait(Until.findObject(By.text(text)), 5_000)) {
+            "Text did not appear for row tap: $text"
+        }
+        val bounds = target.visibleBounds
+        assertTrue("text row is visible before tapping", bounds.width() > 0 && bounds.height() > 0)
+        assertTrue("row tap was injected", device.click(bounds.centerX(), bounds.centerY()))
+        instrumentation.waitForIdleSync()
     }
 
     private fun invokeToolbarConnectAction(scenario: ActivityScenario<MainActivity>) {
@@ -644,6 +679,17 @@ class SessionForegroundServiceAndroidTest {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
         while (!predicate() && System.nanoTime() < deadline) Thread.sleep(10)
         assertTrue(message(), predicate())
+    }
+
+    private fun waitForImeVisible(scenario: ActivityScenario<MainActivity>, visible: Boolean) {
+        eventually(message = { "IME visibility did not become $visible" }) {
+            var actual = false
+            scenario.onActivity { activity ->
+                actual = ViewCompat.getRootWindowInsets(activity.window.decorView)
+                    ?.isVisible(WindowInsetsCompat.Type.ime()) == true
+            }
+            actual == visible
+        }
     }
 
     private fun grantNotificationPermissionForDisclosureTest() {
@@ -877,6 +923,12 @@ class SessionForegroundServiceAndroidTest {
         ownedControlProfileId?.let { id ->
             val repository = LayoutProfileRepository(File(context.filesDir, LayoutEditorActivity.PROFILE_DIRECTORY))
             previousControlProfileId?.let { repository.selectProfile(it) }
+            if (repository.listProfiles().singleOrNull()?.id == id) {
+                repository.createProfile(LayoutProfile(
+                    id = "instrumented-test-anchor-${java.util.UUID.randomUUID()}",
+                    name = "Synthetic test baseline",
+                ))
+            }
             repository.deleteProfile(id, confirmed = true)
         }
         ownedControlProfileId = null
@@ -888,9 +940,17 @@ class SessionForegroundServiceAndroidTest {
         ownerLease?.close()
         ownerLease = null
         if (savedScriptId != 0) {
-            DatabaseHandler(context).deleteRow(DatabaseHandler.SCRIPT_TABLE_NAME, savedScriptId)
-            savedScriptId = 0
+            val database = DatabaseHandler(context)
+            try { database.deleteRow(DatabaseHandler.SCRIPT_TABLE_NAME, savedScriptId) }
+            finally { database.close() }
+        } else ownedScriptAlias?.let { alias ->
+            val ids = savedScriptRows().filter { it[0] == alias }.mapNotNull { it.getOrNull(2)?.toIntOrNull() }
+            val database = DatabaseHandler(context)
+            try { ids.forEach { database.deleteRow(DatabaseHandler.SCRIPT_TABLE_NAME, it) } }
+            finally { database.close() }
         }
+        savedScriptId = 0
+        ownedScriptAlias = null
         oldAutoConnect?.let { value -> defaultPreferences.edit { putBoolean("autologin_checkbox", value) } }
         if (oldKeyboardBatchPresent) {
             defaultPreferences.edit { putBoolean("setting_keyboard_batch", requireNotNull(oldKeyboardBatch)) }
@@ -901,16 +961,6 @@ class SessionForegroundServiceAndroidTest {
             ?: defaultPreferences.edit { remove("setting_dotool_initial") }
         oldInitialCommand?.let { value -> defaultPreferences.edit { putString("setting_xdotool_initial", value) } }
             ?: defaultPreferences.edit { remove("setting_xdotool_initial") }
-        oldGyroEnabled?.let { value -> defaultPreferences.edit { putBoolean("control_gyro_enabled", value) } }
-            ?: defaultPreferences.edit { remove("control_gyro_enabled") }
-        if (oldGyroSettings.isNotEmpty()) {
-            defaultPreferences.edit {
-                oldGyroSettings.forEach { (key, value) ->
-                    if (value == null) remove(key) else putString(key, value)
-                }
-            }
-            oldGyroSettings.clear()
-        }
         oldSettingDelay?.let { MainActivity.setting_delay = it }
         // Do not restore POST_NOTIFICATIONS with `pm revoke` from inside instrumentation: Android
         // terminates the target process on revocation, which also terminates this runner. The outer
@@ -1132,8 +1182,23 @@ class SessionForegroundServiceAndroidTest {
         eventually { recordingOwner.attemptsCreated == 3 && recordingOwner.controller.current.attemptHost == null }
         assertFalse(recordingOwner.controller.current.connection.isReady)
         assertFalse(recordingOwner.controller.current.foregroundRecoveryAvailable)
+        eventually(message = { "failed session state did not reach the visible Retry control" }) {
+            var retryVisible = false
+            activityScenario.onActivity { activity ->
+                retryVisible = activity.findViewById<android.widget.TextView>(R.id.connection_status).text.toString() ==
+                    "● Connection failed" &&
+                    activity.findViewById<android.widget.Button>(R.id.header_connection_button).text ==
+                    activity.getString(R.string.session_controls_retry)
+            }
+            retryVisible
+        }
         activityScenario.onActivity { activity ->
             assertEquals("● Connection failed", activity.findViewById<android.widget.TextView>(R.id.connection_status).text.toString())
+            val retry = activity.findViewById<android.widget.Button>(R.id.header_connection_button)
+            assertEquals("failed header state has an explicit Retry action",
+                activity.getString(R.string.session_controls_retry), retry.text.toString())
+            assertTrue(retry.isEnabled)
+            assertTrue(retry.contentDescription.toString().contains(activity.getString(R.string.session_controls_retry)))
         }
         showSessionControlsFromMenu(activityScenario)
         waitForText("Retry")
@@ -1317,6 +1382,158 @@ class SessionForegroundServiceAndroidTest {
     }
 
     @Test
+    fun sharedComposerGatesBlankAndDisconnectedSendAndRetainsDraftAcrossReconnect() {
+        grantNotificationPermissionForDisclosureTest()
+        grantLocalNetworkPermissionForConnectionTest()
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity(autoConnect = false, inputBackend = "xdotool", initialCommand = "")
+        activityScenario.onActivity { activity ->
+            val send = activity.findViewById<View>(R.id.keyboard_send)
+            val connect = activity.findViewById<android.widget.Button>(R.id.header_connection_button)
+            val input = activity.findViewById<EditText>(R.id.keyboard_input)
+            assertEquals("Connect", connect.text.toString())
+            assertFalse("blank composer cannot send while disconnected", send.isEnabled)
+            input.setText("draft survives reconnect")
+            assertFalse("a disconnected draft remains editable but cannot send", send.isEnabled)
+            assertTrue(connect.performClick())
+        }
+        eventually { recordingOwner.controller.current.connection.isReady }
+        eventually {
+            var enabled = false
+            activityScenario.onActivity { enabled = it.findViewById<View>(R.id.keyboard_send).isEnabled }
+            enabled
+        }
+
+        activityScenario.onActivity { activity ->
+            val input = activity.findViewById<EditText>(R.id.keyboard_input)
+            val connect = activity.findViewById<android.widget.Button>(R.id.header_connection_button)
+            assertEquals("draft survives reconnect", input.text.toString())
+            assertEquals("Disconnect", connect.text.toString())
+            assertTrue(activity.findViewById<View>(R.id.keyboard_send).isEnabled)
+            assertTrue(connect.performClick())
+        }
+        eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+        eventually {
+            var disabled = false
+            activityScenario.onActivity { disabled = !it.findViewById<View>(R.id.keyboard_send).isEnabled }
+            disabled
+        }
+        activityScenario.onActivity { activity ->
+            val input = activity.findViewById<EditText>(R.id.keyboard_input)
+            val connect = activity.findViewById<android.widget.Button>(R.id.header_connection_button)
+            assertEquals("draft survives disconnect", "draft survives reconnect", input.text.toString())
+            assertEquals("Connect", connect.text.toString())
+            assertTrue(connect.performClick())
+        }
+        eventually { recordingOwner.controller.current.connection.isReady }
+        eventually {
+            var enabled = false
+            activityScenario.onActivity { enabled = it.findViewById<View>(R.id.keyboard_send).isEnabled }
+            enabled
+        }
+        activityScenario.onActivity { activity ->
+            assertEquals("draft survives reconnect", activity.findViewById<EditText>(R.id.keyboard_input).text.toString())
+            assertTrue("reconnected composer can send the retained draft", activity.findViewById<View>(R.id.keyboard_send).isEnabled)
+            activity.findViewById<View>(R.id.computer_selector).performClick()
+            assertEquals("Computers sheet does not clear the active draft", "draft survives reconnect",
+                activity.findViewById<EditText>(R.id.keyboard_input).text.toString())
+            assertEquals("Disconnect", activity.findViewById<android.widget.Button>(R.id.computers_connect).text.toString())
+            activity.findViewById<View>(R.id.computers_connect).performClick()
+        }
+        eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+        activityScenario.onActivity { activity ->
+            assertEquals("sheet disconnect retains the draft", "draft survives reconnect",
+                activity.findViewById<EditText>(R.id.keyboard_input).text.toString())
+            assertFalse(activity.findViewById<View>(R.id.keyboard_send).isEnabled)
+            assertEquals("Connect", activity.findViewById<android.widget.Button>(R.id.computers_connect).text.toString())
+            activity.findViewById<View>(R.id.computers_connect).performClick()
+        }
+        eventually { recordingOwner.controller.current.connection.isReady }
+        activityScenario.onActivity { activity ->
+            assertEquals("sheet reconnect retains the draft", "draft survives reconnect",
+                activity.findViewById<EditText>(R.id.keyboard_input).text.toString())
+            assertFalse("a modal Computers sheet keeps the composer capability suspended",
+                activity.findViewById<View>(R.id.keyboard_send).isEnabled)
+            activity.findViewById<View>(R.id.overlay_close).performClick()
+            assertTrue("closing Computers restores Send for the connected retained draft",
+                activity.findViewById<View>(R.id.keyboard_send).isEnabled)
+        }
+    }
+
+    @Test
+    fun productionMultilineComposerImeSendUsesActualEditorInfoAndCurrentTabCapability() {
+        grantNotificationPermissionForDisclosureTest()
+        grantLocalNetworkPermissionForConnectionTest()
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity(autoConnect = true, inputBackend = "xdotool", initialCommand = "")
+        eventually { recordingOwner.controller.current.connection.isReady }
+        eventually { recordingOwner.backend.writes.toList() == listOf("\r\n") }
+        eventually(message = { "Touchpad control capability did not become active before testing the shared composer" }) {
+            var active = false
+            activityScenario.onActivity { active = it.activePointerInputToken() != null }
+            active
+        }
+        recordingOwner.backend.writes.clear()
+        recordingOwner.backend.commandOrder.clear()
+
+        fun sendFromTab(destinationId: Int, expectedRole: ShellNavigation.InputRole, text: String) {
+            val expectedCommand = "xdotool type ${ShellTextEncoder.quoteForShell(text)}"
+            activityScenario.onActivity { activity ->
+                val bottom = activity.findViewById<BottomNavigationView>(R.id.bottom_navigation)
+                bottom.selectedItemId = destinationId
+                assertTrue("the requested shell destination is selected", bottom.menu.findItem(destinationId).isChecked)
+            }
+            eventually(message = { "current tab did not activate its expected input role: $expectedRole" }) {
+                var roleActive = false
+                activityScenario.onActivity { activity ->
+                    roleActive = if (expectedRole == ShellNavigation.InputRole.POINTER) {
+                        activity.activePointerInputToken() != null && activity.activeActionInputToken() == null
+                    } else {
+                        activity.activePointerInputToken() == null && activity.activeActionInputToken() != null
+                    }
+                }
+                roleActive
+            }
+            activityScenario.onActivity { activity ->
+
+                val input = activity.findViewById<EditText>(R.id.keyboard_input)
+                assertTrue("the production field remains multiline", input.inputType and
+                    android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE != 0)
+                assertFalse("the production draft remains excluded from saved view state", input.isSaveEnabled)
+                input.setText(text)
+                assertTrue("the composer can be focused on either tab", input.requestFocus())
+                val editorInfo = EditorInfo()
+                val inputConnection = requireNotNull(input.onCreateInputConnection(editorInfo))
+                assertEquals(EditorInfo.IME_ACTION_SEND,
+                    editorInfo.imeOptions and EditorInfo.IME_MASK_ACTION)
+                assertEquals("the actual production input connection must not suppress Send", 0,
+                    editorInfo.imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION)
+                assertTrue(editorInfo.inputType and android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE != 0)
+                assertTrue("InputConnection must dispatch the advertised IME action",
+                    inputConnection.performEditorAction(EditorInfo.IME_ACTION_SEND))
+            }
+            eventually(message = { "IME Send did not dispatch escaped multiline text for $expectedRole" }) {
+                recordingOwner.backend.writes.any { it.contains(expectedCommand) }
+            }
+        }
+
+        val touchpadText = "Touchpad line one\n雪 café 'quoted' \$HOME"
+        val actionsText = "Actions line one\n東京 naïve 'quoted' \$HOME"
+        sendFromTab(R.id.nav_touchpad, ShellNavigation.InputRole.POINTER, touchpadText)
+        sendFromTab(R.id.nav_actions, ShellNavigation.InputRole.ACTIONS, actionsText)
+
+        val dispatchedTypeCommands = recordingOwner.backend.writes
+            .filter { it.contains("xdotool type ") }
+        assertEquals("only the two explicit IME Send actions dispatch text", 2, dispatchedTypeCommands.size)
+        assertTrue(dispatchedTypeCommands.any { it.contains(ShellTextEncoder.quoteForShell(touchpadText)) })
+        assertTrue(dispatchedTypeCommands.any { it.contains(ShellTextEncoder.quoteForShell(actionsText)) })
+        assertEquals("IME Send keeps the same ready synthetic session", 1, recordingOwner.attemptsCreated)
+        assertTrue(recordingOwner.controller.current.connection.isReady)
+    }
+
+    @Test
     fun layoutEditorNeverDispatchesAndNormalControlsUseOnlyTheSavedProfile() {
         grantNotificationPermissionForDisclosureTest()
         grantLocalNetworkPermissionForConnectionTest()
@@ -1371,14 +1588,15 @@ class SessionForegroundServiceAndroidTest {
             recordingOwner.backend.commandOrder.clear()
 
             activityScenario.onActivity { activity ->
-                val toolbar = activity.findViewById<Toolbar>(R.id.toolbar)
-                if (toolbar.menu.findItem(R.id.action_edit_layout) == null) {
-                    activity.menuInflater.inflate(R.menu.main, toolbar.menu)
-                }
-                activity.onOptionsItemSelected(requireNotNull(toolbar.menu.findItem(R.id.action_edit_layout)))
+                activity.findViewById<BottomNavigationView>(R.id.bottom_navigation).selectedItemId = R.id.nav_actions
+                assertTrue("the visible Actions Edit control directly launches the advanced editor",
+                    activity.findViewById<View>(R.id.actions_edit).performClick())
             }
 
             compose.awaitEditorTag("layout-editor-button-source")
+            compose.awaitEditorTag("layout-editor-undo")
+            compose.awaitEditorTag("layout-editor-redo")
+            compose.onNodeWithText("Add action").assertExists()
             val sourceNode = compose.onNodeWithTag("layout-editor-button-source").performScrollTo()
             sourceNode.performClick()
             compose.awaitEditorTag("layout-editor-move-earlier")
@@ -1468,6 +1686,30 @@ class SessionForegroundServiceAndroidTest {
             }
 
             activityScenario.onActivity { activity ->
+                assertTrue("Edit reopens the same selected saved layout directly",
+                    activity.findViewById<View>(R.id.actions_edit).performClick())
+            }
+            compose.awaitEditorTag("layout-editor-button-source")
+            device.pressBack()
+            compose.waitUntil(10_000) {
+                var returned = false
+                instrumentation.runOnMainSync {
+                    returned = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+                        .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED).any { it is MainActivity }
+                }
+                returned
+            }
+            eventually {
+                var preserved = false
+                activityScenario.onActivity { activity ->
+                    preserved = repository.loadProfile(original.id) == draft && repository.loadDraft(original.id) == null &&
+                        activity.selectedSavedActionProfile()?.id == original.id
+                }
+                preserved
+            }
+            assertTrue("Back from a clean editor cannot dispatch a command", recordingOwner.backend.writes.isEmpty())
+
+            activityScenario.onActivity { activity ->
                 activity.findViewById<BottomNavigationView>(R.id.bottom_navigation).selectedItemId = R.id.nav_actions
             }
             eventually {
@@ -1485,6 +1727,44 @@ class SessionForegroundServiceAndroidTest {
             }
             assertEquals("only the saved button command reaches the normal-mode sink",
                 listOf("shell:$expectedCommand"), recordingOwner.backend.commandOrder.toList())
+
+            activityScenario.onActivity { activity ->
+                activity.findViewById<EditText>(R.id.keyboard_input).setText("preset selection keeps this draft")
+                assertTrue(activity.findViewById<View>(R.id.actions_layout_picker).performClick())
+            }
+            // Native single-choice AlertDialog rows are CheckedTextViews, which waitForText's
+            // TextView/Button class allowlist omits. Find and click the accessible row directly.
+            val commonChoice = device.wait(Until.findObject(By.text("Built-in · Common")), 5_000)
+            assertNotNull("Built-in · Common must be an accessible, visible native picker row", commonChoice)
+            val visibleCommonChoice = requireNotNull(commonChoice)
+            assertFalse("preset row must have visible screen bounds", visibleCommonChoice.visibleBounds.isEmpty())
+            assertTrue("preset row should be clickable by the user", visibleCommonChoice.isClickable)
+            visibleCommonChoice.click()
+            eventually { var selected = false; activityScenario.onActivity {
+                selected = it.selectedBuiltInActionPresetId() == "builtin-common"
+            }; selected }
+            activityScenario.onActivity { activity ->
+                assertNull("a virtual preset is not reported as a saved profile", activity.selectedSavedActionProfile())
+                assertEquals("the existing user selection is not changed by a virtual choice",
+                    original.id, repository.loadSelectedProfile()?.id)
+                assertEquals("saved button data remains untouched", draft, repository.loadProfile(original.id))
+                assertEquals("preset selection does not clear the shared composer", "preset selection keeps this draft",
+                    activity.findViewById<EditText>(R.id.keyboard_input).text.toString())
+                assertTrue("the composer remains usable on Actions while connected",
+                    activity.findViewById<View>(R.id.keyboard_send).isEnabled)
+                assertEquals("Read-only", activity.findViewById<android.widget.Button>(R.id.actions_edit).text.toString())
+                assertFalse(activity.findViewById<View>(R.id.actions_edit).isEnabled)
+                val copy = requireNotNull(activity.findViewById<ViewGroup>(R.id.actions_tiles)
+                    .findViewWithTag<View>("common-copy"))
+                assertTrue("preset click dispatches through the normal active Actions input token", copy.performClick())
+            }
+            eventually {
+                recordingOwner.backend.commandOrder.toList() == listOf(
+                    "shell:$expectedCommand", "shell:xdotool key ctrl+c")
+            }
+            assertEquals("virtual preset dispatch adds only the selected fixed command",
+                listOf("shell:$expectedCommand", "shell:xdotool key ctrl+c"),
+                recordingOwner.backend.commandOrder.toList())
         } finally {
             try {
                 scenario?.close()
@@ -1498,7 +1778,8 @@ class SessionForegroundServiceAndroidTest {
                     repository.deleteProfile(original.id, confirmed = true)
                 }
                 if (activeProfileSeededForTest &&
-                    runCatching { repository.loadProfile(LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID) }.isSuccess) {
+                    runCatching { repository.loadProfile(LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID) }.isSuccess &&
+                    repository.listProfiles().size > 1) {
                     repository.deleteProfile(LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID, confirmed = true)
                 }
             }
@@ -1567,11 +1848,9 @@ class SessionForegroundServiceAndroidTest {
             assertSame(readyConnection, recordingOwner.controller.current.connection)
 
             activityScenario.onActivity { activity ->
-                val toolbar = activity.findViewById<Toolbar>(R.id.toolbar)
-                if (toolbar.menu.findItem(R.id.action_edit_layout) == null) {
-                    activity.menuInflater.inflate(R.menu.main, toolbar.menu)
-                }
-                activity.onOptionsItemSelected(requireNotNull(toolbar.menu.findItem(R.id.action_edit_layout)))
+                activity.findViewById<BottomNavigationView>(R.id.bottom_navigation).selectedItemId = R.id.nav_actions
+                assertTrue("Actions Edit remains the direct advanced-editor entry point",
+                    activity.findViewById<View>(R.id.actions_edit).performClick())
             }
             val source = compose.onNodeWithTag("layout-editor-button-source").performScrollTo()
             source.performClick()
@@ -1642,12 +1921,25 @@ class SessionForegroundServiceAndroidTest {
         owner.backend.commandOrder.clear()
         val generation = owner.controller.current.generation
         val connection = owner.controller.current.connection
+        eventually {
+            var actionsLoaded = false
+            activityScenario.onActivity { activity ->
+                actionsLoaded = activity.findViewById<View>(R.id.actions_edit).isEnabled
+            }
+            actionsLoaded
+        }
         activityScenario.onActivity { activity ->
             val old = requireNotNull(activity.activePointerInputToken())
             val bottom = activity.findViewById<BottomNavigationView>(R.id.bottom_navigation)
-            for (id in listOf(R.id.nav_keys, R.id.nav_actions, R.id.nav_touchpad)) {
+            for (id in listOf(R.id.nav_actions, R.id.nav_touchpad)) {
                 bottom.selectedItemId = id
-                assertNull(if (id == R.id.nav_touchpad) activity.activeKeyInputToken() else activity.activePointerInputToken())
+                if (id == R.id.nav_touchpad) {
+                    assertNull(activity.activeActionInputToken())
+                    assertNotNull(activity.activePointerInputToken())
+                } else {
+                    assertNull(activity.activePointerInputToken())
+                    assertNotNull(activity.activeActionInputToken())
+                }
                 assertFalse(activity.isControlInputTokenActive(old))
                 assertTrue(bottom.menu.findItem(id).isChecked)
             }
@@ -1657,12 +1949,67 @@ class SessionForegroundServiceAndroidTest {
             assertFalse(activity.isControlInputTokenActive(pointer))
             activity.onBackPressedDispatcher.onBackPressed()
             assertNotSame(pointer, requireNotNull(activity.activePointerInputToken()))
-            activity.findViewById<View>(R.id.type_on_computer).performClick()
+            val inlineInput = activity.findViewById<EditText>(R.id.keyboard_input)
+            assertTrue("shared inline text input is visible on Touchpad", inlineInput.isShown)
+            val inlinePointer = requireNotNull(activity.activePointerInputToken())
+            inlineInput.setText("merely edited, never sent")
+            assertTrue("inline input can retain focus", inlineInput.requestFocus())
+            assertSame("editing stays within the existing Touchpad capability", inlinePointer,
+                activity.activePointerInputToken())
+            activity.getSystemService(InputMethodManager::class.java)
+                .showSoftInput(inlineInput, 0)
+            assertTrue("field remains focused after requesting IME; currentFocus=${activity.currentFocus?.javaClass?.simpleName}#${activity.currentFocus?.id}",
+                inlineInput.hasFocus())
+        }
+        waitForImeVisible(activityScenario, true)
+        activityScenario.onActivity { activity ->
+            val inlineInput = activity.findViewById<EditText>(R.id.keyboard_input)
+            assertTrue("field is focused immediately before an Actions refresh; currentFocus=${activity.currentFocus?.javaClass?.simpleName}#${activity.currentFocus?.id}",
+                inlineInput.hasFocus())
+            val oldPointer = requireNotNull(activity.activePointerInputToken())
+            activity.refreshSavedActions()
+            assertEquals("saved-Actions refresh keeps the unsent draft", "merely edited, never sent",
+                inlineInput.text.toString())
+            assertTrue("saved-Actions refresh keeps the inline field focused; currentFocus=${activity.currentFocus?.javaClass?.simpleName}#${activity.currentFocus?.id}, attached=${inlineInput.isAttachedToWindow}",
+                inlineInput.hasFocus())
+            assertFalse("saved-Actions refresh still retires the old input capability",
+                activity.isControlInputTokenActive(oldPointer))
+            assertNotNull("Touchpad receives a fresh capability after saved-Actions refresh",
+                activity.activePointerInputToken())
+                assertFalse("the refresh loading state disables Actions edits", activity.findViewById<View>(R.id.actions_edit).isEnabled)
+        }
+        eventually {
+            var actionsLoaded = false
+            activityScenario.onActivity { activity ->
+                actionsLoaded = activity.findViewById<View>(R.id.actions_edit).isEnabled
+            }
+            actionsLoaded
+        }
+        activityScenario.onActivity { activity ->
+            val inlineInput = activity.findViewById<EditText>(R.id.keyboard_input)
+            assertEquals("the background Actions result keeps the unsent draft", "merely edited, never sent",
+                inlineInput.text.toString())
+            assertTrue("the background Actions result keeps the inline field focused", inlineInput.hasFocus())
+        }
+        waitForImeVisible(activityScenario, true)
+        activityScenario.onActivity { activity ->
+            val inlineInput = activity.findViewById<EditText>(R.id.keyboard_input)
+            val bottom = activity.findViewById<BottomNavigationView>(R.id.bottom_navigation)
+            val inlinePointer = requireNotNull(activity.activePointerInputToken())
+            activity.findViewById<View>(R.id.computer_selector).performClick()
+            assertEquals("opening Computers suspends without clearing the draft",
+                "merely edited, never sent", inlineInput.text.toString())
             assertNull(activity.activePointerInputToken())
-            assertNotNull(activity.activeTypingInputToken())
-            activity.findViewById<EditText>(R.id.keyboard_input).setText("merely edited, never sent")
             activity.onBackPressedDispatcher.onBackPressed()
-            assertNull(activity.activeTypingInputToken())
+            assertNotSame(inlinePointer, activity.activePointerInputToken())
+            assertEquals("closing Computers retains the draft", "merely edited, never sent", inlineInput.text.toString())
+            bottom.selectedItemId = R.id.nav_actions
+            assertEquals("changing to Actions retains the shared composer draft",
+                "merely edited, never sent", inlineInput.text.toString())
+            assertFalse("returning from Actions does not restore local text focus", inlineInput.hasFocus())
+            assertNull(activity.activePointerInputToken())
+            assertNotNull(activity.activeActionInputToken())
+            bottom.selectedItemId = R.id.nav_touchpad
             assertNotNull(activity.activePointerInputToken())
             assertEquals("● Connected", activity.findViewById<android.widget.TextView>(R.id.connection_status).text.toString())
         }
@@ -1675,7 +2022,7 @@ class SessionForegroundServiceAndroidTest {
     }
 
     @Test
-    fun scrollableTouchpadDoesNotStealPointerOrJoystickMovement() {
+    fun scrollableTouchpadDoesNotStealPointerMovement() {
         grantNotificationPermissionForDisclosureTest()
         grantLocalNetworkPermissionForConnectionTest()
         val recordingOwner = RecordingTransportOwner()
@@ -1684,43 +2031,40 @@ class SessionForegroundServiceAndroidTest {
         eventually { recordingOwner.controller.current.connection.isReady }
         eventually { recordingOwner.backend.writes.toList() == listOf("\r\n") }
         val generation = recordingOwner.controller.current.generation
-        for (joystick in listOf(false, true)) {
-            activityScenario.onActivity { activity ->
-                activity.shellNavigation().setJoystick(joystick)
-                val scroll = activity.findViewById<android.widget.ScrollView>(R.id.touchpad_destination)
-                scroll.layoutParams = scroll.layoutParams.apply { height = (250 * activity.resources.displayMetrics.density).toInt() }
+        activityScenario.onActivity { activity ->
+            val scroll = activity.findViewById<android.widget.ScrollView>(R.id.touchpad_destination)
+            scroll.layoutParams = scroll.layoutParams.apply {
+                height = (250 * activity.resources.displayMetrics.density).toInt()
             }
-            instrumentation.waitForIdleSync()
-            eventually {
-                var ready = false
-                activityScenario.onActivity { ready = it.activeControlInputToken() != null }
-                ready
-            }
-            recordingOwner.backend.writes.clear()
-            activityScenario.onActivity { activity ->
-                val scroll = activity.findViewById<android.widget.ScrollView>(R.id.touchpad_destination)
-                assertTrue("the short surface must actually be scrollable", scroll.canScrollVertically(1))
-                val surface: View = if (joystick) {
-                    val host = activity.findViewById<ViewGroup>(R.id.js)
-                    (0 until host.childCount).map { host.getChildAt(it) }.filterIsInstance<MyJSView>().single()
-                } else realPointer(activity)
-                assertTrue("the real input surface must retain height on short screens", surface.height > 0)
-                val bounds = android.graphics.Rect()
-                surface.getDrawingRect(bounds)
-                scroll.offsetDescendantRectToMyCoords(surface, bounds)
-                val x = bounds.centerX().toFloat()
-                val y = bounds.centerY().toFloat()
-                val now = SystemClock.uptimeMillis()
-                dispatchCapturedButtonTouch(scroll, now, now, MotionEvent.ACTION_DOWN, x, y)
-                dispatchCapturedButtonTouch(scroll, now, now + 20, MotionEvent.ACTION_MOVE, x, y - 50)
-                dispatchCapturedButtonTouch(scroll, now, now + 40, MotionEvent.ACTION_MOVE, x, y - 90)
-                dispatchCapturedButtonTouch(scroll, now, now + 60, MotionEvent.ACTION_UP, x, y - 90)
-                assertEquals("pointer/joystick movement must not scroll its parent: joystick=$joystick; bounds=$bounds; viewport=${scroll.height}", 0, scroll.scrollY)
-            }
-            eventually { recordingOwner.backend.writes.any { it.contains("mousemove_relative") } }
-            assertEquals(generation, recordingOwner.controller.current.generation)
-            assertTrue(recordingOwner.controller.current.connection.isReady)
         }
+        instrumentation.waitForIdleSync()
+        eventually {
+            var ready = false
+            activityScenario.onActivity { ready = it.activeControlInputToken() != null }
+            ready
+        }
+        recordingOwner.backend.writes.clear()
+        activityScenario.onActivity { activity ->
+            val scroll = activity.findViewById<android.widget.ScrollView>(R.id.touchpad_destination)
+            assertTrue("the short surface must actually be scrollable", scroll.canScrollVertically(1))
+            val surface = realPointer(activity)
+            assertTrue("the real input surface must retain height on short screens", surface.height > 0)
+            val bounds = android.graphics.Rect()
+            surface.getDrawingRect(bounds)
+            scroll.offsetDescendantRectToMyCoords(surface, bounds)
+            val x = bounds.centerX().toFloat()
+            val y = bounds.centerY().toFloat()
+            val now = SystemClock.uptimeMillis()
+            dispatchCapturedButtonTouch(scroll, now, now, MotionEvent.ACTION_DOWN, x, y)
+            dispatchCapturedButtonTouch(scroll, now, now + 20, MotionEvent.ACTION_MOVE, x, y - 50)
+            dispatchCapturedButtonTouch(scroll, now, now + 40, MotionEvent.ACTION_MOVE, x, y - 90)
+            dispatchCapturedButtonTouch(scroll, now, now + 60, MotionEvent.ACTION_UP, x, y - 90)
+            assertEquals("pointer movement must not scroll its parent; bounds=$bounds; viewport=${scroll.height}",
+                0, scroll.scrollY)
+        }
+        eventually { recordingOwner.backend.writes.any { it.contains("mousemove_relative") } }
+        assertEquals(generation, recordingOwner.controller.current.generation)
+        assertTrue(recordingOwner.controller.current.connection.isReady)
     }
 
     @Test
@@ -1730,7 +2074,9 @@ class SessionForegroundServiceAndroidTest {
         val startup = "synthetic startup command must run once"
         val rawCustomCommand = "xdotool windowminimize $(xdotool getactivewindow)"
         val scriptAlias = "saved route ${java.util.UUID.randomUUID()}"
-        val scriptCommand = "printf 'saved script command'"
+        val editedScriptAlias = "$scriptAlias edited"
+        val originalScriptCommand = "printf 'saved script command'"
+        val scriptCommand = "printf 'saved script command after edit'"
         val keyboardText = context.getString(R.string.app_name)
         val recordingOwner = RecordingTransportOwner()
         install(recordingOwner)
@@ -1743,6 +2089,68 @@ class SessionForegroundServiceAndroidTest {
         eventually { recordingOwner.backend.writes.any { it == "$startup\r\n" } }
         assertEquals("the initial host command is sent exactly once on the first connection", 1,
             recordingOwner.backend.writes.count { it == "$startup\r\n" })
+
+        val clipboardLiteral = "clipboard only 'quoted' \nline two $ (not shell syntax)"
+        val clipboardBytes = clipboardLiteral.toByteArray(Charsets.UTF_8)
+        eventually {
+            var enabled = false
+            activityScenario.onActivity { enabled = it.findViewById<View>(R.id.touchpad_clipboard_send).isEnabled }
+            enabled
+        }
+        val clipboardExec = "exec:${LinuxClipboardHelper.COMMAND}"
+        val beforeClipboard = recordingOwner.backend.commandOrder.toList()
+        assertFalse("a ready session does not automatically dispatch clipboard data",
+            beforeClipboard.contains(clipboardExec))
+
+        activityScenario.onActivity { activity ->
+            activity.getSystemService(ClipboardManager::class.java).setPrimaryClip(
+                ClipData.newIntent("synthetic non-text clipboard", Intent("synthetic clipboard")))
+            assertTrue("the enabled clipboard affordance accepts an explicit tap for non-text feedback",
+                activity.findViewById<View>(R.id.touchpad_clipboard_send).performClick())
+        }
+        assertEquals("non-text clipboard data never reaches SSH", beforeClipboard,
+            recordingOwner.backend.commandOrder.toList())
+        activityScenario.onActivity { activity ->
+            activity.getSystemService(ClipboardManager::class.java).setPrimaryClip(
+                ClipData.newPlainText("synthetic empty clipboard", ""))
+            assertTrue(activity.findViewById<View>(R.id.touchpad_clipboard_send).performClick())
+        }
+        assertEquals("empty clipboard data never reaches SSH", beforeClipboard,
+            recordingOwner.backend.commandOrder.toList())
+        activityScenario.onActivity { activity ->
+            activity.getSystemService(ClipboardManager::class.java).setPrimaryClip(
+                ClipData.newPlainText("synthetic oversized clipboard", "x".repeat(ClipboardTextBounds.MAX_BYTES + 1)))
+            assertTrue(activity.findViewById<View>(R.id.touchpad_clipboard_send).performClick())
+        }
+        assertEquals("oversized clipboard data never reaches SSH", beforeClipboard,
+            recordingOwner.backend.commandOrder.toList())
+
+        activityScenario.onActivity { activity ->
+            val button = activity.findViewById<View>(R.id.touchpad_clipboard_send)
+            assertEquals("Send clipboard to computer", button.contentDescription.toString())
+            assertEquals("Send clipboard to computer", button.tooltipText.toString())
+            activity.getSystemService(ClipboardManager::class.java).setPrimaryClip(
+                ClipData.newPlainText("synthetic clipboard", clipboardLiteral))
+        }
+        instrumentation.waitForIdleSync()
+        assertEquals("setting clipboard text alone has no transport side effect", beforeClipboard,
+            recordingOwner.backend.commandOrder.toList())
+        activityScenario.onActivity { activity ->
+            val button = activity.findViewById<View>(R.id.touchpad_clipboard_send)
+            assertTrue("the visible Touchpad icon invokes the explicit clipboard path", button.performClick())
+        }
+        eventually {
+            recordingOwner.backend.channels.any { channel ->
+                channel.command == LinuxClipboardHelper.COMMAND &&
+                    channel.inputBytes.toByteArray().contentEquals(clipboardBytes)
+            }
+        }
+        assertTrue("clipboard bytes travel as fixed-helper exec stdin",
+            recordingOwner.backend.commandOrder.contains("exec:${LinuxClipboardHelper.COMMAND}"))
+        assertFalse("clipboard text is never sent as simulated keyboard typing",
+            recordingOwner.backend.commandOrder.any { it.contains(clipboardLiteral) })
+        assertFalse("the clipboard route issues no shell typing command",
+            recordingOwner.backend.commandOrder.any { it.startsWith("shell:xdotool type") })
 
         activityScenario.onActivity { activity ->
             val mouse = realPointer(activity)
@@ -1760,19 +2168,6 @@ class SessionForegroundServiceAndroidTest {
                 recordingOwner.backend.writes.any { it.startsWith("xdotool mousemove_relative -- ") }
         }
         activityScenario.onActivity { activity ->
-            assertTrue("joystick mode toggle was not handled",
-                activity.findViewById<View>(R.id.jsToggle).performClick())
-            val joystickLayout = activity.findViewById<android.widget.LinearLayout>(R.id.js)
-            val joystick = (0 until joystickLayout.childCount)
-                .map { joystickLayout.getChildAt(it) }.filterIsInstance<MyJSView>().single()
-            val size = View.MeasureSpec.makeMeasureSpec(240, View.MeasureSpec.EXACTLY)
-            joystick.measure(size, size)
-            joystick.layout(0, 0, 240, 240)
-            val joystickDown = SystemClock.uptimeMillis()
-            dispatchTouch(joystick, joystickDown, joystickDown, MotionEvent.ACTION_DOWN, 120f, 120f)
-            dispatchTouch(joystick, joystickDown, joystickDown + 20, MotionEvent.ACTION_MOVE, 160f, 90f)
-            dispatchTouch(joystick, joystickDown, joystickDown + 40, MotionEvent.ACTION_UP, 160f, 90f)
-
             val keyboardKeyDown = SystemClock.uptimeMillis()
             val dispatcher = KeyEvent.DispatcherState()
             val down = KeyEvent(keyboardKeyDown, keyboardKeyDown, KeyEvent.ACTION_DOWN,
@@ -1788,11 +2183,9 @@ class SessionForegroundServiceAndroidTest {
                 activity.onKeyUp(KeyEvent.KEYCODE_VOLUME_UP, up))
         }
         eventually {
-            recordingOwner.backend.writes.count { it.startsWith("xdotool mousemove_relative -- ") } >= 2 &&
+            recordingOwner.backend.writes.any { it.startsWith("xdotool mousemove_relative -- ") } &&
                 recordingOwner.backend.writes.contains("xdotool key XF86AudioRaiseVolume\r\n")
         }
-        activityScenario.onActivity { it.findViewById<View>(R.id.type_on_computer).performClick() }
-        instrumentation.waitForIdleSync()
         activityScenario.onActivity { activity ->
             activity.findViewById<EditText>(R.id.keyboard_input).setText(R.string.app_name)
             assertTrue("batch keyboard send button was not handled",
@@ -1800,7 +2193,6 @@ class SessionForegroundServiceAndroidTest {
         }
         eventually { recordingOwner.backend.writes.contains("xdotool type '$keyboardText'\r\n") }
         activityScenario.onActivity {
-            it.findViewById<View>(R.id.overlay_close).performClick()
             it.findViewById<BottomNavigationView>(R.id.bottom_navigation).selectedItemId = R.id.nav_actions
         }
         instrumentation.waitForIdleSync()
@@ -1812,48 +2204,116 @@ class SessionForegroundServiceAndroidTest {
             assertEquals("the raw custom-button command must remain unchanged", rawCustomCommand,
                 rawButton.command)
 
-            addSavedScript(activity, scriptAlias, scriptCommand)
         }
 
         eventually {
             recordingOwner.backend.writes.any { it.startsWith("xdotool mousemove_relative -- ") } &&
-                recordingOwner.backend.writes.count { it.startsWith("xdotool mousemove_relative -- ") } >= 2 &&
+                recordingOwner.backend.writes.any { it.startsWith("xdotool mousemove_relative -- ") } &&
                 recordingOwner.backend.writes.contains("xdotool click 1\r\n") &&
                 recordingOwner.backend.writes.count { it == "xdotool key XF86AudioRaiseVolume\r\n" } >= 2 &&
                 recordingOwner.backend.writes.contains("xdotool type '$keyboardText'\r\n") &&
                 recordingOwner.backend.writes.contains("xdotool key BackSpace\r\n") &&
                 recordingOwner.backend.writes.contains("$rawCustomCommand\r\n")
         }
+
+        ownedScriptAlias = scriptAlias
+        activityScenario.onActivity { activity ->
+            val bottom = activity.findViewById<BottomNavigationView>(R.id.bottom_navigation)
+            bottom.selectedItemId = R.id.nav_scripts
+            assertEquals("the Scripts tab has no control-input capability", ShellNavigation.InputRole.NONE,
+                activity.shellNavigation().inputRole())
+            assertFalse("the shared composer is hidden but remains attached", activity.findViewById<View>(R.id.typing_dock).isShown)
+            val add = activity.findViewById<View>(R.id.scripts_add)
+            assertTrue("Scripts Add opens the existing script manager", add.performClick())
+        }
+        scriptEditorField("new_script_alias")
+        fillScriptEditor(scriptAlias, originalScriptCommand)
+        clickDialogButton("Save")
+        waitForVisibleText(scriptAlias)
+        returnToMainScripts()
+        savedScriptId = savedScriptRows().single { it[0] == scriptAlias }.let { it[2].toInt() }
+        assertEquals("the Scripts Add route durably stores the exact initial command",
+            originalScriptCommand, savedScriptRows().single { it[0] == scriptAlias }[1])
+
+        eventually {
+            var loaded = false
+            activityScenario.onActivity {
+                loaded = it.findViewById<ViewGroup>(R.id.scripts_list).findViewWithTag<View>(savedScriptId) != null
+            }
+            loaded
+        }
+        activityScenario.onActivity { activity ->
+            val run = requireNotNull(activity.findViewById<ViewGroup>(R.id.scripts_list)
+                .findViewWithTag<View>(savedScriptId))
+            val controls = run.parent as ViewGroup
+            assertEquals(2, controls.childCount)
+            val edit = controls.getChildAt(1)
+            assertEquals(activity.getString(R.string.ng_edit_named_script, scriptAlias), edit.contentDescription.toString())
+            assertTrue("the Scripts row Edit action opens the existing script editor", edit.performClick())
+        }
+        scriptEditorField("new_script_alias")
+        assertEquals("the saved alias is loaded into the editor", scriptAlias,
+            scriptEditorField("new_script_alias").text)
+        assertEquals("the saved SSH command is loaded without rewriting", originalScriptCommand,
+            scriptEditorField("new_script_command").text)
+        fillScriptEditor(editedScriptAlias, scriptCommand)
+        clickDialogButton("Save")
+        waitForVisibleText(editedScriptAlias)
+        val editedRow = savedScriptRows().single { it[0] == editedScriptAlias }
+        assertEquals("editing preserves the script's stable SQLite identity", savedScriptId, editedRow[2].toInt())
+        assertEquals("editing persists the exact replacement command", scriptCommand, editedRow[1])
+        returnToMainScripts()
+
         // Once the foreground inputs are observed at the provider boundary, suspend controls before
-        // exercising the saved-script dialog. Otherwise the fail-closed transport admission is
+        // exercising the saved-script Run action. Otherwise the fail-closed transport admission is
         // correctly allowed to drop input that has not yet reached the provider.
         activityScenario.onActivity { it.refreshSavedActions() }
         eventually {
             var loaded = false
             activityScenario.onActivity {
-                loaded = it.findViewById<ViewGroup>(R.id.actions_script_list).findViewWithTag<View>(savedScriptId) != null
+                loaded = it.findViewById<ViewGroup>(R.id.scripts_list).findViewWithTag<View>(savedScriptId) != null
             }
             loaded
         }
+        activityScenario.onActivity { activity ->
+            val bottom = activity.findViewById<BottomNavigationView>(R.id.bottom_navigation)
+            bottom.selectedItemId = R.id.nav_scripts
+            assertEquals("Scripts does not borrow the Actions input role", ShellNavigation.InputRole.NONE,
+                activity.shellNavigation().inputRole())
+            assertNull("Scripts has no active pointer/action token", activity.activeControlInputToken())
+            assertFalse("the shared text composer is hidden on Scripts",
+                activity.findViewById<View>(R.id.typing_dock).isShown)
+        }
+        eventually {
+            var runReady = false
+            activityScenario.onActivity {
+                runReady = it.findViewById<View>(R.id.scripts_list).findViewWithTag<View>(savedScriptId)?.isShown == true
+            }
+            runReady
+        }
         activityScenario.onActivity {
-            it.findViewById<android.widget.ScrollView>(R.id.actions_scroll).apply {
+            it.findViewById<android.widget.ScrollView>(R.id.scripts_scroll).apply {
                 isSmoothScrollingEnabled = false
                 fullScroll(View.FOCUS_DOWN)
             }
         }
         instrumentation.waitForIdleSync()
-        waitForText(scriptAlias)
-        activityScenario.onActivity { it.showSavedScripts() }
+        val commandOrderBeforeScriptTap = recordingOwner.backend.commandOrder.toList()
+        assertFalse("opening Scripts and completing Add/Edit does not execute a saved script",
+            commandOrderBeforeScriptTap.any { it == "exec:$scriptCommand" })
+        activityScenario.onActivity { activity ->
+            val run = requireNotNull(activity.findViewById<ViewGroup>(R.id.scripts_list).findViewWithTag<View>(savedScriptId))
+            assertTrue("the actual Scripts row Run action is visible", run.isShown)
+            assertTrue("the row's Run action is independently clickable", run.performClick())
+        }
         waitForRecentCommand(activityScenario, rawCustomCommand)
-        val shellCommandsBeforeScript = recordingOwner.backend.commandOrder.toList()
-        assertTrue("the real touchpad/joystick and volume/keyboard/custom routes must reach the same shell sink",
+        val shellCommandsBeforeScript = commandOrderBeforeScriptTap.toList()
+        assertTrue("the real touchpad and volume/keyboard/custom routes must reach the same shell sink",
             shellCommandsBeforeScript.any { it.startsWith("shell:xdotool mousemove_relative -- ") } &&
                 shellCommandsBeforeScript.contains("shell:xdotool click 1") &&
                 shellCommandsBeforeScript.contains("shell:xdotool type '$keyboardText'") &&
                 shellCommandsBeforeScript.contains("shell:$rawCustomCommand"))
 
-        waitForText(scriptAlias)
-        clickText(scriptAlias)
         eventually { recordingOwner.backend.channels.any { it.name == "exec" && it.command == scriptCommand } }
         assertEquals("Activity shell inputs and the saved exec script must share one ordered sink",
             shellCommandsBeforeScript + "exec:$scriptCommand", recordingOwner.backend.commandOrder.toList())
@@ -1865,6 +2325,48 @@ class SessionForegroundServiceAndroidTest {
                 .primaryClip?.getItemAt(0)?.text?.toString()
         }
         assertEquals("err oneerr twoout oneout two", copiedOutput)
+
+        activityScenario.onActivity { activity ->
+            val manage = activity.findViewById<View>(R.id.scripts_manage)
+            assertTrue("Scripts Manage opens the existing manager", manage.performClick())
+        }
+        waitForVisibleText("Manage Scripts")
+        waitForVisibleText(editedScriptAlias)
+        tapVisibleText(editedScriptAlias)
+        scriptEditorField("new_script_alias")
+        assertEquals(editedScriptAlias, scriptEditorField("new_script_alias").text)
+        assertEquals(scriptCommand, scriptEditorField("new_script_command").text)
+        clickDialogButton("Delete")
+        waitForVisibleText("Remove this saved script? This does not run its command.")
+        clickDialogButton("Delete")
+        eventually { savedScriptRows().none { it[2].toIntOrNull() == savedScriptId } }
+        returnToMainScripts()
+        eventually {
+            var empty = false
+            activityScenario.onActivity {
+                val list = it.findViewById<ViewGroup>(R.id.scripts_list)
+                empty = (0 until list.childCount).any { index ->
+                    val child = list.getChildAt(index)
+                    child is android.widget.TextView && child.text == it.getString(R.string.ng_no_scripts)
+                }
+            }
+            empty
+        }
+        assertTrue("the Manage route deletes only after explicit confirmation",
+            savedScriptRows().none { it[2].toIntOrNull() == savedScriptId })
+        savedScriptId = 0
+        ownedScriptAlias = null
+
+        activityScenario.onActivity { activity ->
+            activity.findViewById<BottomNavigationView>(R.id.bottom_navigation).selectedItemId = R.id.nav_actions
+            assertEquals("returning from Scripts restores an explicit input-capable destination",
+                ShellNavigation.Destination.ACTIONS, activity.shellNavigation().destination())
+        }
+        eventually {
+            var active = false
+            activityScenario.onActivity { active = it.activeControlInputToken() != null }
+            active
+        }
 
         val detachedScreenTransport = AtomicReference<SessionCommandTransport>()
         activityScenario.onActivity { detachedScreenTransport.set(it.commandTransport) }
@@ -1898,6 +2400,17 @@ class SessionForegroundServiceAndroidTest {
 
         SessionForegroundService.requestDisconnect(context)
         eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
+        val commandsBeforeDisconnectedClipboard = recordingOwner.backend.commandOrder.toList()
+        activityScenario.onActivity { activity ->
+            assertFalse("clipboard affordance updates live when the session disconnects",
+                activity.findViewById<View>(R.id.touchpad_clipboard_send).isEnabled)
+            activity.getSystemService(ClipboardManager::class.java).setPrimaryClip(
+                ClipData.newPlainText("stale after disconnect", "must never replay"))
+            assertTrue("the test injects a stale programmatic click against the disabled control",
+                activity.findViewById<View>(R.id.touchpad_clipboard_send).performClick())
+        }
+        assertEquals("clipboard content is not replayed after disconnect", commandsBeforeDisconnectedClipboard,
+            recordingOwner.backend.commandOrder.toList())
         var disconnectedCommandAccepted = true
         activityScenario.onActivity { activity ->
             disconnectedCommandAccepted = activity.commandTransport.executeShellCommand(
@@ -1991,8 +2504,6 @@ class SessionForegroundServiceAndroidTest {
 
         val oldKeyboardSurface = AtomicReference<InputSurfaceToken>()
         var keyboardDownTime = 0L
-        activityScenario.onActivity { it.findViewById<View>(R.id.type_on_computer).performClick() }
-        instrumentation.waitForIdleSync()
         activityScenario.onActivity { activity ->
             activity.findViewById<EditText>(R.id.keyboard_input).setText("input_lifecycle_fixture")
             keyboardButton.set(activity.findViewById(R.id.keyboard_send))
@@ -2027,6 +2538,7 @@ class SessionForegroundServiceAndroidTest {
         assertFalse("stale keyboard-send UP typed text on the resumed surface",
             recordingOwner.backend.writes.any { it.startsWith("xdotool type ") })
 
+        activityScenario.onActivity { it.findViewById<EditText>(R.id.keyboard_input).setText("input_lifecycle_fixture") }
         activityScenario.onActivity {
             assertTrue("a legitimate accessibility click must remain usable despite canceled touch ownership",
                 resumedKeyboardButton.get().performAccessibilityAction(
@@ -2250,14 +2762,13 @@ class SessionForegroundServiceAndroidTest {
     }
 
     @Test
-    fun touchCancelReleasesDragWithoutClickAndResetsJoystickForFreshDown() {
+    fun touchCancelReleasesDragWithoutClickAndRejectsStaleMotion() {
         grantNotificationPermissionForDisclosureTest()
         val recordingOwner = RecordingTransportOwner()
         install(recordingOwner)
         val activityScenario = launchVisibleActivity(autoConnect = true, inputBackend = "xdotool")
         eventually { recordingOwner.controller.current.connection.isReady }
         val mouseReference = AtomicReference<MyMouseView>()
-        val joystickReference = AtomicReference<MyJSView>()
         val now = SystemClock.uptimeMillis()
         activityScenario.onActivity { activity ->
             useImmediateTouchDelayForTest()
@@ -2284,169 +2795,8 @@ class SessionForegroundServiceAndroidTest {
             dispatchTouch(mouse, now, now + 40, MotionEvent.ACTION_UP, mouse.width / 2f + 20f, 60f)
             assertEquals("post-cancel MOVE/UP cannot resume the old drag", afterCancel,
                 recordingOwner.backend.writes.size)
-            assertTrue(activity.findViewById<View>(R.id.jsToggle).performClick())
-            val joystick = (0 until activity.findViewById<android.widget.LinearLayout>(R.id.js).childCount)
-                .map { activity.findViewById<android.widget.LinearLayout>(R.id.js).getChildAt(it) }
-                .filterIsInstance<MyJSView>().single()
-            joystickReference.set(joystick)
-            val size = View.MeasureSpec.makeMeasureSpec(240, View.MeasureSpec.EXACTLY)
-            joystick.measure(size, size)
-            joystick.layout(0, 0, 240, 240)
-            dispatchTouch(joystick, now, now, MotionEvent.ACTION_DOWN, 120f, 120f)
-            dispatchTouch(joystick, now, now + 10, MotionEvent.ACTION_MOVE, 170f, 90f)
         }
-        eventually { recordingOwner.backend.writes.size >= afterCancel + 2 }
-        activityScenario.onActivity { activity ->
-            dispatchTouch(joystickReference.get(), now, now + 20, MotionEvent.ACTION_CANCEL, 170f, 90f)
-        }
-        eventually { recordingOwner.backend.writes.size >= afterCancel + 2 }
-        val afterJoystickCancel = recordingOwner.backend.writes.size
-        activityScenario.onActivity { activity ->
-            val joystick = joystickReference.get()
-            dispatchTouch(joystick, now, now + 30, MotionEvent.ACTION_MOVE, 200f, 50f)
-            dispatchTouch(joystick, now, now + 40, MotionEvent.ACTION_UP, 200f, 50f)
-            assertEquals("joystick cancellation stops stale movement", afterJoystickCancel,
-                recordingOwner.backend.writes.size)
-            val cx = MyJSView::class.java.getDeclaredField("cx").apply { isAccessible = true }.getInt(joystick)
-            val cy = MyJSView::class.java.getDeclaredField("cy").apply { isAccessible = true }.getInt(joystick)
-            assertEquals(cx, MyJSView::class.java.getDeclaredField("hx").apply { isAccessible = true }.getInt(joystick))
-            assertEquals(cy, MyJSView::class.java.getDeclaredField("hy").apply { isAccessible = true }.getInt(joystick))
-            dispatchTouch(joystick, now + 50, now + 50, MotionEvent.ACTION_DOWN, 120f, 120f)
-            dispatchTouch(joystick, now + 50, now + 60, MotionEvent.ACTION_MOVE, 170f, 90f)
-        }
-        eventually { recordingOwner.backend.writes.size > afterJoystickCancel }
         assertTrue(recordingOwner.controller.current.connection.isReady)
-    }
-
-    @Test
-    fun injectedGyroscopeRegistrationAndLateCallbacksStayOnMainAndStopWithTheSurface() {
-        val mainThread = Looper.getMainLooper().thread
-        val callbackThread = AtomicReference<Thread>()
-        val registerThread = AtomicReference<Thread>()
-        val unregisterThread = AtomicReference<Thread>()
-        val callbacks = AtomicInteger()
-        lateinit var registeredListener: GyroscopeSamplingGate.Listener
-        val gate = GyroscopeSamplingGate(object : GyroscopeSamplingGate.SensorFacade {
-            override fun hasGyroscope() = true
-            override fun register(listener: GyroscopeSamplingGate.Listener): Boolean {
-                registerThread.set(Thread.currentThread())
-                registeredListener = listener
-                return true
-            }
-            override fun unregister(listener: GyroscopeSamplingGate.Listener) {
-                assertSame(registeredListener, listener)
-                unregisterThread.set(Thread.currentThread())
-            }
-        }, GyroscopeSamplingGate.MotionCallback { _, _, _ ->
-            callbackThread.set(Thread.currentThread())
-            callbacks.incrementAndGet()
-        })
-        val surface = InputSurfaceToken()
-
-        instrumentation.runOnMainSync {
-            gate.update(resumed = true, controlSurface = surface, userEnabled = true)
-            registeredListener.onSample(1f, 2f)
-        }
-        assertTrue(gate.isSampling)
-        assertSame(mainThread, registerThread.get())
-        assertSame(mainThread, callbackThread.get())
-        assertEquals(1, callbacks.get())
-
-        instrumentation.runOnMainSync {
-            gate.update(resumed = false, controlSurface = surface, userEnabled = true)
-            registeredListener.onSample(3f, 4f)
-        }
-        assertFalse(gate.isSampling)
-        assertSame(mainThread, unregisterThread.get())
-        assertEquals("a queued callback from the unregistered sensor lease is inert", 1, callbacks.get())
-    }
-
-    @Test
-    fun mainActivityLifecycleStopsAndRestartsItsGyroscopeInputLease() {
-        grantNotificationPermissionForDisclosureTest()
-        oldGyroEnabled = if (defaultPreferences.contains("control_gyro_enabled"))
-            defaultPreferences.getBoolean("control_gyro_enabled", false) else null
-        listOf("gyro_z_sensitivity_list", "gyro_y_sensitivity_list", "gyro_z_threshold_list",
-            "gyro_y_threshold_list").forEach { key ->
-            oldGyroSettings[key] = if (defaultPreferences.contains(key)) defaultPreferences.getString(key, null) else null
-        }
-        defaultPreferences.edit { putBoolean("control_gyro_enabled", false) }
-        defaultPreferences.edit {
-            putString("gyro_z_sensitivity_list", "1.0f")
-            putString("gyro_y_sensitivity_list", "1.0f")
-            putString("gyro_z_threshold_list", "0.5f")
-            putString("gyro_y_threshold_list", "0.5f")
-        }
-
-        val recordingOwner = RecordingTransportOwner()
-        install(recordingOwner)
-        val activityScenario = launchVisibleActivity(autoConnect = true, inputBackend = "xdotool")
-        eventually { recordingOwner.controller.current.connection.isReady }
-        eventually {
-            var active = false
-            activityScenario.onActivity { active = it.activeControlInputToken() != null }
-            active
-        }
-
-        val registered = CopyOnWriteArrayList<GyroscopeSamplingGate.Listener>()
-        val unregistered = CopyOnWriteArrayList<GyroscopeSamplingGate.Listener>()
-        val gateReference = AtomicReference<GyroscopeSamplingGate>()
-        activityScenario.onActivity { activity ->
-            val motion = MainActivity::class.java.getDeclaredMethod(
-                "onGyroscopeMotion", InputSurfaceToken::class.java, java.lang.Float.TYPE, java.lang.Float.TYPE,
-            ).apply { isAccessible = true }
-            val gate = GyroscopeSamplingGate(object : GyroscopeSamplingGate.SensorFacade {
-                override fun hasGyroscope() = true
-                override fun register(listener: GyroscopeSamplingGate.Listener): Boolean {
-                    registered.add(listener)
-                    return true
-                }
-                override fun unregister(listener: GyroscopeSamplingGate.Listener) { unregistered.add(listener) }
-            }, GyroscopeSamplingGate.MotionCallback { token, y, z -> motion.invoke(activity, token, y, z) })
-            MainActivity::class.java.getDeclaredField("gyroSamplingGate").apply { isAccessible = true }
-                .set(activity, gate)
-            gateReference.set(gate)
-
-            val toggle = activity.findViewById<android.widget.ToggleButton>(R.id.gyroToggle)
-            assertFalse("test begins with gyro disabled to avoid real platform registration", toggle.isChecked)
-            toggle.performClick()
-            assertTrue(toggle.isChecked)
-        }
-        eventually { gateReference.get().isSampling && registered.size == 1 }
-        val firstListener = registered.single()
-        activityScenario.onActivity { firstListener.onSample(0f, 20f) }
-        eventually { recordingOwner.backend.writes.any { it.startsWith("xdotool mousemove_relative -- ") } }
-        val writesBeforeLeaving = recordingOwner.backend.writes.size
-        val originalGeneration = recordingOwner.controller.current.generation
-
-        activityScenario.onActivity { it.startActivity(Intent(Settings.ACTION_SETTINGS)) }
-        assertTrue("system Settings did not become foreground", device.wait(
-            Until.hasObject(By.pkg("com.android.settings")), 10_000))
-        eventually { !gateReference.get().isSampling && unregistered.contains(firstListener) }
-        val writesWhilePaused = recordingOwner.backend.writes.size
-        assertEquals("the Activity lifecycle unregisters gyro before later sensor callbacks", writesBeforeLeaving,
-            writesWhilePaused)
-        activityScenario.onActivity { firstListener.onSample(0f, 25f) }
-        assertEquals("a callback queued for the retired Activity surface cannot send motion", writesWhilePaused,
-            recordingOwner.backend.writes.size)
-        assertEquals(originalGeneration, recordingOwner.controller.current.generation)
-        assertTrue(recordingOwner.controller.current.connection.isReady)
-
-        device.pressBack()
-        eventually {
-            var active = false
-            activityScenario.onActivity { active = it.activeControlInputToken() != null }
-            active && gateReference.get().isSampling && registered.size == 2
-        }
-        val resumedListener = registered.last()
-        activityScenario.onActivity {
-            firstListener.onSample(0f, 30f)
-            resumedListener.onSample(0f, 20f)
-        }
-        eventually { recordingOwner.backend.writes.size == writesWhilePaused + 1 }
-        assertEquals("only the resumed surface's new gyro lease produces remote movement",
-            writesWhilePaused + 1, recordingOwner.backend.writes.size)
-        assertEquals(originalGeneration, recordingOwner.controller.current.generation)
     }
 
     @Test

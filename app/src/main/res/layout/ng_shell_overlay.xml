@@ -1,68 +1,55 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/shell_overlay" android:layout_width="match_parent" android:layout_height="match_parent"
-    android:background="@color/ng_background" android:orientation="vertical"
-    android:paddingStart="@dimen/ng_page_gutter" android:paddingEnd="@dimen/ng_page_gutter" android:paddingBottom="20dp" android:visibility="gone">
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="51dp"
-        android:layout_marginBottom="12dp" android:gravity="center_vertical">
-        <TextView android:id="@+id/overlay_title" style="@style/TextAppearance.XMouseNg.Heading"
-            android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" />
-        <Button android:id="@+id/overlay_close" style="@style/Widget.XMouseNg.ControlButton.Text"
-            android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/ng_close" />
-    </LinearLayout>
-    <ScrollView android:id="@+id/computers_content" android:layout_width="match_parent" android:layout_height="match_parent">
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
-            <TextView android:id="@+id/computers_message" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:text="@string/ng_loading_computers" android:padding="8dp" />
-            <LinearLayout android:id="@+id/computers_list" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:orientation="vertical" />
-            <Button android:id="@+id/computers_connect" style="@style/Widget.XMouseNg.ControlButton.Accent"
-                android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/action_connect" />
-            <Button android:id="@+id/computers_manage" style="@style/Widget.XMouseNg.ControlButton.Soft"
-                android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="@string/ng_manage_computers" />
-            <Button android:id="@+id/computers_add" style="@style/Widget.XMouseNg.ControlButton.Accent"
-                android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="Add computer" />
-            <Button android:id="@+id/computers_find" style="@style/Widget.XMouseNg.ControlButton.Soft"
-                android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="Find computers" />
-        </LinearLayout>
-    </ScrollView>
-    <ScrollView android:id="@+id/typing_content" android:layout_width="match_parent"
-        android:layout_height="match_parent" android:fillViewport="true" android:scrollbars="vertical"
-        android:visibility="gone">
+    android:background="@color/ng_overlay" android:clickable="true" android:focusable="true"
+    android:accessibilityPaneTitle="@string/ng_computers" android:visibility="gone">
+
+    <LinearLayout android:id="@+id/computers_sheet" android:layout_width="match_parent"
+        android:layout_height="520dp" android:layout_gravity="bottom" android:orientation="vertical"
+        android:background="@drawable/ng_computers_sheet_background" android:elevation="8dp"
+        android:clickable="true" android:focusable="true" android:paddingBottom="12dp">
+        <View android:layout_width="34dp" android:layout_height="4dp" android:layout_gravity="center_horizontal"
+            android:layout_marginTop="10dp" android:layout_marginBottom="6dp" android:background="@drawable/ng_sheet_handle" />
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:orientation="vertical" android:paddingBottom="12dp">
-            <TextView android:id="@+id/keyboard_input_label" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:text="@string/ng_typing_label" android:labelFor="@+id/keyboard_input"
-                android:textColor="@color/ng_text_secondary" android:textSize="14sp" />
-            <EditText android:id="@id/keyboard_input" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:minHeight="120dp" android:layout_marginTop="6dp" android:gravity="top|start"
-                android:inputType="textMultiLine|textNoSuggestions" android:imeOptions="flagNoExtractUi"
-                android:textSize="16sp" android:textColor="@color/ng_text_primary"
-                android:hint="@string/ng_typing_hint" android:saveEnabled="false" android:importantForAutofill="no" />
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginTop="8dp" android:orientation="vertical">
-                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:orientation="horizontal" android:baselineAligned="false">
-                    <Button android:id="@+id/typing_key_escape" style="@style/Widget.XMouseNg.ControlButton.Soft"
-                        android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-                        android:text="@string/ng_escape" />
-                    <Button android:id="@+id/typing_key_tab" style="@style/Widget.XMouseNg.ControlButton.Soft"
-                        android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-                        android:layout_marginStart="6dp" android:text="@string/ng_tab" />
-                </LinearLayout>
-                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp" android:orientation="horizontal" android:baselineAligned="false">
-                    <Button android:id="@+id/typing_key_backspace" style="@style/Widget.XMouseNg.ControlButton.Soft"
-                        android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-                        android:text="@string/ng_backspace" />
-                    <Button android:id="@+id/typing_key_enter" style="@style/Widget.XMouseNg.ControlButton.Soft"
-                        android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-                        android:layout_marginStart="6dp" android:text="@string/ng_enter" />
-                </LinearLayout>
-            </LinearLayout>
-            <Button android:id="@+id/keyboard_send" style="@style/Widget.XMouseNg.ControlButton.Accent"
-                android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="8dp"
-                android:text="@string/ng_send" android:onClick="xMouseKeyboardSend" />
+            android:minHeight="52dp" android:gravity="center_vertical" android:paddingStart="20dp" android:paddingEnd="12dp">
+            <TextView android:id="@+id/overlay_title" style="@style/TextAppearance.XMouseNg.Heading"
+                android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+                android:text="@string/ng_computers" />
+            <ImageButton android:id="@+id/overlay_close" android:layout_width="48dp" android:layout_height="48dp"
+                android:background="?attr/selectableItemBackgroundBorderless" android:padding="14dp"
+                android:src="@drawable/ic_ng_close" android:contentDescription="@string/ng_close_computers" />
         </LinearLayout>
-    </ScrollView>
-</LinearLayout>
+        <ScrollView android:id="@+id/computers_content" android:layout_width="match_parent"
+            android:layout_height="0dp" android:layout_weight="1" android:fillViewport="true"
+            android:clipToPadding="false">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="vertical" android:paddingStart="20dp" android:paddingEnd="20dp"
+                android:paddingTop="4dp" android:paddingBottom="12dp">
+                <TextView android:id="@+id/computers_message" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:paddingTop="4dp" android:paddingBottom="8dp"
+                    android:text="@string/ng_loading_computers" android:textColor="@color/ng_text_secondary"
+                    android:textSize="13sp" android:accessibilityLiveRegion="polite" />
+                <LinearLayout android:id="@+id/computers_list" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:orientation="vertical" />
+                <com.google.android.material.button.MaterialButton android:id="@+id/computers_add"
+                    style="@style/Widget.XMouseNg.ControlButton.Soft" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:layout_marginTop="8dp"
+                    android:text="@string/ng_add_computer" />
+                <com.google.android.material.button.MaterialButton android:id="@+id/computers_find"
+                    style="@style/Widget.XMouseNg.ControlButton.Soft" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:layout_marginTop="8dp"
+                    android:text="@string/host_find_computers" />
+                <com.google.android.material.button.MaterialButton android:id="@+id/computers_manage"
+                    style="@style/Widget.XMouseNg.ControlButton.Text" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:layout_marginTop="4dp"
+                    android:text="@string/ng_manage_computers" />
+                <View android:layout_width="match_parent" android:layout_height="1dp"
+                    android:layout_marginTop="8dp" android:layout_marginBottom="8dp" android:background="@color/ng_border" />
+                <com.google.android.material.button.MaterialButton android:id="@+id/computers_connect"
+                    style="@style/Widget.XMouseNg.ControlButton.Accent" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:text="@string/action_connect" />
+            </LinearLayout>
+        </ScrollView>
+    </LinearLayout>
+</FrameLayout>

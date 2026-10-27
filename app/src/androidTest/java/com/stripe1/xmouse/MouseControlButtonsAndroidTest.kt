@@ -3,19 +3,16 @@ package com.stripe1.xmouse
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.content.pm.PackageManager
 import android.view.View
-import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.TextView
-import android.widget.ToggleButton
 import androidx.core.graphics.drawable.DrawableCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -24,19 +21,11 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class MouseControlButtonsAndroidTest {
     @Test
-    fun touchpadClickControlsAndJoystickRowKeepRealTargetsAndMeaningfulIcons() {
+    fun touchpadControlsRemainAvailableAndGyroJoystickSurfaceIsAbsent() {
         ActivityScenario.launch(MainInsetsFixtureActivity::class.java).use { scenario ->
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             scenario.onActivity { activity ->
                 val mouseOrder = listOf(R.id.firstMouseButton, R.id.secondMouseButton, R.id.thirdMouseButton)
-                val joystickOrder = listOf(
-                    R.id.js_fifthMouseButton,
-                    R.id.js_firstMouseButton,
-                    R.id.js_secondMouseButton,
-                    R.id.js_thirdMouseButton,
-                    R.id.js_fourthMouseButton,
-                    R.id.js_jsToggle,
-                )
                 assertPhysicalOrder(activity, mouseOrder)
                 val surface = activity.findViewById<FrameLayout>(R.id.mouse_surface_host)
                 val mouse = (0 until surface.childCount)
@@ -78,35 +67,35 @@ class MouseControlButtonsAndroidTest {
                     assertTrue("mouse dispatch callback missing for $id", button.hasOnClickListeners())
                 }
 
-                assertAccessibleIconControl(activity.findViewById(R.id.jsToggle))
-                assertAccessibleIconControl(activity.findViewById(R.id.gyroToggle))
-
                 assertDistinctIcons(
                     activity,
                     listOf(R.id.firstMouseButton, R.id.secondMouseButton, R.id.thirdMouseButton),
                 )
                 assertDistinctIcons(activity, listOf(R.id.fourthMouseButton, R.id.fifthMouseButton))
+                listOf("gyroToggle", "jsToggle", "js_jsToggle", "js").forEach { name ->
+                    assertEquals("removed control id $name must not be packaged", 0,
+                        activity.resources.getIdentifier(name, "id", activity.packageName))
+                }
+                listOf("action_joystick").forEach { name ->
+                    assertEquals("removed menu id $name must not be packaged", 0,
+                        activity.resources.getIdentifier(name, "id", activity.packageName))
+                }
+                listOf("pref_gyro", "pref_js").forEach { name ->
+                    assertEquals("removed Settings resource $name must not be packaged", 0,
+                        activity.resources.getIdentifier(name, "xml", activity.packageName))
+                }
+                listOf("ic_mouse_gyro_state", "ic_mouse_joystick", "ic_mouse_touchpad").forEach { name ->
+                    assertEquals("removed feature icon $name must not be packaged", 0,
+                        activity.resources.getIdentifier(name, "drawable", activity.packageName))
+                }
 
-                val gyro = activity.findViewById<ToggleButton>(R.id.gyroToggle)
-                assertFalse("gyro starts in the checked state in the isolated fixture", gyro.isChecked)
-                val offIcon = iconPixels(gyro)
-                assertToggleSemantics(gyro, expectedChecked = false)
-
-                gyro.isChecked = true
-                val onIcon = iconPixels(gyro)
-                assertNotEquals("gyro icon must visibly distinguish enabled from disabled", offIcon, onIcon)
-                assertToggleSemantics(gyro, expectedChecked = true)
-
-                activity.navigation.setJoystick(true)
-            }
-            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
-            scenario.onActivity { activity ->
-                val joystickOrder = listOf(R.id.js_fifthMouseButton, R.id.js_firstMouseButton,
-                    R.id.js_secondMouseButton, R.id.js_thirdMouseButton, R.id.js_fourthMouseButton, R.id.js_jsToggle)
-                assertPhysicalOrder(activity, joystickOrder)
-                joystickOrder.forEach { id -> assertAccessibleIconControl(activity.findViewById(id)) }
-                assertTrue("joystick mode exposes its return-to-touchpad control",
-                    activity.findViewById<View>(R.id.js_jsToggle).isShown)
+                val packageInfo = activity.packageManager.getPackageInfo(
+                    activity.packageName, PackageManager.GET_PERMISSIONS or PackageManager.GET_CONFIGURATIONS,
+                )
+                assertTrue("gyroscope permission is not requested",
+                    packageInfo.requestedPermissions.orEmpty().none { it == "android.permission.HIGH_SAMPLING_RATE_SENSORS" })
+                assertTrue("gyroscope hardware is not declared",
+                    packageInfo.reqFeatures.orEmpty().none { it.name == "android.hardware.sensor.gyroscope" })
             }
         }
     }
@@ -165,17 +154,6 @@ class MouseControlButtonsAndroidTest {
         drawable.setBounds(0, 0, width, height)
         drawable.draw(Canvas(bitmap))
         return IntArray(width * height).also { bitmap.getPixels(it, 0, width, 0, 0, width, height) }.toList()
-    }
-
-    private fun assertToggleSemantics(gyro: ToggleButton, expectedChecked: Boolean) {
-        val node = AccessibilityNodeInfo.obtain()
-        try {
-            gyro.onInitializeAccessibilityNodeInfo(node)
-            assertTrue("gyro toggle remains exposed as checkable", node.isCheckable)
-            assertEquals("gyro accessibility state matches its icon", expectedChecked, node.isChecked)
-        } finally {
-            node.recycle()
-        }
     }
 
     private fun dp(activity: MainInsetsFixtureActivity, value: Int): Int =

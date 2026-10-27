@@ -202,28 +202,28 @@
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/action_color_white"
-                    style="@style/Widget.XMouseNg.KeyCategory"
+                    style="@style/Widget.XMouseNg.ActionColorOption"
                     android:layout_width="wrap_content"
                     android:layout_height="48dp"
                     android:text="@string/ng_action_color_white" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/action_color_green"
-                    style="@style/Widget.XMouseNg.KeyCategory"
+                    style="@style/Widget.XMouseNg.ActionColorOption"
                     android:layout_width="wrap_content"
                     android:layout_height="48dp"
                     android:text="@string/ng_action_color_green" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/action_color_blue"
-                    style="@style/Widget.XMouseNg.KeyCategory"
+                    style="@style/Widget.XMouseNg.ActionColorOption"
                     android:layout_width="wrap_content"
                     android:layout_height="48dp"
                     android:text="@string/ng_action_color_blue" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/action_color_red"
-                    style="@style/Widget.XMouseNg.KeyCategory"
+                    style="@style/Widget.XMouseNg.ActionColorOption"
                     android:layout_width="wrap_content"
                     android:layout_height="48dp"
                     android:text="@string/ng_action_color_red" />

@@ -3,6 +3,7 @@ package com.stripe1.xmouse
 import android.content.SharedPreferences
 import android.view.View
 import android.widget.Button
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.edit
@@ -14,12 +15,14 @@ class NativeSettingsBinding(
     private val preferences: SharedPreferences,
     back: () -> Unit,
     advanced: () -> Unit,
+    initialSection: String = NativeSettingsActivity.SECTION_ALL,
 ) {
     private var rendering = false
     private var dialog: AlertDialog? = null
     private val pointer = root.findViewById<Button>(R.id.settings_pointer_speed)
     private val natural = root.findViewById<SwitchMaterial>(R.id.settings_natural_scroll)
     private val autoClear = root.findViewById<SwitchMaterial>(R.id.settings_auto_clear)
+    private val sendEnter = root.findViewById<SwitchMaterial>(R.id.settings_send_enter)
 
     init {
         root.findViewById<View>(R.id.settings_back).setOnClickListener { back() }
@@ -36,7 +39,32 @@ class NativeSettingsBinding(
         autoClear.setOnCheckedChangeListener { _, checked ->
             if (!rendering) preferences.edit { putBoolean(InputPreferences.KEYBOARD_AUTO_CLEAR, checked) }
         }
+        sendEnter.setOnCheckedChangeListener { _, checked ->
+            if (!rendering) preferences.edit { putBoolean(InputPreferences.KEYBOARD_SEND_ENTER_AFTER_TEXT, checked) }
+        }
         reload()
+        when (initialSection) {
+            NativeSettingsActivity.SECTION_POINTER -> {
+                root.findViewById<View>(R.id.settings_keyboard_section).visibility = View.GONE
+                root.findViewById<View>(R.id.settings_advanced_section).visibility = View.GONE
+                root.findViewById<TextView>(R.id.settings_title).setText(R.string.ng_settings_touchpad_title)
+            }
+            NativeSettingsActivity.SECTION_KEYBOARD -> {
+                root.findViewById<View>(R.id.settings_pointer_section).visibility = View.GONE
+                root.findViewById<View>(R.id.settings_advanced_section).visibility = View.GONE
+                root.findViewById<TextView>(R.id.settings_title).setText(R.string.ng_settings_keyboard_title)
+            }
+            else -> root.findViewById<TextView>(R.id.settings_title).setText(R.string.title_activity_settings)
+        }
+        if (initialSection == NativeSettingsActivity.SECTION_KEYBOARD ||
+            initialSection == NativeSettingsActivity.SECTION_POINTER) {
+            root.findViewById<ScrollView>(R.id.settings_scroll).post {
+                val targetId = if (initialSection == NativeSettingsActivity.SECTION_KEYBOARD)
+                    R.id.settings_keyboard_section else R.id.settings_pointer_section
+                val target = root.findViewById<View>(targetId)
+                root.findViewById<ScrollView>(R.id.settings_scroll).scrollTo(0, target.top)
+            }
+        }
     }
 
     fun reload() {
@@ -48,6 +76,7 @@ class NativeSettingsBinding(
         pointer.text = root.context.getString(R.string.ng_settings_pointer_value, scale)
         natural.isChecked = saved.naturalScrolling()
         autoClear.isChecked = saved.keyboardAutoClear
+        sendEnter.isChecked = saved.keyboardSendEnterAfterText
         root.findViewById<TextView>(R.id.settings_scroll_description).setText(
             if (natural.isChecked) R.string.ng_settings_natural_on else R.string.ng_settings_natural_off,
         )

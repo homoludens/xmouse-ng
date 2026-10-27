@@ -1,5 +1,5 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:id="@+id/nav_touchpad" android:title="@string/ng_touchpad" android:icon="@drawable/ic_ng_touchpad" />
-    <item android:id="@+id/nav_keys" android:title="@string/ng_keys" android:icon="@drawable/ic_ng_keys" />
     <item android:id="@+id/nav_actions" android:title="@string/ng_actions" android:icon="@drawable/ic_ng_actions" />
+    <item android:id="@+id/nav_scripts" android:title="@string/ng_scripts_tab" android:icon="@drawable/ic_ng_scripts" />
 </menu>

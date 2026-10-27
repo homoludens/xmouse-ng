@@ -13,6 +13,7 @@ class InputPreferencesTest {
         assertFalse(input.invertScroll)
         assertTrue(input.naturalScrolling())
         assertTrue(input.keyboardAutoClear)
+        assertFalse(input.keyboardSendEnterAfterText)
         assertEquals(3, input.pointerChoiceIndex())
         assertTrue(saved.isEmpty())
     }
@@ -76,9 +77,21 @@ class InputPreferencesTest {
             assertEquals(natural, restarted.naturalScrolling())
             assertEquals(!natural, restarted.invertScroll)
             assertEquals(autoClear, restarted.keyboardAutoClear)
+            assertFalse(restarted.keyboardSendEnterAfterText)
             assertEquals(false, saved["setting_keyboard_batch"])
             assertEquals(true, saved["keyboard_layout_locked"])
         }
+    }
+
+    @Test fun sendEnterPreferenceIsPersistedSeparatelyAndDefaultsOffForLegacyStores() {
+        for (sendEnter in listOf(false, true)) {
+            val saved = mutableMapOf<String, Any>(InputPreferences.KEYBOARD_SEND_ENTER_AFTER_TEXT to sendEnter)
+            assertEquals(sendEnter, InputPreferences.read(saved).keyboardSendEnterAfterText)
+            assertEquals(sendEnter, InputPreferences.read(saved.toMap()).keyboardSendEnterAfterText)
+            assertEquals(sendEnter, saved[InputPreferences.KEYBOARD_SEND_ENTER_AFTER_TEXT])
+        }
+        assertFalse(InputPreferences.read(mapOf(InputPreferences.KEYBOARD_SEND_ENTER_AFTER_TEXT to "true"))
+            .keyboardSendEnterAfterText)
     }
 
     @Test fun primaryAndAdvancedRoutesRetainAuthButExposeNoObsoleteInstantOrHiddenGridControl() {
@@ -94,6 +107,9 @@ class InputPreferencesTest {
         assertTrue(main.contains("setting_sensitivity = input.pointerSpeed;"))
         assertTrue(main.contains("setting_invert_scroll = input.invertScroll;"))
         assertTrue(main.contains("setting_keyboard_autoclear = input.keyboardAutoClear;"))
+        assertTrue(main.contains("setting_keyboard_send_enter_after_text = input.keyboardSendEnterAfterText;"))
+        assertTrue(main.contains("inputTokenFor(role)"))
+        assertTrue(main.contains("InlineTextDispatch.send(inputTool, text, setting_keyboard_send_enter_after_text)"))
         assertFalse(main.contains("setting_keyboard_batch"))
         assertFalse(source("res/xml/pref_keyboard.xml").contains("android:key=\"setting_keyboard_batch\""))
         assertFalse(source("res/xml/pref_keyboard.xml").contains("android:key=\"keyboard_layout_locked\""))
