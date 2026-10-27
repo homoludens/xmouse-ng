@@ -49,17 +49,22 @@ class UiPersistenceIntegrationTest {
     }
 
     @Test fun settingsRouteAndComposeThemesUsePersistedSemanticPreferences() {
-        val settings = source("app/src/main/res/layout/activity_native_settings.xml")
-        val binding = source("app/src/main/java/com/stripe1/xmouse/NativeSettingsBinding.kt")
+        val settings = source("app/src/main/res/layout/activity_settings.xml")
+        val activity = source("app/src/main/java/com/stripe1/xmouse/SharedSettingsActivity.kt")
+        val fragment = source("app/src/main/java/com/stripe1/xmouse/UnifiedSettingsFragment.kt")
         val app = source("app/src/main/java/com/stripe1/xmouse/XMouseApplication.kt")
         val composeTheme = source("app/src/main/java/com/stripe1/xmouse/ui/XMouseNgTheme.kt")
         val editorActivity = source("app/src/main/java/com/stripe1/xmouse/layout/LayoutEditorActivity.kt")
         val managerActivity = source("app/src/main/java/com/stripe1/xmouse/layout/LayoutProfileManagerActivity.kt")
         val backup = source("app/src/main/java/com/stripe1/xmouse/secrets/CredentialMetadataBackup.kt")
-        assertTrue(settings.contains("@+id/settings_send_enter"))
-        assertTrue(binding.contains("InputPreferences.KEYBOARD_SEND_ENTER_AFTER_TEXT"))
-        assertTrue(binding.contains("NativeSettingsActivity.SECTION_POINTER"))
-        assertTrue(binding.contains("NativeSettingsActivity.SECTION_KEYBOARD"))
+        assertTrue(settings.contains("@+id/settings_preference_container"))
+        assertTrue(settings.contains("@+id/settings_back"))
+        assertTrue(fragment.contains("InputPreferences.KEYBOARD_SEND_ENTER_AFTER_TEXT"))
+        assertTrue(fragment.contains("NativeSettingsActivity.SECTION_POINTER"))
+        assertTrue(fragment.contains("NativeSettingsActivity.SECTION_KEYBOARD"))
+        assertTrue(fragment.contains("AppearancePreferences.save(saved, mode)"))
+        assertTrue(fragment.contains("AndroidPrivateKeys.LEGACY_PATH"))
+        assertTrue(activity.contains("class SettingsActivity : SharedSettingsActivity()"))
         assertTrue(app.contains("AppearancePreferences.apply(AppearancePreferences.read(preferences))"))
         assertTrue(composeTheme.contains("colorResource(R.color.ng_background)"))
         assertTrue(editorActivity.contains("class LayoutEditorActivity : AppCompatActivity()"))
@@ -71,6 +76,21 @@ class UiPersistenceIntegrationTest {
         assertTrue(stringAllowlist.contains("\"appearance_mode\""))
         assertTrue(booleanAllowlist.contains("\"keyboard_send_enter_after_text\""))
         assertFalse("metadata allowlist does not include password material", stringAllowlist.contains("\"setting_pass\""))
+    }
+
+    @Test fun unifiedSettingsPreserveNonPersistentSecretsAndSectionRoutes() {
+        val fragment = source("app/src/main/java/com/stripe1/xmouse/UnifiedSettingsFragment.kt")
+        val main = source("app/src/main/java/com/stripe1/xmouse/MainActivity.java")
+        val editor = source("app/src/main/java/com/stripe1/xmouse/ComputerEditorActivity.kt")
+        assertTrue(fragment.contains("isPersistent = false"))
+        assertTrue(fragment.contains("credentialPrompts?.editPassphrase()"))
+        assertTrue(fragment.contains("PrivateKeySettingsController(requireActivity(), privateKey)"))
+        assertTrue(fragment.contains("credentialPrompts?.stop()"))
+        assertTrue(fragment.contains("privateKeyController?.destroy()"))
+        assertTrue(main.contains("showAppearance() { openInputSettings(NativeSettingsActivity.SECTION_APPEARANCE); }"))
+        assertTrue(main.contains("showAbout() { openInputSettings(NativeSettingsActivity.SECTION_ABOUT); }"))
+        assertTrue(main.contains("openInputSettings(NativeSettingsActivity.SECTION_AUTHENTICATION)"))
+        assertTrue(editor.contains("NativeSettingsActivity.SECTION_AUTHENTICATION"))
     }
 
     @Test fun actionPresetsAreVirtualTokenScopedAndDraftPrivacyBoundaryStaysDistinct() {

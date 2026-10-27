@@ -1,32 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:minHeight="64dp"
+    android:layout_marginBottom="4dp"
     android:clickable="true"
-    android:background="@drawable/item_selector"
+    android:focusable="true"
+    android:background="@color/ng_surface"
+    android:foreground="?attr/selectableItemBackground"
     android:orientation="horizontal">
-    <View
-        android:layout_width="4dp"
-        android:layout_height="match_parent"
-        />
+    <View android:layout_width="3dp" android:layout_height="match_parent" android:background="@color/ng_border" />
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_centerInParent="true"
         android:layout_height="wrap_content"
-        android:padding="16dp"
-        android:background="#efefef"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp"
         android:orientation="vertical">
         <TextView
             android:id="@+id/hostAlias"
-
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textStyle="bold"/>
+            android:textColor="@color/ng_text_primary"
+            android:textSize="16sp"
+            android:fontFamily="sans-serif-medium" />
         <TextView
             android:id="@+id/hostDesc"
-
-
             android:layout_width="match_parent"
-            android:layout_height="wrap_content" />
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:textColor="@color/ng_text_secondary"
+            android:textSize="13sp" />
         <TextView
             android:id="@+id/hostDBID"
 

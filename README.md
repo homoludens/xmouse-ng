@@ -37,6 +37,8 @@ On first connection, XMouse-NG shows the SSH host-key fingerprint before sending
 
 For key authentication, open **hamburger → Authentication & SSH settings** and enable **Use an SSH Key**. For an encrypted key, set **Optional Key Passphrase** first, then tap **Private Key** and choose the file with Android's document picker. XMouse-NG keeps a protected app-private copy, so the source document can later be moved or removed.
 
+Settings use one compact native screen: the **Settings** entry opens a section index, and **Touchpad**, **Keyboard**, **Authentication & SSH**, **Appearance**, and **About** share the same header, back control, and preference rows. Touchpad and Keyboard drawer shortcuts open their own sections; Appearance and About are full sections rather than dialogs. The index does not initialize SSH/key controls; the older settings entry point still opens Authentication & SSH in the shared screen.
+
 An old external key path may no longer be readable, and a device-key loss or backup restore may leave host metadata without usable secrets. You may need to select the private key again or re-enter passwords/passphrases. Secret bytes are not included in XMouse-NG's metadata backup, and there is no plaintext credential backup. If XMouse-NG offers a one-time credential re-entry prompt, the value is used only for that connection and is not saved. To save credentials again, edit the computer in **Computers**, or use **hamburger → Authentication & SSH settings** for global key/passphrase controls, as applicable. A blank replacement password on an existing computer means unchanged.
 
 ## Keep a session while switching apps

@@ -5,7 +5,7 @@
     android:orientation="vertical" android:background="@color/ng_background">
     <androidx.appcompat.widget.Toolbar android:id="@+id/computer_editor_toolbar"
         android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="56dp"
-        app:titleTextAppearance="@style/TextAppearance.XMouseNg.Heading" />
+        app:titleTextAppearance="@style/TextAppearance.XMouseNg.SettingsHeading" />
     <ScrollView android:id="@+id/computer_editor_scroll" android:layout_width="match_parent" android:layout_height="0dp"
         android:layout_weight="1" android:fillViewport="false" android:clipToPadding="false">
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"

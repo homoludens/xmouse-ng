@@ -755,7 +755,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		findViewById(R.id.drawer_keyboard_settings).setOnClickListener(v -> runDrawerAction(
 				() -> openInputSettings(NativeSettingsActivity.SECTION_KEYBOARD)));
 		findViewById(R.id.drawer_authentication).setOnClickListener(v -> runDrawerAction(
-				() -> openExternalScreen(new Intent(this, SettingsActivity.class))));
+				() -> openInputSettings(NativeSettingsActivity.SECTION_AUTHENTICATION)));
 		findViewById(R.id.drawer_appearance).setOnClickListener(v -> runDrawerAction(this::showAppearance));
 		findViewById(R.id.drawer_about).setOnClickListener(v -> runDrawerAction(this::showAbout));
 		findViewById(R.id.drawer_exit).setOnClickListener(v -> runDrawerAction(() -> {
@@ -773,32 +773,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	}
 
 	private void openSettings() { openExternalScreen(new Intent(this, NativeSettingsActivity.class)); }
-	private void showAppearance() {
-		SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
-		AppearancePreferences.Mode[] modes = AppearancePreferences.Mode.values();
-		String[] labels = { getString(R.string.ng_appearance_system), getString(R.string.ng_appearance_light),
-				getString(R.string.ng_appearance_dark) };
-		AppearancePreferences.Mode[] selected = { null };
-		android.app.AlertDialog dialog = new android.app.AlertDialog.Builder(this)
-				.setTitle(R.string.ng_appearance_title)
-				.setSingleChoiceItems(labels, AppearancePreferences.read(preferences).ordinal(), (choice, index) -> {
-					selected[0] = modes[index];
-					AppearancePreferences.save(preferences, selected[0]);
-					choice.dismiss();
-				})
-				.setNegativeButton(android.R.string.cancel, null)
-				.create();
-		showOwnedDialog(dialog, () -> {
-			if (selected[0] != null) AppearancePreferences.apply(selected[0]);
-		});
-	}
-
-	private void showAbout() {
-		String message = getString(R.string.ng_about_description) + "\n\n" +
-				getString(R.string.ng_about_version, BuildConfig.VERSION_NAME) + "\n" + getPackageName();
-		showOwnedDialog(new android.app.AlertDialog.Builder(this).setTitle(R.string.ng_about_title)
-				.setMessage(message).setPositiveButton(android.R.string.ok, null).create());
-	}
+	private void showAppearance() { openInputSettings(NativeSettingsActivity.SECTION_APPEARANCE); }
+	private void showAbout() { openInputSettings(NativeSettingsActivity.SECTION_ABOUT); }
 	private void openInputSettings(String section) {
 		Intent intent = new Intent(this, NativeSettingsActivity.class);
 		if (section != null) intent.putExtra(NativeSettingsActivity.EXTRA_SECTION, section);

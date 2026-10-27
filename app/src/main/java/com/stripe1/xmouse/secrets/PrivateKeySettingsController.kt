@@ -5,12 +5,12 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.CancellationSignal
 import android.os.OperationCanceledException
-import android.preference.Preference
 import android.widget.Toast
+import androidx.preference.Preference
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Legacy PreferenceActivity uses its platform result API; no Activity/Fragment conversion needed. */
+/** Uses the shared AndroidX preference row while retaining the existing safe import/result flow. */
 class PrivateKeySettingsController(private val activity: Activity, private val preference: Preference) {
     private val credentials = AndroidCredentials.get(activity)
     private val preferences = credentials.preferences

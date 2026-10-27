@@ -1,5 +1,6 @@
 package com.stripe1.xmouse.secrets
 
+import android.Manifest
 import android.app.AlertDialog
 import android.app.Activity
 import android.app.Instrumentation
@@ -7,22 +8,30 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.database.sqlite.SQLiteDatabase
+import android.os.Build
 import android.os.Looper
 import android.os.Bundle
-import android.preference.EditTextPreference
+import android.os.ParcelFileDescriptor
 import android.preference.PreferenceManager
+import android.util.TypedValue
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ListView
 import android.widget.TextView
 import androidx.core.content.edit
 import androidx.core.net.toUri
+import androidx.preference.EditTextPreference
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.KeyPair
 import com.stripe1.xmouse.DatabaseHandler
@@ -438,6 +447,12 @@ class CredentialRepositoryAndroidTest {
         ActivityScenario.launch<ComputerEditorActivity>(ComputerEditorActivity.intent(target, host.id)).use { scenario ->
             barrier()
             scenario.onActivity { activity ->
+                val toolbar = activity.findViewById<androidx.appcompat.widget.Toolbar>(R.id.computer_editor_toolbar)
+                val toolbarTitle = requireNotNull(toolbarTitleView(toolbar))
+                val expectedHeadingSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 20f,
+                    activity.resources.displayMetrics)
+                assertEquals("Computer editor toolbar uses the compact shared settings heading",
+                    expectedHeadingSize, toolbarTitle.textSize, 1f)
                 assertEquals("Hostname or IP address", activity.findViewById<TextView>(R.id.computer_host_label).text.toString())
                 assertEquals("Username", activity.findViewById<TextView>(R.id.computer_user_label).text.toString())
                 val password = activity.findViewById<EditText>(R.id.new_host_password)
@@ -461,6 +476,16 @@ class CredentialRepositoryAndroidTest {
                 enter(activity.findViewById(R.id.new_host_port), "2222")
                 enter(activity.findViewById(R.id.new_host_alias), "Native edited")
                 enter(password, "NOT_REAL_not_bundled")
+                assertTrue(activity.findViewById<View>(R.id.computer_auth_settings).performClick())
+            }
+            val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+            assertTrue("Computer form opens the unified Authentication & SSH section",
+                device.wait(Until.hasObject(By.text("Authentication & SSH")), 5_000))
+            device.pressBack()
+            device.waitForIdle()
+            scenario.onActivity { activity ->
+                assertEquals("Leaving the computer form clears its unsaved password as before",
+                    "", activity.findViewById<EditText>(R.id.new_host_password).text.toString())
             }
             assertEquals(host, f.repository.hosts().first())
             scenario.recreate(); barrier()
@@ -680,8 +705,9 @@ class CredentialRepositoryAndroidTest {
                     assertEquals(1, editorIntents.size)
                     assertFalse(editorIntents.last().hasExtra("computer_id"))
                     assertFalse(editorIntents.last().hasExtra("service_name"))
-                    assertEquals(1, factory.sessions.single().closes)
                 }
+                instrumentation.waitForIdleSync()
+                scenario.onActivity { assertEquals(1, factory.sessions.single().closes) }
 
                 scenario.onActivity { activity -> activity.findViewById<Button>(R.id.find_computers).performClick() }
                 barrier()
@@ -719,7 +745,9 @@ class CredentialRepositoryAndroidTest {
                 ActivityScenario.launch<ListEditActivity>(Intent(target, ListEditActivity::class.java)
                     .putExtra("intVariableType", 1)).use { scripts ->
                     scripts.onActivity { activity ->
-                        assertEquals(View.GONE, activity.findViewById<View>(R.id.find_computers).visibility)
+                        val discovery = activity.findViewById<View>(R.id.find_computers)
+                        assertTrue("Scripts manager must not expose host discovery",
+                            discovery == null || discovery.visibility == View.GONE)
                     }
                     assertEquals(2, factory.sessions.size)
                 }
@@ -738,11 +766,9 @@ class CredentialRepositoryAndroidTest {
                 val pref = activity.findPreference("pref_key_passphrase")
                 assertFalse(pref is EditTextPreference); assertFalse(pref.isPersistent)
                 assertEquals("For an encrypted key, set its passphrase before importing. Import never changes this choice.", pref.summary)
-                // Even the retained, currently unused connection XML cannot initialize plaintext.
-                activity.addPreferencesFromResource(R.xml.ssh_new_conn)
-                val fallback = activity.findPreference("setting_pass")
-                assertFalse(fallback is EditTextPreference); assertFalse(fallback.isPersistent)
-                pref.onPreferenceClickListener.onPreferenceClick(pref)
+                // The former plaintext fallback is no longer part of the active settings screen.
+                assertNull(activity.settingsFragmentForTesting().findSettingPreference("setting_pass"))
+                requireNotNull(pref.onPreferenceClickListener).onPreferenceClick(pref)
             }
             barrier()
             scenario.onActivity { activity ->
@@ -752,7 +778,9 @@ class CredentialRepositoryAndroidTest {
                 enter(input, "NOT_REAL_ui_phrase"); dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
             }
             barrier()
-            scenario.onActivity { activity -> activity.findPreference("pref_key_passphrase").let { it.onPreferenceClickListener.onPreferenceClick(it) } }
+            scenario.onActivity { activity -> activity.findPreference("pref_key_passphrase").let {
+                requireNotNull(it.onPreferenceClickListener).onPreferenceClick(it)
+            } }
             barrier()
             scenario.onActivity { activity -> enter(findInput(secretDialog(activity)), "NOT_REAL_cancelled_phrase") }
             scenario.recreate(); barrier()
@@ -793,7 +821,7 @@ class CredentialRepositoryAndroidTest {
 
                 ActivityScenario.launch<SettingsActivity>(Intent(target, SettingsActivity::class.java)).use { scenario ->
                     lateinit var ui: CredentialUi
-                    scenario.onActivity { activity -> ui = field(activity, "credentialsUi") as CredentialUi }
+                    scenario.onActivity { activity -> ui = requireNotNull(activity.settingsFragmentForTesting().credentialUiForTesting) }
 
                     // Authentication remains attempt-only after restore and must not persist this entry.
                     val material = AtomicReference<AuthenticationMaterial?>()
@@ -817,7 +845,7 @@ class CredentialRepositoryAndroidTest {
                     // a new encrypted reference and durably clears the marker.
                     scenario.onActivity { activity ->
                         val preference = activity.findPreference("pref_key_passphrase")
-                        preference.onPreferenceClickListener.onPreferenceClick(preference)
+                        requireNotNull(preference.onPreferenceClickListener).onPreferenceClick(preference)
                     }
                     barrier()
                     scenario.onActivity { activity ->
@@ -927,6 +955,7 @@ class CredentialRepositoryAndroidTest {
         val owner = NavigationOnlySessionOwner()
         val ownerLease = owners.installOwnerForTests(owner)
         try {
+            grantNotificationPermissionForTest()
             ActivityScenario.launch<MainActivity>(Intent(target, MainActivity::class.java)).use { scenario ->
                 barrier()
                 scenario.onActivity { activity ->
@@ -965,7 +994,7 @@ class CredentialRepositoryAndroidTest {
             barrier()
             val material = AtomicReference<AuthenticationMaterial?>(); val done = CountDownLatch(1)
             lateinit var ui: CredentialUi
-            scenario.onActivity { activity -> ui = field(activity, "credentialsUi") as CredentialUi }
+            scenario.onActivity { activity -> ui = requireNotNull(activity.settingsFragmentForTesting().credentialUiForTesting) }
             f.repository.execute { f.repository.authenticate(ui) { result, _ -> material.set(result); done.countDown() } }
             barrier(); barrier()
             scenario.onActivity { activity ->
@@ -1010,8 +1039,9 @@ class CredentialRepositoryAndroidTest {
             barrier()
             scenario.onActivity { activity ->
                 assertTrue(activity.findPreference("pref_usekeyauth").isEnabled)
-                assertTrue(activity.findPreference("sensitivity_list").isEnabled)
                 assertFalse(activity.findPreference("pref_key_passphrase").isPersistent)
+                assertNotNull(activity.findPreference("pref_addkeybutton"))
+                assertNull(activity.settingsFragmentForTesting().findSettingPreference("setting_pass"))
             }
         }
         assertEquals(rows, f.rows("contacts"))
@@ -1217,13 +1247,14 @@ class CredentialRepositoryAndroidTest {
             repository = CredentialRepository(helper, preferences, store)
         }
         fun rows(table: String): List<List<String?>> = helper.readableDatabase.rawQuery("SELECT * FROM $table ORDER BY id", null).use { c -> buildList { while (c.moveToNext()) add((0 until c.columnCount).map(c::getString)) } }
-        fun encryptedFiles() = File(context.noBackupFilesDir, "secrets").listFiles()!!.associate { it.name to it.readBytes().toList() }
+        fun encryptedFiles() = File(context.noBackupFilesDir, "secrets").listFiles().orEmpty()
+            .associate { it.name to it.readBytes().toList() }
         fun keystore() = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         fun deleteKey() { keystore().deleteEntry(alias) }
         fun assertNoPlaintext() {
             assertTrue(rows("contacts").all { it[6] == null && it[7] != null })
             assertFalse(preferences.contains("setting_pass")); assertFalse(preferences.contains("pref_key_passphrase"))
-            File(context.noBackupFilesDir, "secrets").listFiles()!!.forEach {
+            File(context.noBackupFilesDir, "secrets").listFiles().orEmpty().forEach {
                 val text = it.readBytes().toString(Charsets.ISO_8859_1)
                 assertFalse(text.contains("NOT_REAL_")); passwords.values.forEach { value -> assertFalse(text.contains(value)) }
             }
@@ -1270,11 +1301,36 @@ class CredentialRepositoryAndroidTest {
         @Suppress("UNCHECKED_CAST")
         return result.get() as T
     }
+
+    private fun grantNotificationPermissionForTest() {
+        if (Build.VERSION.SDK_INT < 33) return
+        val permission = Manifest.permission.POST_NOTIFICATIONS
+        val isGranted = target.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+        if (!isGranted) {
+            // Revocation force-stops the target process, including this instrumentation runner.
+            ParcelFileDescriptor.AutoCloseInputStream(
+                instrumentation.uiAutomation.executeShellCommand("pm grant ${target.packageName} $permission"),
+            ).use { it.readBytes() }
+        }
+        assertEquals("notification permission fixture state", PackageManager.PERMISSION_GRANTED,
+            target.checkSelfPermission(permission))
+    }
+    private fun toolbarTitleView(toolbar: androidx.appcompat.widget.Toolbar): TextView? {
+        val expected = toolbar.title?.toString()?.takeIf(String::isNotEmpty) ?: return null
+        fun findTitle(view: View): TextView? {
+            if (view is TextView && view.text?.toString() == expected) return view
+            if (view is ViewGroup) for (index in 0 until view.childCount) {
+                findTitle(view.getChildAt(index))?.let { return it }
+            }
+            return null
+        }
+        return findTitle(toolbar)
+    }
     private fun editor(activity: ListEditActivity) = field(activity, "editing") as AlertDialog
     private fun discoveryDialog(activity: ListEditActivity) = field(activity, "discoveryDialog") as AlertDialog
     private fun discoveryDialogOrNull(activity: ListEditActivity) = field(activity, "discoveryDialog") as AlertDialog?
     private fun secretDialog(activity: SettingsActivity): AlertDialog {
-        return dialog(field(activity, "credentialsUi") as CredentialUi)
+        return dialog(requireNotNull(activity.settingsFragmentForTesting().credentialUiForTesting))
     }
     private fun dialog(ui: CredentialUi) = (field(ui, "dialogs") as Set<*>).filterIsInstance<AlertDialog>().last()
     private fun assertReentryIdle(ui: CredentialUi) {

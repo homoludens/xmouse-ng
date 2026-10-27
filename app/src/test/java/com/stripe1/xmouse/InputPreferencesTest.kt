@@ -113,7 +113,9 @@ class InputPreferencesTest {
         assertFalse(main.contains("setting_keyboard_batch"))
         assertFalse(source("res/xml/pref_keyboard.xml").contains("android:key=\"setting_keyboard_batch\""))
         assertFalse(source("res/xml/pref_keyboard.xml").contains("android:key=\"keyboard_layout_locked\""))
-        assertTrue(source("java/com/stripe1/xmouse/NativeSettingsActivity.kt").contains("SettingsActivity::class.java"))
+        assertTrue(source("java/com/stripe1/xmouse/SharedSettingsActivity.kt").contains(
+            "override fun defaultSection(): String = NativeSettingsActivity.SECTION_AUTHENTICATION"))
+        assertTrue(source("java/com/stripe1/xmouse/NativeSettingsActivity.kt").contains("SECTION_POINTER"))
         for (key in listOf("pref_usekeyauth", "pref_addkeybutton", "pref_key_passphrase"))
             assertTrue(source("res/xml/pref_auth.xml").contains("android:key=\"$key\""))
     }

@@ -15,6 +15,8 @@ import androidx.core.net.toUri
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.recyclerview.widget.RecyclerView
+import android.widget.TextView
 import androidx.test.platform.app.InstrumentationRegistry
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.KeyPair
@@ -391,12 +393,12 @@ class PrivateKeyImportAndroidTest {
             ActivityScenario.launch<SettingsActivity>(Intent(target, SettingsActivity::class.java)).use { scenario ->
                 scenario.onActivity { activity ->
                     val pref = activity.findPreference(AndroidPrivateKeys.LEGACY_PATH)
-                    val list = activity.listView
-                    val position = (0 until list.adapter.count).first { list.adapter.getItem(it) === pref }
-                    val row = list.adapter.getView(position, null, list)
-                    assertTrue("Settings preference row should dispatch its click", list.performItemClick(
-                        row, position, list.adapter.getItemId(position),
-                    ))
+                    assertNotNull(pref.onPreferenceClickListener)
+                    val recycler = activity.findViewById<RecyclerView>(androidx.preference.R.id.recycler_view)
+                    val row = (0 until recycler.childCount).map(recycler::getChildAt).first {
+                        it.findViewById<TextView>(android.R.id.title)?.text == "Private key"
+                    }
+                    assertTrue("Tapping the real preference row dispatches the import picker", row.performClick())
                 }
                 waitFor { preferences.contains(LegacyCredentialReferences.GLOBAL_PRIVATE_KEY) }
                 awaitKeyWorker(scenario)
@@ -424,7 +426,7 @@ class PrivateKeyImportAndroidTest {
             ActivityScenario.launch<SettingsActivity>(Intent(target, SettingsActivity::class.java)).use { scenario ->
                 scenario.onActivity { activity ->
                     val pref = activity.findPreference(AndroidPrivateKeys.LEGACY_PATH)
-                    pref.onPreferenceClickListener.onPreferenceClick(pref)
+                    requireNotNull(pref.onPreferenceClickListener).onPreferenceClick(pref)
                 }
                 instrumentation.waitForIdleSync()
                 assertEquals(1, cancelled.hits)
@@ -436,8 +438,9 @@ class PrivateKeyImportAndroidTest {
                     var request = -1
                     scenario.onActivity { activity ->
                         val pref = activity.findPreference(AndroidPrivateKeys.LEGACY_PATH)
-                        pref.onPreferenceClickListener.onPreferenceClick(pref)
-                        val controller = SettingsActivity::class.java.getDeclaredField("keyImport").apply { isAccessible = true }.get(activity)
+                        requireNotNull(pref.onPreferenceClickListener).onPreferenceClick(pref)
+                        val controller = activity.settingsFragmentForTesting().keyImportForTesting
+                            ?: error("Private-key import controller was not attached")
                         request = PrivateKeySettingsController::class.java.getDeclaredField("requestCode").apply { isAccessible = true }.getInt(controller)
                     }
                     scenario.recreate()
@@ -473,7 +476,7 @@ class PrivateKeyImportAndroidTest {
             ActivityScenario.launch<SettingsActivity>(Intent(target, SettingsActivity::class.java)).use { scenario ->
                 scenario.onActivity { activity ->
                     val pref = activity.findPreference(AndroidPrivateKeys.LEGACY_PATH)
-                    pref.onPreferenceClickListener.onPreferenceClick(pref)
+                    requireNotNull(pref.onPreferenceClickListener).onPreferenceClick(pref)
                 }
                 instrumentation.waitForIdleSync() // Deliver the platform activity result before the barrier.
                 awaitKeyWorker(scenario)

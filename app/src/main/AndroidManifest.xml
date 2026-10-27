@@ -62,7 +62,8 @@
         <activity
             android:name=".SettingsActivity"
             android:configChanges="orientation|screenSize"
-            android:label="@string/ng_settings_advanced">
+            android:label="@string/ng_settings_auth_title"
+            android:theme="@style/AppTheme.NoActionBar">
             <meta-data
                 android:name="android.support.PARENT_ACTIVITY"
                 android:value="com.stripe1.xmouse.MainActivity" />
