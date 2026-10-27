@@ -51,6 +51,20 @@ On upgrade, each valid legacy active layout and each of the three preset CSV fil
 
 Use the **Actions** layout picker to choose one of four read-only virtual presets—Common, Navigate, Media, or F1–F12—or a saved layout. Presets dispatch fixed supported key/xdotool commands and do not create or modify repository data. Profiles are identified independently of their names, so duplicate names are allowed; existing custom widths, colors, commands, and saved order remain unchanged. Select **Actions → Edit** to enter the advanced ten-column editor, where **Add action** creates a custom button; the Actions landing page does not expose action creation.
 
+In the advanced editor, switch between **Visual** and **XML source**. XML is a versioned text representation of a saved layout profile—not Android view XML—and can edit the profile name plus ordered action IDs, titles, opaque commands, widths, and RGB/ARGB colors. Validate and Format do not write a draft; **Apply & return** validates the whole document and makes one recoverable draft edit. Review it in Visual, then use **Save changes** to persist the profile. For example:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<layout version="1" id="profile-id" name="My layout" columns="10">
+  <button id="action-1" width="3" color="#80A1B2C3">
+    <title>Close window</title>
+    <command>xdotool key alt+F4</command>
+  </button>
+</layout>
+```
+
+The root ID must remain the ID being edited. XML 1.0 and only this version-1 layout schema are accepted; XML 1.1 declarations, DTDs and entity declarations/references beyond XML's built-in and numeric references, processing instructions, namespaces, XInclude, and unknown elements/attributes are rejected. XML comments inside the layout are preserved by Format but are annotations, not saved profile data. Text values are escaped for markup, while command content (including whitespace and line endings) is not trimmed or interpreted. Invalid XML remains in memory until explicitly reset/discarded; the validated profile and recoverable draft are not overwritten by typing, validation, or formatting. On process death, the validated recoverable draft can be reopened, but an unapplied in-memory XML buffer is not promised to survive.
+
 ## Optional: find computers with Avahi
 
 **Computers → Find computers** discovers only hosts advertising the `_ssh._tcp` DNS-SD service. Running SSH alone does not guarantee that a host advertises this service. Discovery requires the phone and host to share a LAN where multicast DNS-SD is allowed; guest-network isolation, VPNs, or blocked multicast can prevent results. Manual hostname/IP entry remains available.
