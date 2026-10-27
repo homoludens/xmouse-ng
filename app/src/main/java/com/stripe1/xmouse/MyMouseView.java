@@ -1,7 +1,6 @@
 package com.stripe1.xmouse;
 
 import android.content.Context;
-import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.DashPathEffect;
 import android.graphics.Paint;
@@ -28,10 +27,7 @@ public class MyMouseView extends View {
     //private final float MINP = 0.25f;
     //private final float MAXP = 0.75f;
     private Paint mPaint;
-    private Bitmap mBitmap;
-    //private Canvas  mCanvas;
     private Path mPath;
-    private Paint mBitmapPaint;
     private Paint stripPaint;
     private Paint stripTrackPaint;
     private Paint hintTitlePaint;
@@ -44,7 +40,6 @@ public class MyMouseView extends View {
     final int CLICK = 3;
     private int w=0;
     private int h=0;
-    Canvas canvas;
     PointF start = new PointF();
     long downStart = 0;
     long downEnd = 0;
@@ -88,7 +83,6 @@ public class MyMouseView extends View {
 
         //mBlur = new BlurMaskFilter(8, BlurMaskFilter.Blur.NORMAL);
         mPath = new Path();
-        mBitmapPaint = new Paint(Paint.DITHER_FLAG);
         stripPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         stripPaint.setStyle(Paint.Style.FILL);
         stripPaint.setColor(c.getColor(R.color.ng_surface_soft));
@@ -121,19 +115,14 @@ public class MyMouseView extends View {
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
-        mBitmap = w > 0 && h > 0 ? Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888) : null;
         this.w=w;
         this.h=h;
 
         //Log.d("MyMouseView", String.valueOf(w + ',' + h));
-        //mCanvas = new Canvas(mBitmap);
     }
 
     @Override
-    protected void onDraw(Canvas c) {
-        canvas = c;
-        if (mBitmap != null) canvas.drawBitmap(mBitmap, 0, 0, mBitmapPaint);
-
+    protected void onDraw(Canvas canvas) {
         float stripLeft = Math.max(0f, w - scrollStart);
         scrollStripBounds.set(stripLeft, 0f, w, h);
         scrollStripPath.reset();
@@ -265,9 +254,6 @@ public class MyMouseView extends View {
     }
     private void touch_up(boolean linger) {
         mPath.lineTo(mX, mY);
-        // commit the path to our offscreen
-        //mCanvas.drawPath(mPath, mPaint);
-        // kill this so we don't double draw
         if(!linger) mPath.reset();
         scrolling=false;
         touching=false;

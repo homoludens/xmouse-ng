@@ -13,7 +13,7 @@ import java.util.function.BooleanSupplier
 /** One bounded, attempt-owned prompt. UI attaches weakly; detaching never shuts down a transport. */
 class SessionInteractions(private val dispatcher: Executor) {
     /** Opaque screen-lifetime capability. It contains no UI reference and is invalidated on detach. */
-    class PresentationToken internal constructor()
+    class PresentationToken internal constructor(internal val receiveRecentCommands: Boolean)
 
     /** Attempt-scoped presentation owner; command text/output is delivered only while it is current. */
     class CommandResultScope internal constructor(internal val presentationAtStart: PresentationToken?) {
@@ -73,11 +73,12 @@ class SessionInteractions(private val dispatcher: Executor) {
     private var owner: Any? = null
     private var pending: Prompt? = null
 
-    fun attach(observer: Listener): PresentationToken {
+    @JvmOverloads
+    fun attach(observer: Listener, receiveRecentCommands: Boolean = true): PresentationToken {
         detach()
         return synchronized(this) {
             listener = WeakReference(observer)
-            PresentationToken().also { presentation = it }
+            PresentationToken(receiveRecentCommands).also { presentation = it }
         }
     }
     fun detach() {
@@ -232,6 +233,9 @@ class SessionInteractions(private val dispatcher: Executor) {
         target: PresentationToken,
         command: String,
     ) {
+        // A subscriber without a visible command consumer opts out before allocating/posting UI
+        // work. Other result types and opted-in subscribers keep their existing delivery guards.
+        if (!target.receiveRecentCommands) return
         notifyCommandResult(scope, target) { it.recentCommand(command) }
     }
 

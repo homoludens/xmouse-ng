@@ -225,7 +225,7 @@ public class DatabaseHandler extends SQLiteOpenHelper implements Closeable {
     	
         SQLiteDatabase db = this.getReadableDatabase();
        
-        Cursor cursor = db.query(	TABLE_NAME, //String table
+        try (Cursor cursor = db.query(	TABLE_NAME, //String table
         							columnKeys, //new String[] { KEY_ID, KEY_NAME, KEY_PH_NO }, //String[] columns
         							null,//KEY_ID + "=?", //String selection
         							null,//new String[] { String.valueOf(id) }, //String[] selectionArgs
@@ -233,7 +233,7 @@ public class DatabaseHandler extends SQLiteOpenHelper implements Closeable {
         							null, //String having
         							KEY_ID + " DESC",//null, //String orderBy
         							"1"//null //String limit
-        						);
+        )) {
         
         
         if (cursor.moveToFirst()) {
@@ -248,15 +248,16 @@ public class DatabaseHandler extends SQLiteOpenHelper implements Closeable {
         	return new String[columnKeys.length]; //return empty array
         }
         
-        db.close();
-        
         return columnKeys;
+        } finally {
+            db.close();
+        }
     }
     public ArrayList<ArrayList<String>> listAll(String TABLE_NAME,String[] strings) {
 		// TODO Auto-generated method stub
     	SQLiteDatabase db = this.getReadableDatabase();
         
-        Cursor cursor = db.query(	TABLE_NAME, //String table
+        try (Cursor cursor = db.query(	TABLE_NAME, //String table
         							strings, //new String[] { KEY_ID, KEY_NAME, KEY_PH_NO }, //String[] columns
         							null,//KEY_TIME + ">=? AND " + KEY_TIME + "<=?", //String selection
         							null,//new String[] { timeLow, timeHigh }, //String[] selectionArgs
@@ -264,7 +265,7 @@ public class DatabaseHandler extends SQLiteOpenHelper implements Closeable {
         							null, //String having
         							KEY_ID + " DESC",//null, //String orderBy
         							null //String limit
-        						);
+        )) {
     	
     	ArrayList<ArrayList<String>> results = new ArrayList<ArrayList<String>>();
         // looping through all rows and adding to list
@@ -282,9 +283,11 @@ public class DatabaseHandler extends SQLiteOpenHelper implements Closeable {
             	
             } while (cursor.moveToNext());
         }
-        db.close();
         // return contact list
         return results;
+        } finally {
+            db.close();
+        }
 	}
     // Getting All Contacts
     public ArrayList<ArrayList<String>> listWithTimeRange(String TABLE_NAME,String[] columnKeys,String timeLow,String timeHigh) {
@@ -299,7 +302,7 @@ public class DatabaseHandler extends SQLiteOpenHelper implements Closeable {
     	
     	SQLiteDatabase db = this.getReadableDatabase();
         
-        Cursor cursor = db.query(	TABLE_NAME, //String table
+        try (Cursor cursor = db.query(	TABLE_NAME, //String table
         							columnKeys, //new String[] { KEY_ID, KEY_NAME, KEY_PH_NO }, //String[] columns
         							KEY_TIME + ">=? AND " + KEY_TIME + "<=?", //String selection
         							new String[] { timeLow, timeHigh }, //String[] selectionArgs
@@ -307,7 +310,7 @@ public class DatabaseHandler extends SQLiteOpenHelper implements Closeable {
         							null, //String having
         							KEY_ID + " DESC",//null, //String orderBy
         							null //String limit
-        						);
+        )) {
     	
     	ArrayList<ArrayList<String>> results = new ArrayList<ArrayList<String>>();
         // looping through all rows and adding to list
@@ -325,9 +328,11 @@ public class DatabaseHandler extends SQLiteOpenHelper implements Closeable {
             	
             } while (cursor.moveToNext());
         }
-        db.close();
         // return contact list
         return results;
+        } finally {
+            db.close();
+        }
     }
  
     // Updating single contact
@@ -363,17 +368,17 @@ public class DatabaseHandler extends SQLiteOpenHelper implements Closeable {
     public int getTableCount(String TABLE_NAME) {
         String countQuery = "SELECT  "+ KEY_ID +" FROM " + TABLE_NAME;
         SQLiteDatabase db = this.getReadableDatabase();
-        Cursor cursor = db.rawQuery(countQuery, null);
-        
- 
-        // return count
-        return cursor.getCount();
+        try (Cursor cursor = db.rawQuery(countQuery, null)) {
+            return cursor.getCount();
+        } finally {
+            db.close();
+        }
     }
 
     public ArrayList<ArrayList<String>> getRowWithId(String TABLE_NAME,String[] columnKeys, String id) {
 		SQLiteDatabase db = this.getReadableDatabase();
         
-        Cursor cursor = db.query(	TABLE_NAME, //String table
+        try (Cursor cursor = db.query(	TABLE_NAME, //String table
         							columnKeys, //new String[] { KEY_ID, KEY_NAME, KEY_PH_NO }, //String[] columns
         							KEY_ID + "=?", //String selection
         							new String[] { id }, //String[] selectionArgs
@@ -381,7 +386,7 @@ public class DatabaseHandler extends SQLiteOpenHelper implements Closeable {
         							null, //String having
         							KEY_ID + " DESC",//null, //String orderBy
         							null //String limit
-        						);
+        )) {
     	
     	ArrayList<ArrayList<String>> results = new ArrayList<ArrayList<String>>();
         // looping through all rows and adding to list
@@ -399,9 +404,11 @@ public class DatabaseHandler extends SQLiteOpenHelper implements Closeable {
             	
             } while (cursor.moveToNext());
         }
-        db.close();
         // return contact list
         return results;
+		} finally {
+			db.close();
+		}
 		
 	}
  

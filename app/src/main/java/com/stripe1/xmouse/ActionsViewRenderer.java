@@ -135,40 +135,47 @@ public final class ActionsViewRenderer {
 
         int gap = context.getResources().getDimensionPixelSize(R.dimen.ng_action_gap);
         int buttonHeight = dp(context, 56);
-        for (int rowIndex = 0; rowIndex < rowCount; rowIndex++) {
-            LinearLayout row = new LinearLayout(context);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setBaselineAligned(false);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, buttonHeight);
-            if (rowIndex < rowCount - 1) rowParams.bottomMargin = gap;
-            container.addView(row, rowParams);
-
-            int nextColumn = 0;
-            for (LayoutButtonPlacement placement : placements) {
-                if (placement.getRow() != rowIndex) continue;
-                if (placement.getColumn() > nextColumn) {
-                    addGridSpacer(context, row, placement.getColumn() - nextColumn, buttonHeight);
+        LinearLayout row = null;
+        int rowIndex = -1;
+        int nextColumn = 0;
+        int position = 0;
+        // placements follows saved button order. Visit each cell once, including its accessibility
+        // position, instead of rescanning all placements for each row and indexOf for every button.
+        for (LayoutButtonPlacement placement : placements) {
+            if (row == null || rowIndex != placement.getRow()) {
+                if (row != null && nextColumn < profile.getColumnCount()) {
+                    addGridSpacer(context, row, profile.getColumnCount() - nextColumn, buttonHeight);
                 }
-                LayoutButton button = buttonsById.get(placement.getButtonId());
-                int position = profile.getButtons().indexOf(button) + 1;
-                FrameLayout slot = new FrameLayout(context);
-                LinearLayout.LayoutParams slotParams = new LinearLayout.LayoutParams(
-                        0, buttonHeight, placement.getWidthColumns());
-                View tile = createActionTile(context, button, position, profile.getButtons().size(), editMode);
-                FrameLayout.LayoutParams tileParams = new FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-                tileParams.setMargins(dp(context, 2), 0, dp(context, 2), 0);
-                slot.addView(tile, tileParams);
-                row.addView(slot, slotParams);
-                if (listener != null) listener.onAction(tile, button);
-                nextColumn = placement.getColumn() + placement.getWidthColumns();
+                rowIndex = placement.getRow();
+                nextColumn = 0;
+                row = new LinearLayout(context);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setBaselineAligned(false);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, buttonHeight);
+                if (rowIndex < rowCount - 1) rowParams.bottomMargin = gap;
+                container.addView(row, rowParams);
             }
-            if (nextColumn < profile.getColumnCount()) {
-                addGridSpacer(context, row,
-                        profile.getColumnCount() - nextColumn, buttonHeight);
+            if (placement.getColumn() > nextColumn) {
+                addGridSpacer(context, row, placement.getColumn() - nextColumn, buttonHeight);
             }
+            LayoutButton button = buttonsById.get(placement.getButtonId());
+            position++;
+            FrameLayout slot = new FrameLayout(context);
+            LinearLayout.LayoutParams slotParams = new LinearLayout.LayoutParams(
+                    0, buttonHeight, placement.getWidthColumns());
+            View tile = createActionTile(context, button, position, profile.getButtons().size(), editMode);
+            FrameLayout.LayoutParams tileParams = new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+            tileParams.setMargins(dp(context, 2), 0, dp(context, 2), 0);
+            slot.addView(tile, tileParams);
+            row.addView(slot, slotParams);
+            if (listener != null) listener.onAction(tile, button);
+            nextColumn = placement.getColumn() + placement.getWidthColumns();
+        }
+        if (row != null && nextColumn < profile.getColumnCount()) {
+            addGridSpacer(context, row, profile.getColumnCount() - nextColumn, buttonHeight);
         }
     }
 

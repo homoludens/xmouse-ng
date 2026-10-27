@@ -43,7 +43,9 @@ class SessionActivityPresenter(
         detach(force = true)
         interactions = owner
         attached = true
-        activePresentation = owner.attach(this)
+        // The native shell has no visible recent-command label. Do not enqueue one UI update per
+        // pointer movement; exec/clipboard/trust feedback remains subscribed normally.
+        activePresentation = owner.attach(this, receiveRecentCommands = false)
         // attach() retires any Activity-local request from the previous owner, so restore prompt
         // presentation after the new service owner has been installed.
         credentialUi.start()

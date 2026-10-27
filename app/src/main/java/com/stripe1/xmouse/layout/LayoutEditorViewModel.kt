@@ -55,13 +55,15 @@ data class LayoutEditorState(
     val xmlMessage: String? = null,
     val xmlMessageIsError: Boolean = false,
     val xmlExitConfirmation: XmlEditorExitAction? = null,
+    /** Worker-adapter form text is immediate, not an acknowledgement of a durable draft. */
+    val isProfileNamePending: Boolean = false,
 ) {
     val selectedButton: LayoutButton?
         get() = LayoutEditorGrid.selectedButton(draftProfile?.buttons.orEmpty(), selectedButtonId)
 
     val isDirty: Boolean
         get() = savedProfile != null && draftProfile != null &&
-            (savedProfile != draftProfile || profileNameInput != draftProfile.name ||
+            (isProfileNamePending || savedProfile != draftProfile || profileNameInput != draftProfile.name ||
                 (editMode == LayoutEditorMode.XML && xmlSource != xmlBaseSource))
 
     val hasPendingXmlChanges: Boolean

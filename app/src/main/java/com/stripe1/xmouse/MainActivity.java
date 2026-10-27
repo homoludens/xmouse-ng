@@ -178,6 +178,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	private boolean returningFromScriptsManager;
 	private boolean databaseExistedAtLaunch;
 	private boolean preferencesExistedAtLaunch;
+	private final ShellContentRenderCache actionsRenderCache = new ShellContentRenderCache();
+	private final ShellContentRenderCache scriptsRenderCache = new ShellContentRenderCache();
 	private static final class ActionsSnapshot {
 		final List<LayoutProfile> profiles;
 		final LayoutProfile selectedProfile;
@@ -240,7 +242,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	public static boolean setting_invert_scroll = false;
 	//public static boolean setting_keyboard_show_details;
 	//static boolean setting_command_overlay=true;
-	private String setting_host_all;
 
 	private EditText ET;
 	private CustomKeyboardButtonAdapter mItemAdapter;
@@ -506,7 +507,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		recentCmdTextView = (TextView) findViewById(R.id.recentCmd);
 
 		initDb();
-		initMenu();
+		// onResume owns the fresh metadata request; do not enqueue a duplicate creation-time read.
 		updateClipboardAction();
 		updateComposerSendState();
 	}
@@ -643,17 +644,26 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	/** Metadata-only worker path: no prepare/authenticate/readPassword or secret data in the UI. */
 	private void loadComputerMetadata() {
 		final long generation = ++computerLoadGeneration;
+		final SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
 		com.stripe1.xmouse.secrets.CredentialRepository repository = AndroidCredentials.get(getApplicationContext());
 		repository.execute(() -> {
 			try {
+				ComputerMetadataSnapshot snapshot = ComputerMetadataSnapshot.load(repository::hosts, preferences.getAll());
 				List<ComputerEntry> hosts = new ArrayList<>();
-				CredentialHost selectedHost = repository.selectedHost();
-				long selectedId = selectedHost == null ? -1 : selectedHost.getId();
-				for (CredentialHost host : repository.hosts()) hosts.add(new ComputerEntry(host.getId(), computerName(host),
+				long selectedId = snapshot.selected == null ? -1 : snapshot.selected.getId();
+				for (CredentialHost host : snapshot.hosts) hosts.add(new ComputerEntry(host.getId(), computerName(host),
 						host.displayEndpoint() + " · SSH port " + host.getPort(), host.getId() == selectedId));
-				String selectedName = computerName(selectedHost);
+				String selectedName = snapshot.selected != null ? computerName(snapshot.selected) :
+						(snapshot.host.isEmpty() ? getString(R.string.ng_choose_computer) : snapshot.host);
 				mainHandler.post(() -> {
 					if (generation != computerLoadGeneration || isFinishing() || isDestroyed()) return;
+					setting_host = snapshot.host;
+					setting_user = snapshot.user;
+					try { setting_port = Integer.parseInt(snapshot.port); }
+					catch (NumberFormatException ignored) {
+						Log.w(TAG, "settings_read_failed");
+						Toast.makeText(this, "There was a problem retrieving your settings.", Toast.LENGTH_LONG).show();
+					}
 					cachedComputers = hosts;
 					((TextView) findViewById(R.id.computer_name)).setText(selectedName);
 					findViewById(R.id.computer_selector).setContentDescription(getString(R.string.ng_select_computer, selectedName));
@@ -844,20 +854,8 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 			setting_user= prefs.getString("setting_user", "");
 			setting_port= Integer.valueOf(prefs.getString("setting_port", "22"));
 
-			setting_host_all = prefs.getString("hostPreferenceList", "0");//id of host in db
-
-			ArrayList<ArrayList<String>> host = db.getRowWithId(DatabaseHandler.HOST_TABLE_NAME,new String[] {"Host","Username","Port"},setting_host_all);
-
-			if(host.size()>0){
-
-				setting_host= host.get(0).get(0);
-				setting_user= host.get(0).get(1);
-				setting_port= Integer.valueOf(host.get(0).get(2));
-			}/*else{
-
-                //Log.d("getPreferences", "Zero host records, will default to last used settings");
-                Toast.makeText(getBaseContext(), "No Saved Host selected", Toast.LENGTH_LONG).show();
-            }*/
+			// Selected-host overrides arrive from the generation-guarded metadata worker. Session
+			// attachment/automatic Connect use the service's own fresh selection, never these fields.
 
 			setting_delay = Integer.valueOf(prefs.getString("delay_list", "350"));
 			setting_mdelay = Integer.valueOf(prefs.getString("mdelay_list", "0"));
@@ -931,11 +929,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		if (!returningFromExternal) scheduleAutomaticForegroundSessionAfterVisibleFrame(
 				activityGeneration, getWindow().getDecorView(), !openedFromNotification);
 
-		if(mCoolDragAndDropGridView!=null){
-			mItemAdapter = new CustomKeyboardButtonAdapter(MainActivity.this, mItems);
-			mCoolDragAndDropGridView.setAdapter(mItemAdapter);
-			mItemAdapter.notifyDataSetChanged();
-		}
 		initMenu();
 		showConnectionStat();
 		initDoTool();
@@ -1659,6 +1652,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	@Override
 	protected void onStop() {
 		activityGeneration++;
+		computerLoadGeneration++; // A stopped screen must not publish an older host snapshot.
 		// System continuation prompts can stop this Activity during reconnect. Keep their
 		// in-memory draft only while that exact prompt/picker is pending; normal backgrounding
 		// remains the privacy boundary, and no draft is serialized.
@@ -2213,6 +2207,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	public void selectHostAndConnect(int id) {
 		final long activityToken = activityGeneration;
 		final long selectionToken = ++hostSelectionGeneration;
+		computerLoadGeneration++; // Revoke metadata queued before this explicit selection.
 		if (promptInteractions != null) promptInteractions.invalidate();
 		final com.stripe1.xmouse.secrets.CredentialRepository repository = AndroidCredentials.get(getApplicationContext());
 		repository.execute(() -> {
@@ -2581,6 +2576,13 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		Button picker = findViewById(R.id.actions_layout_picker);
 		Button edit = findViewById(R.id.actions_edit);
 		if (tiles == null || picker == null || edit == null) return;
+		boolean visible = shellNavigation.destination() == ShellNavigation.Destination.ACTIONS &&
+				shellNavigation.topOverlay() != ShellNavigation.Overlay.COMPUTERS;
+		if (!visible) return;
+		List<?> renderKey = java.util.Arrays.asList(selectedActionProfile,
+				selectedActionPreset == null ? null : selectedActionPreset.id(), actionsEditMode,
+				actionsLoading, actionsLoadFailed, actionProfileSelectionPending, isRepositoryLayoutActive());
+		if (!actionsRenderCache.shouldRender(visible, renderKey)) return;
 		boolean canEditProfile = isRepositoryLayoutActive() && selectedActionProfile != null &&
 				selectedActionPreset == null && !actionsLoading && !actionProfileSelectionPending;
 		boolean canChooseLayout = !actionsLoading && !actionProfileSelectionPending;
@@ -2610,6 +2612,12 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		if (shellRoot == null) return;
 		LinearLayout scripts = findViewById(R.id.scripts_list);
 		if (scripts == null) return;
+		boolean visible = shellNavigation.destination() == ShellNavigation.Destination.SCRIPTS &&
+				shellNavigation.topOverlay() != ShellNavigation.Overlay.COMPUTERS;
+		if (!visible) return;
+		List<?> renderKey = java.util.Arrays.asList(new ArrayList<>(savedActionScripts), scriptsLoading,
+				scriptsLoadFailed, actionsLoading);
+		if (!scriptsRenderCache.shouldRender(visible, renderKey)) return;
 		ActionsViewRenderer.renderScripts(this, scripts, savedActionScripts, scriptsLoading, scriptsLoadFailed,
 				actionsLoading, new ActionsViewRenderer.ScriptListener() {
 					@Override public void onRun(View view, SavedActionScript script) {

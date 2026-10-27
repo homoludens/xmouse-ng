@@ -598,21 +598,8 @@ class SessionForegroundServiceAndroidTest {
         (MainActivity::class.java.getDeclaredField("sessionPresenter").apply { isAccessible = true }
             .get(activity) as SessionActivityPresenter).presentationToken()
 
-    private fun recentCommandText(activity: MainActivity): String =
-        activity.findViewById<android.widget.TextView>(R.id.recentCmd).text.toString()
-
-    private fun recentCommandTextOn(scenario: ActivityScenario<MainActivity>): String {
-        var actual = ""
-        scenario.onActivity { actual = recentCommandText(it) }
-        return actual
-    }
-
-    private fun waitForRecentCommand(scenario: ActivityScenario<MainActivity>, expected: String) {
-        eventually {
-            var actual: String? = null
-            scenario.onActivity { actual = recentCommandText(it) }
-            actual == expected
-        }
+    private fun waitForRecordedShellCommand(owner: RecordingTransportOwner, expected: String) {
+        eventually { owner.backend.writes.contains("$expected\r\n") }
     }
 
     private fun activityOutputDialog(activity: MainActivity): AlertDialog? {
@@ -844,7 +831,8 @@ class SessionForegroundServiceAndroidTest {
         val notification = notificationManager.activeNotifications.firstOrNull { it.id == NOTIFICATION_ID }?.notification
         assertNotNull("foreground notification was not published", notification)
         assertEquals(NOTIFICATION_CHANNEL_ID, notification!!.channelId)
-        assertEquals("XMouse remote session", notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE))
+        assertEquals(context.getString(R.string.session_notification_title),
+            notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE).toString())
         val text = notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString()
         assertTrue(text.contains("requested network-device connection"))
         assertFalse(text.contains("synthetic.invalid"))
@@ -2098,6 +2086,149 @@ class SessionForegroundServiceAndroidTest {
     }
 
     @Test
+    fun navigationRetainsUnchangedContentButRefreshRebindsCommandsAndCancelsStaleTouches() {
+        grantNotificationPermissionForDisclosureTest()
+        grantLocalNetworkPermissionForConnectionTest()
+        installSavedControlProfile()
+        ownedScriptAlias = "render-cache-${java.util.UUID.randomUUID()}"
+        DatabaseHandler(context).use { database ->
+            savedScriptId = database.addScript(requireNotNull(ownedScriptAlias), "printf 'render cache script'").toInt()
+        }
+        val recordingOwner = RecordingTransportOwner()
+        install(recordingOwner)
+        val activityScenario = launchVisibleActivity(autoConnect = true, inputBackend = "xdotool",
+            initialCommand = "synthetic render cache startup")
+        eventually { recordingOwner.controller.current.connection.isReady }
+        eventually {
+            var loaded = false
+            activityScenario.onActivity { activity ->
+                loaded = activity.selectedSavedActionProfile()?.id == ownedControlProfileId &&
+                    !MainActivity::class.java.getDeclaredField("actionsLoading").apply { isAccessible = true }.getBoolean(activity) &&
+                    activity.activeControlInputToken() != null
+            }
+            loaded
+        }
+        lateinit var originalAction: View
+        lateinit var originalScriptRun: View
+        var retiredSurface: InputSurfaceToken? = null
+        var downTime = 0L
+        activityScenario.onActivity { activity ->
+            assertEquals("hidden Scripts content is not constructed on Touchpad", 0,
+                activity.findViewById<ViewGroup>(R.id.scripts_list).childCount)
+            activity.shellNavigation().select(ShellNavigation.Destination.ACTIONS)
+            val tiles = activity.findViewById<ViewGroup>(R.id.actions_tiles)
+            originalAction = requireNotNull(tiles.findViewWithTag<View>("backspace"))
+            val profile = requireNotNull(activity.selectedSavedActionProfile())
+            profile.buttons.forEachIndexed { index, button ->
+                assertEquals("single-pass rendering preserves saved order and accessibility positions",
+                    activity.getString(R.string.ng_action_tile_accessibility, button.title, index + 1,
+                        profile.buttons.size, button.width, button.id),
+                    tiles.findViewWithTag<View>(button.id).contentDescription.toString())
+            }
+            retiredSurface = activity.activeControlInputToken()
+            assertNotNull(retiredSurface)
+            downTime = SystemClock.uptimeMillis()
+            dispatchCapturedButtonTouch(originalAction, downTime, downTime, MotionEvent.ACTION_DOWN, 4f, 4f)
+            for (overlay in listOf(ShellNavigation.Overlay.MENU, ShellNavigation.Overlay.COMPUTERS)) {
+                activity.shellNavigation().open(overlay)
+                activity.shellNavigation().closeTop()
+                assertSame("unchanged overlay navigation retains native action views", originalAction,
+                    tiles.findViewWithTag("backspace"))
+            }
+            assertFalse("cache hits do not retain old input capabilities",
+                activity.commandTransport.isInputTokenActive(retiredSurface))
+            dispatchCapturedButtonTouch(originalAction, downTime, downTime + 30, MotionEvent.ACTION_UP, 4f, 4f)
+            activity.shellNavigation().select(ShellNavigation.Destination.SCRIPTS)
+            originalScriptRun = requireNotNull(activity.findViewById<ViewGroup>(R.id.scripts_list)
+                .findViewWithTag<View>(savedScriptId))
+            activity.shellNavigation().select(ShellNavigation.Destination.ACTIONS)
+            assertSame(originalAction, tiles.findViewWithTag("backspace"))
+            activity.shellNavigation().select(ShellNavigation.Destination.SCRIPTS)
+            assertSame("unchanged tabs retain script controls", originalScriptRun,
+                activity.findViewById<ViewGroup>(R.id.scripts_list).findViewWithTag(savedScriptId))
+            activity.shellNavigation().select(ShellNavigation.Destination.TOUCHPAD)
+        }
+        assertFalse("the canceled retained-view UP generates no command",
+            recordingOwner.backend.writes.contains("xdotool key BackSpace\r\n"))
+
+        val repository = LayoutProfileRepository(File(context.filesDir, LayoutEditorActivity.PROFILE_DIRECTORY))
+        val profile = repository.loadProfile(requireNotNull(ownedControlProfileId))
+        repository.saveProfile(profile.copy(buttons = profile.buttons.map {
+            if (it.id == "backspace") it.copy(title = "Updated action", command = "key Escape") else it
+        }))
+        val renamedScript = requireNotNull(ownedScriptAlias) + " updated"
+        DatabaseHandler(context).use { database ->
+            assertEquals(1, database.updateRow(DatabaseHandler.SCRIPT_TABLE_NAME, arrayOf("Alias"),
+                arrayOf(renamedScript), savedScriptId.toString()))
+        }
+        activityScenario.onActivity { it.refreshSavedActions() }
+        eventually {
+            var loaded = false
+            activityScenario.onActivity { activity ->
+                loaded = activity.selectedSavedActionProfile()?.buttons?.firstOrNull()?.title == "Updated action" &&
+                    !MainActivity::class.java.getDeclaredField("actionsLoading").apply { isAccessible = true }.getBoolean(activity)
+            }
+            loaded
+        }
+        lateinit var updatedAction: View
+        activityScenario.onActivity { activity ->
+            val tiles = activity.findViewById<ViewGroup>(R.id.actions_tiles)
+            val scripts = activity.findViewById<ViewGroup>(R.id.scripts_list)
+            assertSame("hidden data changes do not build Actions eagerly", originalAction, tiles.findViewWithTag("backspace"))
+            assertSame("hidden data changes do not build Scripts eagerly", originalScriptRun, scripts.findViewWithTag(savedScriptId))
+            activity.shellNavigation().select(ShellNavigation.Destination.ACTIONS)
+            val updated = requireNotNull(tiles.findViewWithTag<View>("backspace"))
+            updatedAction = updated
+            assertNotSame("changed action data rebuilds its command binding", originalAction, updated)
+            assertFalse("the replaced action view is detached", originalAction.isAttachedToWindow)
+            originalAction.performClick()
+        }
+        eventually {
+            var laidOut = false
+            activityScenario.onActivity { laidOut = updatedAction.width > 8 && updatedAction.height > 8 }
+            laidOut
+        }
+        activityScenario.onActivity {
+            val freshDown = SystemClock.uptimeMillis()
+            dispatchCapturedButtonTouch(updatedAction, freshDown, freshDown, MotionEvent.ACTION_DOWN, 4f, 4f)
+            dispatchCapturedButtonTouch(updatedAction, freshDown, freshDown + 20, MotionEvent.ACTION_UP, 4f, 4f)
+        }
+        waitForRecordedShellCommand(recordingOwner, "xdotool key Escape")
+        assertFalse("a detached old command cannot be dispatched", recordingOwner.backend.writes.contains("xdotool key BackSpace\r\n"))
+        activityScenario.onActivity { activity ->
+            activity.shellNavigation().select(ShellNavigation.Destination.SCRIPTS)
+            val updated = requireNotNull(activity.findViewById<ViewGroup>(R.id.scripts_list).findViewWithTag<View>(savedScriptId))
+            assertNotSame("changed script data refreshes its accessible name", originalScriptRun, updated)
+            assertEquals(activity.getString(R.string.ng_run_named_script, renamedScript), updated.contentDescription.toString())
+        }
+        lateinit var loadingAction: View
+        activityScenario.onActivity { activity ->
+            activity.shellNavigation().select(ShellNavigation.Destination.ACTIONS)
+            val tiles = activity.findViewById<ViewGroup>(R.id.actions_tiles)
+            val normal = requireNotNull(tiles.findViewWithTag<View>("backspace"))
+            val editing = MainActivity::class.java.getDeclaredField("actionsEditMode").apply { isAccessible = true }
+            editing.setBoolean(activity, true)
+            activity.shellNavigation().open(ShellNavigation.Overlay.ACTION_EDIT)
+            val editTile = requireNotNull(tiles.findViewWithTag<View>("backspace"))
+            assertNotSame("edit mode invalidates content even without data changes", normal, editTile)
+            assertTrue(editTile.contentDescription.toString().contains(activity.getString(R.string.ng_tap_to_edit_action)))
+            editing.setBoolean(activity, false)
+            activity.shellNavigation().closeTop()
+            activity.refreshSavedActions()
+            loadingAction = requireNotNull(tiles.findViewWithTag<View>("backspace"))
+            assertFalse("a visible loading transition replaces input bindings with disabled tiles", loadingAction.isEnabled)
+        }
+        eventually {
+            var loaded = false
+            activityScenario.onActivity { activity ->
+                val ready = activity.findViewById<ViewGroup>(R.id.actions_tiles).findViewWithTag<View>("backspace")
+                loaded = ready != null && ready !== loadingAction && ready.isEnabled
+            }
+            loaded
+        }
+    }
+
+    @Test
     fun legacyControlsCustomButtonsAndSavedScriptsUseTheServiceCommandSink() {
         grantNotificationPermissionForDisclosureTest()
         installSavedControlProfile()
@@ -2388,7 +2519,7 @@ class SessionForegroundServiceAndroidTest {
             assertTrue("the actual Scripts row Run action is visible", run.isShown)
             assertTrue("the row's Run action is independently clickable", run.performClick())
         }
-        waitForRecentCommand(activityScenario, rawCustomCommand)
+        waitForRecordedShellCommand(recordingOwner, rawCustomCommand)
         val shellCommandsBeforeScript = commandOrderBeforeScriptTap.toList()
         assertTrue("the real touchpad and volume/keyboard/custom routes must reach the same shell sink",
             shellCommandsBeforeScript.any { it.startsWith("shell:xdotool mousemove_relative -- ") } &&
@@ -2481,15 +2612,16 @@ class SessionForegroundServiceAndroidTest {
             shellAccepted = activity.commandTransport.executeShellCommand(postRecreationCommand)
         }
         assertTrue("the reattached Activity's current presentation must admit shell input", shellAccepted)
-        waitForRecentCommand(activityScenario, postRecreationCommand)
+        waitForRecordedShellCommand(recordingOwner, postRecreationCommand)
+        val commandsAfterRecreation = recordingOwner.backend.commandOrder.toList()
 
         val detachedScreenInput = "synthetic detached screen input after reattachment"
         assertFalse("a detached screen cannot borrow the reattached screen's input capability",
             detachedScreenTransport.get().executeShellCommand(detachedScreenInput))
         assertFalse("detached input is not written by the retained session",
             recordingOwner.backend.writes.any { it == "$detachedScreenInput\r\n" })
-        assertEquals("detached input cannot borrow the new screen's recent-command target",
-            postRecreationCommand, recentCommandTextOn(activityScenario))
+        assertEquals("detached input cannot append to the reattached screen's ordered command sink",
+            commandsAfterRecreation, recordingOwner.backend.commandOrder.toList())
 
         SessionForegroundService.requestDisconnect(context)
         eventually { recordingOwner.controller.current.connection.phase == ConnectionState.Phase.DISCONNECTED }
@@ -2510,8 +2642,8 @@ class SessionForegroundServiceAndroidTest {
                 "must not appear after disconnect")
         }
         assertFalse("disconnected input must be rejected", disconnectedCommandAccepted)
-        assertEquals("rejected input must not replace the last accepted command",
-            postRecreationCommand, recentCommandTextOn(activityScenario))
+        assertEquals("rejected input must not append to the ordered command sink",
+            commandsBeforeDisconnectedClipboard, recordingOwner.backend.commandOrder.toList())
     }
 
     @Test

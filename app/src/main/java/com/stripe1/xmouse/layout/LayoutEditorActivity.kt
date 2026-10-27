@@ -124,7 +124,7 @@ class LayoutEditorActivity : AppCompatActivity() {
                 LaunchedEffect(closed) { if (closed) finish() }
                 LayoutEditorScreen(
                     state = state,
-                    onNameChanged = { value -> editorViewModel.edit { it.updateProfileNameInput(value) } },
+                    onNameChanged = editorViewModel::updateProfileNameInput,
                     onButtonSelected = { id -> editorViewModel.edit { it.selectButton(id) } },
                     onDragCommitted = { drag -> editorViewModel.edit { it.commitDrag(drag) } },
                     onWidthChanged = { id, width -> editorViewModel.edit { it.updateButtonWidth(id, width) } },
