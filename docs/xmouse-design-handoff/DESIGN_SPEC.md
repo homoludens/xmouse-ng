@@ -1,4 +1,6 @@
-# XMouse UI specification
+# XMouse-NG UI specification
+
+Revision: 2026-10-26, latest. This two-tab design uses inline typing, removes Gyro, and adds a prominent connection button. It supersedes earlier typing-sheet and gyro variants.
 
 ## Goal and source of truth
 
@@ -12,12 +14,13 @@ Keep existing app behavior and stored data. The demo is not a backend specificat
 
 | Location | Content |
 | --- | --- |
-| Header left | Computer icon, small app name, current computer name and chevron |
-| Header right | Connection dot plus text; Settings icon |
+| Header left | Hamburger icon, small XMouse-NG app name, current computer name and chevron |
+| Header right | Prominent Connect/Disconnect button with plug icon; settings live in the hamburger menu |
 | Main | Current destination |
-| Bottom navigation | Touchpad / Keys / Actions |
+| Shared footer | Inline text field with placeholder Type on computer plus adjacent Send button on both pages |
+| Bottom navigation | Touchpad / Actions |
 
-The computer name opens the Computers sheet, replacing drawer-based host management.
+The hamburger menu contains all settings and management. The computer name also opens a convenient quick Computers sheet. There is no Keys tab or separate Keys screen.
 
 Use concise labels and neutral surfaces. Green identifies the primary action/selected navigation. Color is always paired with labels or icons.
 
@@ -58,26 +61,28 @@ No imagery or gradients are necessary. A faint touchpad dot texture is optional.
 
 The demo's 390 px device width and sample touchpad height are illustrative. Native layouts must fill actual screens. Use a flexible touchpad and scrollable long forms/keys lists while keeping app navigation stable. Do not reproduce the drawn phone outline or gesture bar.
 
+The words Type on computer belong INSIDE the input as placeholder text, not in a visible label above it. Keep an accessibility name of Type on computer even when the placeholder disappears while typing. This applies on both Touchpad and Actions.
+
 ## Touchpad
 
 Order:
 
-1. Touchpad title and compact Gyro toggle, if supported.
+1. Touchpad title, with no Gyro control.
 2. Large rounded touchpad with a right-hand scroll strip.
 3. Left click, middle click, right click.
 4. Esc, Alt + Tab, Super.
-5. Full-width “Type on computer” control in the soft accent color.
+5. Inline “Type on computer” input and an adjacent filled Send button, in a shared footer also shown on Actions.
 6. Bottom navigation.
 
 The pad may show a small icon, “Move pointer”, and “Tap to click · two fingers to scroll”; deemphasize the hint during use.
 
-Keep all existing gestures and hold/drag behavior. Preserve gyro/joystick access even though the demo only illustrates Gyro. Less frequent modes may use settings/overflow.
+Keep existing touch gestures and hold/drag behavior. Remove Gyro from the UI rather than moving it into the menu. Preserve unrelated joystick/pointer behavior where applicable.
 
-Typing uses a real IME and a labeled text area with Send plus Esc, Tab, Backspace, Enter. Its sheet/screen must adapt when the keyboard opens.
+Typing is inline on the current control page. Use a real text field showing Type on computer as its placeholder, and an adjacent Send button with a send icon and visible label. Tapping the field opens the native IME in place. Neither focusing nor sending opens another page, sheet, or dialog. Support IME Send and non-ASCII text. A shared composer preserves the unsent draft across Touchpad/Actions. Disable Send for blank text or while disconnected; keep the field editable and retain the draft. Show a small Disconnected — connect to send hint when appropriate. Clear after sending and Send Enter after text follow Keyboard settings. Adapt the footer to keyboard/system insets.
 
-## Keys
+## Control presets within Actions
 
-Four local categories:
+The old Keys tab is removed. Its controls remain available through optional layouts/presets in the Actions layout picker, alongside the user’s own saved layouts. Do not create a separate Keys destination. The reference provides:
 
 | Category | Controls |
 | --- | --- |
@@ -88,7 +93,7 @@ Four local categories:
 
 Most buttons are neutral. Close has a subdued red surface.
 
-The volume/brightness percentages in the reference are sample values. If the app only sends relative adjustments, show minus/plus and mute without a made-up percentage. Use sliders only when real state is available and controllable. Avoid continuous SSH polling solely for visual decoration.
+The media preset’s volume/brightness percentages in the reference are sample values. If the app only sends relative adjustments, show minus/plus and mute without a made-up percentage. Use sliders only when real state is available and controllable. Avoid continuous SSH polling solely for visual decoration.
 
 Use “Super” as the clear label; a suitable platform icon may replace the demo's command-like symbol.
 
@@ -100,6 +105,8 @@ Use “Super” as the clear label; a suitable platform icon may replace the dem
 - Regular = one cell; Wide = full row.
 - Add action below the grid.
 - Saved scripts section with labeled entries and explicit Run/Edit controls.
+- The same inline text input plus Send as Touchpad, directly above bottom navigation. No typing navigation or modal. The draft remains available for custom layouts, empty layouts, and built-in presets.
+- Optional Common keys, Navigation, Media, and F1–F12 presets in the layout picker, preserving those controls after removing the Keys tab.
 
 Edit mode makes editing discoverable without depending on long press. Preserve reorder/layout management if already supported via a compact contextual control.
 
@@ -125,9 +132,21 @@ Preserve arbitrary saved widths and RGB colors. If storage uses a ten-unit width
 
 Preserve the distinction between a key combination, xdotool arguments, and a raw SSH command. “key alt+F4” must keep its original dispatch meaning. An Advanced “xdotool command” editor is acceptable. Raw SSH commands should use existing script execution.
 
+## Header connection button
+
+Use an actual, clearly bounded action button at the header’s right, not a small status label.
+
+- Connected: visible Disconnect label, unplug icon, soft accent fill, and green accent border.
+- Disconnected: visible Connect label, plug icon, and solid accent fill with contrasting text.
+- Minimum effective native touch target: 48 dp. Keep label and icon readable at 320 dp width.
+- Connecting: use an in-progress state and prevent duplicate requests; show actual failures clearly.
+- The control remains available on both main pages.
+- Toggling the connection must not discard an unsent text draft.
+- Update state only from real SSH lifecycle results in the native app. The browser’s immediate state change is a simulation.
+
 ## Computers
 
-The header sheet supports selecting/connecting, editing, adding, finding, and disconnecting using the app's existing capabilities.
+Computers is available from the hamburger menu and the header’s computer name. Its sheet supports selecting/connecting, editing, adding, finding, and disconnecting using the app's existing capabilities.
 
 Use a full-screen editor with persistent labels:
 
@@ -145,7 +164,20 @@ A saved password placeholder must not become an empty replacement on Save. Prese
 
 Discovery and connection testing use real results. Never turn a demo toast into a fake success. Handle validation, failures, cancellation, and Back/keyboard behavior.
 
-## Settings
+## Hamburger menu and settings
+
+Use a left navigation drawer opened by a visible hamburger button. The drawer is for settings/management; the two main control pages remain in bottom navigation. Close the drawer on selection, outside tap, or Android Back. Return accessibility focus appropriately.
+
+| Group | Destinations |
+| --- | --- |
+| Connection | Computers |
+| Input | Touchpad settings, Keyboard settings |
+| Customize | Layouts & actions, Saved scripts |
+| App | Appearance, About XMouse-NG |
+
+Touchpad settings holds pointer/gesture preferences. Keyboard settings applies to typing from either main page; the reference demonstrates Clear after sending and Send Enter after text. Layouts & actions can select a layout or jump into editing user actions. Saved scripts keeps script management discoverable. Appearance offers System, Light, and Dark.
+
+Remove the old header Settings button so settings have one consistent entry point. The computer-name shortcut may remain for quick switching.
 
 The reference shows pointer speed, Tap to click, Natural scrolling, and Haptic feedback. Bind them to working preferences, or omit unsupported preview-only settings until implemented. Load actual saved values and persist changes.
 

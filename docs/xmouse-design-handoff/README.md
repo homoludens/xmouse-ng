@@ -1,4 +1,4 @@
-# XMouse redesign handoff
+# XMouse-NG redesign handoff
 
 Approved UI reference and implementation instructions for the existing Android app that controls Linux over SSH on a local network.
 
@@ -14,13 +14,16 @@ The agent needs your app repository. These files contain the design, not the And
 ## Files
 
 - IMPLEMENTATION_PROMPT.md — the task, constraints, workflow, and acceptance checks.
+- CHANGES.md — the latest approved navigation changes.
 - DESIGN_SPEC.md — colors, spacing, screen behavior, compatibility rules, and demo limitations.
 - design-reference.html — interactive, self-contained reference; open locally in a browser.
 - THIRD_PARTY_NOTICES.txt — licenses for libraries bundled only into the browser reference.
 
 ## Reference limitations
 
-Try Touchpad, Keys, Actions, the computer name, Settings, typing, and Add action.
+Revision 2026-10-26 (latest): two main tabs (Touchpad and Actions), a hamburger settings menu, an inline input showing Type on computer as placeholder text with Send beside it on both pages, no Gyro control, and a prominent Connect/Disconnect button in the header.
+
+Try both tabs, the hamburger menu, computer selector, inline typing, Connect/Disconnect, and Add action. Former key groups are optional Action presets, not a separate destination.
 
 The reference simulates interactions. It does not connect over SSH, scan your network, store credentials, run commands, or read actual volume/brightness. Computer names, action contents, levels, and time are examples.
 
