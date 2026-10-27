@@ -99,6 +99,8 @@ Use “Super” as the clear label; a suitable platform icon may replace the dem
 
 ## Actions
 
+For the full-screen Visual/XML layout editor added on 2026-10-27, use LAYOUT_EDITOR_SPEC.md and layout-editor-reference.html. They override the earlier simplified Edit-mode example for whole-layout editing. Keep the existing custom-action behavior and data.
+
 - Heading with explicit Edit/Done control.
 - Layout picker preserving actual layout names/order.
 - Two-column custom-action grid: icon, title, optional subtitle.

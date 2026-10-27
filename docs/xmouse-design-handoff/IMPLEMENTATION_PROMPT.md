@@ -7,7 +7,8 @@ Implement this design in the app. Keep the app simple, responsive, and small. Co
 ## First steps
 
 - Read applicable repository instructions, including AGENTS.md.
-- Read DESIGN_SPEC.md beside this prompt.
+- Read DESIGN_SPEC.md and LAYOUT_EDITOR_SPEC.md beside this prompt. The editor-specific specification and layout-editor-reference.html are the latest approved Visual/XML editor design.
+- Open layout-editor-reference.html and exercise Visual, XML source, selection/editing, validation, Apply & return, and Save changes. The browser parser/sample layout are illustrative, not replacement native code.
 - Open design-reference.html in a browser and exercise the tabs, computer selector, settings, typing, and action editor. Inspect its .xm-* CSS for exact styling.
 - Inspect the existing UI toolkit, navigation, SSH lifecycle, input dispatch, host/authentication storage, keyboard layouts, custom buttons, scripts, and preferences before editing.
 
@@ -69,6 +70,13 @@ The words Type on computer belong INSIDE the input as placeholder text, not in a
 - Organize existing key groups as optional Action layouts/presets according to DESIGN_SPEC.md. There is no Keys tab or separate Keys screen.
 - Demo percentages are illustrative. If the app only sends relative volume/brightness adjustments, implement minus/plus and mute rather than inventing absolute levels.
 - Use sliders only when actual levels can be read/controlled reliably through existing capabilities.
+
+### Layout editor
+
+- Implement the full-screen Visual/XML editor from LAYOUT_EDITOR_SPEC.md with clear bounded buttons and selected tabs.
+- Keep Validate/Format separate from Apply & return and Save changes. Only the existing explicit save action persists a profile.
+- Preserve actual layouts, including the supplied screenshot’s 57-button layout, legacy widths/colors/IDs, and opaque command text.
+- Use the authoritative existing XML schema/parser and preserve recoverable draft behavior. The reference uses only 18 sample buttons for demonstration.
 
 ### Actions/scripts
 

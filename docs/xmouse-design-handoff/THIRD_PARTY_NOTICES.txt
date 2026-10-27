@@ -1,6 +1,6 @@
 Third-party notices
 
-These libraries are bundled only into design-reference.html for an offline design reference. They are not Android app dependencies.
+These libraries are bundled only into the offline HTML design references for an offline design reference. They are not Android app dependencies.
 
 
 ============================================================

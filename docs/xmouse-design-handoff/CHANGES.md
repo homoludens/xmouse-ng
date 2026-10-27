@@ -1,3 +1,13 @@
+# Additional approved changes — 2026-10-27
+
+- Redesign the full-screen Visual and XML layout editor.
+- Clearly bounded buttons and strongly selected Visual/XML tabs.
+- Contextual Edit/Duplicate/More controls after selecting a button.
+- Compact XML validation feedback and help instead of permanent long technical paragraphs.
+- One primary action per mode: Save changes in Visual; Apply & return in XML.
+- Preserve real layouts, legacy values, draft recovery, parser behavior, and persistence boundaries.
+- The editor reference uses 18 sample buttons; the actual 57-button layout must remain intact.
+
 # Approved changes — 2026-10-26, latest revision
 
 - App display name: XMouse-NG.
