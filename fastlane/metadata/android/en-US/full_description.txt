@@ -1,0 +1,16 @@
+Control a Linux desktop from your Android phone or tablet over SSH.
+
+• Move and scroll the pointer, click, and use quick keys from the Touchpad.
+• Type text and send it only when you tap Send.
+• Create named Actions layouts, or start with built-in key presets.
+• Save SSH scripts and run them when you choose.
+• Connect with password or SSH-key authentication and verify the host fingerprint.
+• Optionally discover advertised SSH computers on your local network.
+• Send plain-text clipboard content to the selected computer only when you tap Send.
+
+Requires Android 8.0 (API 26) or later and a Linux computer with an SSH server. Pointer and keyboard features require xdotool (X11) or ydotool (Wayland); host actions depend on the tools installed on that computer.
+
+XMouse-NG is open source. Source code and project information:
+https://github.com/homoludens/xmouse-ng
+
+Read the privacy policy offline in Settings > About.

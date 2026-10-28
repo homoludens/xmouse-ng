@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/privacy_policy_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/ng_background"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:minHeight="56dp"
+        android:orientation="horizontal"
+        android:paddingStart="8dp"
+        android:paddingEnd="16dp">
+
+        <ImageButton
+            android:id="@+id/privacy_policy_back"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/ng_settings_back"
+            android:padding="12dp"
+            android:src="@drawable/ic_ng_arrow_back"
+            android:tooltipText="@string/ng_settings_back"
+            app:tint="@color/ng_text_primary" />
+
+        <TextView
+            style="@style/TextAppearance.XMouseNg.SettingsHeading"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:text="@string/ng_privacy_policy_title" />
+    </LinearLayout>
+
+    <ScrollView
+        android:id="@+id/privacy_policy_scroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
+        android:overScrollMode="ifContentScrolls">
+
+        <TextView
+            android:id="@+id/privacy_policy_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans"
+            android:lineSpacingExtra="4dp"
+            android:paddingStart="20dp"
+            android:paddingTop="16dp"
+            android:paddingEnd="20dp"
+            android:paddingBottom="24dp"
+            android:textColor="@color/ng_text_primary"
+            android:textIsSelectable="true"
+            android:textSize="16sp"
+            android:textAlignment="viewStart" />
+    </ScrollView>
+</LinearLayout>

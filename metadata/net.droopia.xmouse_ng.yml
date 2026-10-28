@@ -1,0 +1,27 @@
+Categories:
+  - System
+License: MIT
+AutoName: XMouse-NG
+SourceCode: https://github.com/homoludens/xmouse-ng
+IssueTracker: https://github.com/homoludens/xmouse-ng/issues
+RepoType: git
+Repo: https://github.com/homoludens/xmouse-ng.git
+Binaries: https://github.com/homoludens/xmouse-ng/releases/download/v%v/xmouse-ng-%v.apk
+AllowedAPKSigningKeys: c1c5faca7bfd24ce2bf5467a731b71b0218bcb503eb20f814d370925a4b88eed
+MaintainerNotes: |
+  Disabled preparation draft only; this file does not represent an F-Droid submission or review.
+  The version 2.1.2 commit is a placeholder because the source is not committed or tagged.
+  Replace it with the exact immutable source commit after owner publication, then review this
+  recipe, the future Binaries URL, the hosted privacy policy, and local reproducibility evidence.
+  Do not remove the build's disable field before those checks and owner approval.
+Builds:
+  - versionName: '2.1.2'
+    versionCode: 28
+    commit: REPLACE_WITH_FINAL_SOURCE_COMMIT_SHA
+    disable: Draft only; replace the commit placeholder with the exact published source SHA before use.
+    subdir: .
+    gradle:
+      - yes
+    gradleprops:
+      - fdroidUnsigned=true
+    output: app/build/fdroid-unsigned/outputs/apk/release/app-release-unsigned.apk

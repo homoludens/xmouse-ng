@@ -8,12 +8,26 @@ import org.gradle.process.CommandLineArgumentProvider
 apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.plugin.compose'
 
+// F-Droid's source build is an explicit APK-only mode. Parse it before even
+// materializing maintainer signing providers; invalid values never fall back.
+def fdroidUnsignedValue = providers.gradleProperty('fdroidUnsigned').orNull
+if (fdroidUnsignedValue != null && !(fdroidUnsignedValue in ['true', 'false'])) {
+    throw new GradleException('fdroidUnsigned must be exactly true or false.')
+}
+def fdroidUnsigned = fdroidUnsignedValue == 'true'
+
 // Values belong in the owner's external Gradle user properties, never this repo.
-def releaseSigningProperties = [
+// Do not load any of them for a source-only unsigned reproduction.
+def releaseSigningProperties = fdroidUnsigned ? [:] : [
     'RELEASE_STORE_FILE', 'RELEASE_KEY_ALIAS', 'RELEASE_STORE_PASSWORD', 'RELEASE_KEY_PASSWORD'
 ].collectEntries { name -> [name, providers.gradleProperty(name).orNull] }
-def externalReleaseStore = releaseSigningProperties.RELEASE_STORE_FILE?.trim() ?
-    file(releaseSigningProperties.RELEASE_STORE_FILE) : null
+def externalReleaseStore = fdroidUnsigned || !releaseSigningProperties.RELEASE_STORE_FILE?.trim() ?
+    null : file(releaseSigningProperties.RELEASE_STORE_FILE)
+
+if (fdroidUnsigned) {
+    // Keep artifacts out of the ordinary app/build/outputs tree.
+    layout.buildDirectory.set(layout.projectDirectory.dir('build/fdroid-unsigned'))
+}
 
 def verifyLocalReleaseSigning = tasks.register('verifyLocalReleaseSigning') {
     group = 'verification'
@@ -21,11 +35,11 @@ def verifyLocalReleaseSigning = tasks.register('verifyLocalReleaseSigning') {
     // Do not serialize local signing credentials into a configuration-cache entry.
     notCompatibleWithConfigurationCache('Release signing uses private local Gradle properties.')
     doLast {
-        if (releaseSigningProperties.values().any { it == null || it.trim().isEmpty() }) {
+        if (!fdroidUnsigned && releaseSigningProperties.values().any { it == null || it.trim().isEmpty() }) {
             throw new GradleException('Release signing requires all four external RELEASE_* Gradle properties. No unsigned or debug-key fallback is allowed.')
         }
-        if (!externalReleaseStore.isFile() ||
-                externalReleaseStore.canonicalFile.toPath().startsWith(rootDir.canonicalFile.toPath())) {
+        if (!fdroidUnsigned && (!externalReleaseStore.isFile() ||
+                externalReleaseStore.canonicalFile.toPath().startsWith(rootDir.canonicalFile.toPath()))) {
             throw new GradleException('Release signing requires an existing keystore outside the source repository.')
         }
     }
@@ -62,21 +76,23 @@ android {
         applicationId "net.droopia.xmouse_ng"
         minSdk = 26
         targetSdk = 37
-        versionCode 27
-        versionName "2.1.1"
+        versionCode 28
+        versionName "2.1.2"
         testInstrumentationRunner = 'androidx.test.runner.AndroidJUnitRunner'
     }
     signingConfigs {
-        release {
-            storeFile = externalReleaseStore
-            keyAlias = releaseSigningProperties.RELEASE_KEY_ALIAS
-            storePassword = releaseSigningProperties.RELEASE_STORE_PASSWORD
-            keyPassword = releaseSigningProperties.RELEASE_KEY_PASSWORD
+        if (!fdroidUnsigned) {
+            release {
+                storeFile = externalReleaseStore
+                keyAlias = releaseSigningProperties.RELEASE_KEY_ALIAS
+                storePassword = releaseSigningProperties.RELEASE_STORE_PASSWORD
+                keyPassword = releaseSigningProperties.RELEASE_KEY_PASSWORD
+            }
         }
     }
     buildTypes {
         release {
-            signingConfig = signingConfigs.release
+            signingConfig = fdroidUnsigned ? null : signingConfigs.release
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
@@ -104,6 +120,11 @@ tasks.matching {
     it.name in ['preReleaseBuild', 'validateSigningRelease', 'packageRelease', 'packageReleaseBundle']
 }.configureEach {
     dependsOn verifyLocalReleaseSigning
+    if (fdroidUnsigned && name == 'packageReleaseBundle') {
+        doFirst {
+            throw new GradleException('fdroidUnsigned=true supports release APKs only; AAB packaging is disabled.')
+        }
+    }
 }
 
 kotlin {

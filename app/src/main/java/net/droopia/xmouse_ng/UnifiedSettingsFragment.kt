@@ -309,6 +309,16 @@ class UnifiedSettingsFragment : PreferenceFragmentCompat() {
         screen.addPreference(infoPreference(getString(R.string.app_name), getString(R.string.ng_about_description), "ng_about_description"))
         screen.addPreference(infoPreference(getString(R.string.ng_about_version_label), BuildConfig.VERSION_NAME, "ng_about_version"))
         screen.addPreference(infoPreference(getString(R.string.ng_about_package_label), requireContext().packageName, "ng_about_package"))
+        screen.addPreference(row(Preference(requireContext()).apply {
+            key = "ng_about_privacy_policy"
+            title = getString(R.string.ng_about_privacy_policy_title)
+            summary = getString(R.string.ng_about_privacy_policy_summary)
+            isPersistent = false
+            onPreferenceClickListener = Preference.OnPreferenceClickListener {
+                startActivity(Intent(requireContext(), PrivacyPolicyActivity::class.java))
+                true
+            }
+        }))
     }
 
     private fun configuredList(

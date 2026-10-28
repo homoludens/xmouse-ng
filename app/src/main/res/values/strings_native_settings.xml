@@ -32,6 +32,9 @@
     <string name="ng_appearance_mode">Theme</string>
     <string name="ng_about_version_label">Version</string>
     <string name="ng_about_package_label">Package</string>
+    <string name="ng_about_privacy_policy_title">Privacy policy</string>
+    <string name="ng_about_privacy_policy_summary">How XMouse-NG handles your data</string>
+    <string name="ng_privacy_policy_title">XMouse-NG privacy policy</string>
     <string name="ng_settings_explicit_send">Typing always requires Send. Editing text never sends keystrokes. The old instant-send choice remains stored for compatibility but is not used.</string>
     <string name="ng_settings_advanced_help">Global SSH key authentication, passphrase and document import; session startup, shell and input tool; drag delays. Authentication, shell and startup command changes apply on a later connection; Settings does not connect or disconnect.</string>
     <string name="ng_settings_layout_help">Reorder actions from the hamburger menu → Layouts &amp; actions → Advanced editor. The old main-grid lock choice remains stored for compatibility but does not control this editor.</string>

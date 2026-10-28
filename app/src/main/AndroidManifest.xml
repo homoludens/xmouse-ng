@@ -15,6 +15,7 @@
         android:fullBackupContent="@xml/backup_rules"
         android:fullBackupOnly="true"
         android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:supportsRtl="true"
@@ -58,6 +59,11 @@
             android:name=".NativeSettingsActivity"
             android:exported="false"
             android:label="@string/title_activity_settings"
+            android:theme="@style/AppTheme.NoActionBar" />
+        <activity
+            android:name=".PrivacyPolicyActivity"
+            android:exported="false"
+            android:label="@string/ng_privacy_policy_title"
             android:theme="@style/AppTheme.NoActionBar" />
         <activity
             android:name=".SettingsActivity"

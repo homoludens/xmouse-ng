@@ -1,0 +1,1 @@
+Control a Linux desktop from Android over SSH.
