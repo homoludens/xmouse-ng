@@ -1,0 +1,3115 @@
+package net.droopia.xmouse_ng;
+
+import android.annotation.SuppressLint;
+import android.app.AlertDialog;
+import android.content.Context;
+import android.content.ClipData;
+import android.content.ClipDescription;
+import android.content.ClipboardManager;
+import android.content.ComponentName;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.ServiceConnection;
+import android.content.res.ColorStateList;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
+import android.preference.PreferenceManager;
+import android.provider.Settings;
+import android.util.Log;
+import android.view.KeyEvent;
+import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.AdapterView;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.RelativeLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.activity.OnBackPressedCallback;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.content.res.AppCompatResources;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.appcompat.widget.Toolbar;
+import androidx.core.view.GravityCompat;
+import androidx.drawerlayout.widget.DrawerLayout;
+import androidx.fragment.app.FragmentManager;
+import com.google.android.material.button.MaterialButton;
+import com.google.android.material.card.MaterialCardView;
+
+import net.droopia.xmouse_ng.secrets.AndroidCredentials;
+import net.droopia.xmouse_ng.secrets.CredentialUi;
+import net.droopia.xmouse_ng.secrets.CredentialHost;
+import net.droopia.xmouse_ng.clipboard.ClipboardPreparation;
+import net.droopia.xmouse_ng.clipboard.ClipboardRead;
+import net.droopia.xmouse_ng.clipboard.ClipboardShareCoordinator;
+import net.droopia.xmouse_ng.clipboard.PlainTextClipboardSource;
+import net.droopia.xmouse_ng.connection.ConnectionFailure;
+import net.droopia.xmouse_ng.connection.ConnectionState;
+import net.droopia.xmouse_ng.session.SessionActivityPresenter;
+import net.droopia.xmouse_ng.session.SessionCommandTransport;
+import net.droopia.xmouse_ng.session.SessionController;
+import net.droopia.xmouse_ng.session.ForegroundConnectRequestResult;
+import net.droopia.xmouse_ng.session.ForegroundRecoveryWindow;
+import net.droopia.xmouse_ng.session.SessionForegroundService;
+import net.droopia.xmouse_ng.session.InputGestureToken;
+import net.droopia.xmouse_ng.session.InputSurfaceToken;
+import net.droopia.xmouse_ng.session.SessionInteractions;
+import net.droopia.xmouse_ng.session.SessionSnapshot;
+import net.droopia.xmouse_ng.permissions.LocalNetworkPermissionCoordinator;
+import net.droopia.xmouse_ng.layout.LegacyLayoutReader;
+import net.droopia.xmouse_ng.layout.LegacyLayoutProfileMigrator;
+import net.droopia.xmouse_ng.layout.LayoutButton;
+import net.droopia.xmouse_ng.layout.LayoutEditorActivity;
+import net.droopia.xmouse_ng.layout.ActionEditorActivity;
+import net.droopia.xmouse_ng.layout.FreshActionsProfileInitializer;
+import net.droopia.xmouse_ng.layout.LayoutProfile;
+import net.droopia.xmouse_ng.layout.LayoutProfileManagerActivity;
+import net.droopia.xmouse_ng.layout.LayoutProfileActivation;
+import net.droopia.xmouse_ng.layout.LayoutProfileRepository;
+import net.droopia.xmouse_ng.layout.LayoutProfileRuntime;
+import net.droopia.xmouse_ng.layout.SavedActionScript;
+import net.droopia.xmouse_ng.layout.SavedActionScriptRepository;
+import net.droopia.xmouse_ng.layout.ActionPresetCatalog;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStreamReader;
+import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.WeakHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+public class MainActivity extends AppCompatActivity implements MyInterface,
+		CoolDragAndDropGridView.DragAndDropListener,
+		SpanVariableGridView.OnItemClickListener,
+		SpanVariableGridView.OnItemLongClickListener,
+		myDialogFragment.NoticeDialogListener{
+	private static final String TAG = "MainActivity";
+	public static final String ACTION_OPEN_SESSION_CONTROLS = "net.droopia.xmouse_ng.action.OPEN_SESSION_CONTROLS";
+	private static final String PREF_NOTIFICATION_PERMISSION_REQUESTED = "session_notification_permission_requested";
+	private static final String PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED = "local_network_auto_connect_blocked";
+	private static final String POST_NOTIFICATIONS_PERMISSION = "android.permission.POST_NOTIFICATIONS";
+
+	MenuItem conDiscButton = null;
+	View clipboardSendButton = null;
+	MenuItem KeyLockButton = null;
+	MenuItem InvScrollButton= null;
+	FragmentManager fm = getSupportFragmentManager();
+
+	public static DatabaseHandler db;
+	/** This screen's proxy carries only its opaque presentation token across the service boundary. */
+	public SessionCommandTransport commandTransport;
+	private ActivityResultLauncher<String> notificationPermissionLauncher;
+	private ActivityResultLauncher<String> localNetworkPermissionLauncher;
+	private LocalNetworkPermissionCoordinator localNetworkPermissionCoordinator;
+	private boolean suppressLegacyAutoConnectOnResume;
+	private String pendingForegroundStartTicket;
+	private String pendingNotificationPermissionTicket;
+	private String pendingLocalNetworkPermissionTicket;
+	private boolean pendingHostSelectionRequest;
+	private SessionForegroundService.SessionBinder sessionBinder;
+	private ServiceConnection sessionServiceConnection;
+	private AutoCloseable sessionSubscription;
+	private SessionController.Observer sessionObserver;
+	private SessionInteractions promptInteractions;
+	private SessionSnapshot sessionSnapshot;
+	private ForegroundRecoveryWindow foregroundRecoveryWindow;
+	private SessionActivityPresenter sessionPresenter;
+	private final ClipboardShareCoordinator clipboardShareCoordinator = new ClipboardShareCoordinator();
+	private CredentialUi credentialUi;
+	private Toolbar toolbar;
+	private final Handler mainHandler = new Handler(Looper.getMainLooper());
+	private ShellNavigation shellNavigation;
+	private View shellRoot;
+	private long computerLoadGeneration;
+	private static final class ComputerEntry {
+		final long id;
+		final String name;
+		final String endpoint;
+		final boolean selected;
+		ComputerEntry(long id, String name, String endpoint, boolean selected) {
+			this.id = id; this.name = name; this.endpoint = endpoint; this.selected = selected;
+		}
+	}
+	private List<ComputerEntry> cachedComputers = new ArrayList<>();
+	private boolean externalScreenPending;
+	private final java.util.Set<AlertDialog> shellDialogs = new java.util.HashSet<>();
+	private final ExecutorService actionsIoWorker = Executors.newSingleThreadExecutor(task -> {
+		Thread thread = new Thread(task, "xmouse-actions-io");
+		thread.setDaemon(true);
+		return thread;
+	});
+	private long actionsDataGeneration;
+	private long actionSelectionGeneration;
+	private long actionsExecutionGeneration;
+	private List<LayoutProfile> actionProfiles = new ArrayList<>();
+	private List<SavedActionScript> savedActionScripts = new ArrayList<>();
+	private LayoutProfile selectedActionProfile;
+	private ActionPresetCatalog.Preset selectedActionPreset;
+	private boolean actionsLoading;
+	private boolean actionsLoadFailed;
+	private boolean scriptsLoading = true;
+	private boolean scriptsLoadFailed;
+	private boolean actionsEditMode;
+	private boolean actionProfileSelectionPending;
+	private boolean returningFromActionEditor;
+	private boolean returningFromScriptsManager;
+	private boolean databaseExistedAtLaunch;
+	private boolean preferencesExistedAtLaunch;
+	private final ShellContentRenderCache actionsRenderCache = new ShellContentRenderCache();
+	private final ShellContentRenderCache scriptsRenderCache = new ShellContentRenderCache();
+	private static final class ActionsSnapshot {
+		final List<LayoutProfile> profiles;
+		final LayoutProfile selectedProfile;
+		final List<SavedActionScript> scripts;
+		final String profileError;
+		final boolean scriptsFailed;
+		ActionsSnapshot(List<LayoutProfile> profiles, LayoutProfile selectedProfile,
+				List<SavedActionScript> scripts, String profileError, boolean scriptsFailed) {
+			this.profiles = profiles;
+			this.selectedProfile = selectedProfile;
+			this.scripts = scripts;
+			this.profileError = profileError;
+			this.scriptsFailed = scriptsFailed;
+		}
+	}
+	private MyMouseView mouseControlView;
+	private boolean activityResumed;
+	private boolean windowFocused;
+	private InputSurfaceToken controlInputSurface;
+	private final Map<Integer, InputGestureToken> volumeInputGestures = new HashMap<>();
+	private static final class CapturedButtonGesture {
+		final InputGestureToken token;
+		CapturedButtonGesture(InputGestureToken token) { this.token = token; }
+	}
+	private final WeakHashMap<View, CapturedButtonGesture> mouseButtonGestures = new WeakHashMap<>();
+	/** A canceled pointer owns subsequent unqualified clicks until a new DOWN; accessibility is explicit. */
+	private final WeakHashMap<View, Boolean> cancelledButtonTouches = new WeakHashMap<>();
+	private final WeakHashMap<View, Boolean> accessibilityButtonActivations = new WeakHashMap<>();
+	/** Only non-null while an owned touch UP invokes the legacy XML click callback synchronously. */
+	private View capturedTouchClickView;
+	private long bindingGeneration;
+	private long activityGeneration;
+	private long hostSelectionGeneration;
+	private long lastShownErrorGeneration = -1L;
+	public IDoTool doTool;
+	FrameLayout mouseSurfaceHost;
+	LinearLayout keyboardLayout;
+
+
+	public static ArrayList<ArrayList<String>> hostDBKeys;
+	public static String setting_host="";
+	public static String setting_user="";
+	public static int setting_port=22;
+	public static String setting_shell = "";
+	public static float setting_sensitivity=InputPreferences.DEFAULT_POINTER_SPEED;
+	public static int setting_delay=350;
+	public static int setting_mdelay=0;
+
+
+
+
+	boolean setting_autoconnect=false;
+	private static boolean setting_keyboard_locked=false;
+	public static String setting_dotool_initial="";
+	public static String setting_xdotool_initial="";
+	//static boolean setting_mouse_background=false;
+	private boolean setting_keyboard_autoclear=true;
+	private boolean setting_keyboard_send_enter_after_text=false;
+	public static boolean setting_use_keys = false;
+	public static boolean setting_invert_scroll = false;
+	//public static boolean setting_keyboard_show_details;
+	//static boolean setting_command_overlay=true;
+
+	private EditText ET;
+	private CustomKeyboardButtonAdapter mItemAdapter;
+	private CoolDragAndDropGridView mCoolDragAndDropGridView;
+	private List<CustomKeyboardButton> mItems = new LinkedList<CustomKeyboardButton>();
+	private String KEYLOAYOUTFILENAME = "keyLayoutFile.csv";
+	private LayoutProfileRuntime layoutProfileRuntime;
+	private LayoutProfileRepository layoutProfileRepository;
+	private boolean legacyLayoutFallbackReadOnly = true;
+	private boolean returningFromLayoutEditor;
+	private boolean returningFromLayoutManager;
+	private final IdentityHashMap<CustomKeyboardButton, String> layoutButtonIds = new IdentityHashMap<>();
+	//static ImageView DeleteView;
+	private RelativeLayout EditKeyboardButtonsLayout;
+	private LinearLayout ETLayout;
+	private int potentialDeletePosition;
+	private int startPosition;
+	//static ListView scriptList;
+	private TextView recentCmdTextView;
+
+
+	//private ArrayList<ArrayList<String>> scriptItems = new ArrayList<ArrayList<String>>();
+
+	@Override
+	public void onDialogPositiveClickValid(
+			net.droopia.xmouse_ng.myDialogFragment dialog, String layoutText) {
+		LinkedList<CustomKeyboardButton> temp = loadKeyboardLayout(MainActivity.this,layoutText);
+		if(temp!=null){
+			mItems = temp;
+			assignFreshLayoutButtonIds(mItems);
+
+			mItemAdapter = new CustomKeyboardButtonAdapter(MainActivity.this, mItems);
+			mCoolDragAndDropGridView.setAdapter(mItemAdapter);
+			mItemAdapter.notifyDataSetChanged();
+			saveKeyboardLayout();
+		}
+	}
+	@Override
+	public void onDialogNegativeClick(net.droopia.xmouse_ng.myDialogFragment dialog) {
+
+
+	}
+	public void xMouseClickMouse(View v){
+		InputGestureToken gesture = takeButtonActivationGesture(v);
+		Object token = gesture != null ? gesture :
+				(canUseActiveSurfaceForButtonClick(v) ? activePointerInputToken() : null);
+		if (!isInputTokenActive(token)) {
+			if (gesture != null && commandTransport != null) commandTransport.cancelInputGesture(gesture);
+			return;
+		}
+		IDoTool inputTool = createDoToolForInput(token);
+		if (inputTool == null) return;
+		int id = v.getId();
+		if (id == R.id.firstMouseButton) {
+			inputTool.mouseClick(IDoTool.MOUSE_LEFT);
+		} else if (id == R.id.secondMouseButton) {
+			inputTool.mouseClick(IDoTool.MOUSE_MIDDLE);
+		} else if (id == R.id.thirdMouseButton) {
+			inputTool.mouseClick(IDoTool.MOUSE_RIGHT);
+		} else if (id == R.id.fourthMouseButton) {
+			inputTool.mouseWheelUp();
+		} else if (id == R.id.fifthMouseButton) {
+			inputTool.mouseWheelDown();
+		}
+		if (gesture != null && commandTransport != null) commandTransport.finishInputGesture(gesture);
+	}
+
+	private InputGestureToken takeButtonActivationGesture(View view) {
+		if (isAccessibilityButtonActivation(view)) return null;
+		CapturedButtonGesture captured = mouseButtonGestures.remove(view);
+		if (capturedTouchClickView == view) {
+			return captured != null && isInputTokenActive(captured.token) ? captured.token : null;
+		}
+		// A click not dispatched from our currently-owned UP is a fresh accessibility/programmatic
+		// activation. Never let an overlapping touch lease replace its current surface capability.
+		if (captured != null && commandTransport != null) commandTransport.cancelInputGesture(captured.token);
+		return null;
+	}
+
+	private boolean isAccessibilityButtonActivation(View view) {
+		return Boolean.TRUE.equals(accessibilityButtonActivations.get(view));
+	}
+
+	private boolean canUseActiveSurfaceForButtonClick(View view) {
+		return capturedTouchClickView != view &&
+				(!cancelledButtonTouches.containsKey(view) || isAccessibilityButtonActivation(view));
+	}
+	@Override
+	public boolean onCreateOptionsMenu(Menu menu) {
+		// Inflate the menu; this adds items to the action bar if it is present.
+		getMenuInflater().inflate(R.menu.main, menu);
+		conDiscButton = menu.findItem(R.id.action_conn_disc);//getItem(0);
+		KeyLockButton = menu.findItem(R.id.action_lock_keys);
+		InvScrollButton = menu.findItem(R.id.action_invert_scroll);
+		showConnectionStat();
+
+
+
+
+		return true;
+		//super.onCreateOptionsMenu(menu);
+	}
+	@Override
+	protected void onCreate(Bundle savedInstanceState) {
+		super.onCreate(savedInstanceState);
+		databaseExistedAtLaunch = getDatabasePath("contactsManager").exists();
+		preferencesExistedAtLaunch = !PreferenceManager.getDefaultSharedPreferences(this).getAll().isEmpty();
+		if (savedInstanceState != null && savedInstanceState.containsKey("actions.existingDataAtLaunch")) {
+			databaseExistedAtLaunch = savedInstanceState.getBoolean("actions.existingDataAtLaunch");
+			preferencesExistedAtLaunch = false;
+		}
+		suppressLegacyAutoConnectOnResume = isNotificationOpenIntent(getIntent());
+		localNetworkPermissionCoordinator = LocalNetworkPermissionCoordinator.forContext(getApplicationContext());
+		notificationPermissionLauncher = registerForActivityResult(
+				new ActivityResultContracts.RequestPermission(), granted -> {
+					onNotificationPermissionResult(granted);
+				});
+		localNetworkPermissionLauncher = registerForActivityResult(
+				new ActivityResultContracts.RequestPermission(), granted -> onLocalNetworkPermissionResult(granted));
+		setContentView(R.layout.activity_main);
+		SystemWindowInsets.applyToAndConsume(getWindow(), findViewById(R.id.main_safe_area));
+		toolbar = (Toolbar) findViewById(R.id.toolbar);
+		setSupportActionBar(toolbar);
+		toolbar.setVisibility(View.GONE);
+		if (getSupportActionBar() != null) getSupportActionBar().setDisplayShowTitleEnabled(false);
+		shellRoot = findViewById(R.id.native_shell);
+		shellNavigation = new ShellNavigation(new ShellNavigation.Listener() {
+			@Override public void retireInput() {
+				deactivateControlInputSurface();
+			}
+			@Override public void retireLocalText() { retireInlineTypingInput(); }
+			@Override public void suspendLocalText() { suspendInlineTypingInput(); }
+			@Override public void render() { renderShell(); }
+			@Override public void refreshInput() { updateControlInputSurface(); }
+		});
+		NativeShellViews.bind(shellRoot, shellNavigation);
+		if (savedInstanceState != null) {
+			externalScreenPending = savedInstanceState.getBoolean("shell.externalPending");
+			ArrayList<String> overlays = savedInstanceState.getStringArrayList("shell.overlays");
+			shellNavigation.restore(savedInstanceState.getString("shell.destination"),
+					overlays == null ? new ArrayList<>() : overlays);
+		}
+		getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+			@Override public void handleOnBackPressed() {
+				DrawerLayout drawer = findViewById(R.id.main_safe_area);
+				if (drawer.isDrawerVisible(GravityCompat.START)) {
+					drawer.closeDrawer(GravityCompat.START);
+					return;
+				}
+				if (shellNavigation.topOverlay() == ShellNavigation.Overlay.ACTION_EDIT && shellDialogs.isEmpty()) {
+					if (mCoolDragAndDropGridView != null) mCoolDragAndDropGridView.cancelLegacyDragAndDrop();
+					actionsEditMode = false;
+					shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
+					return;
+				}
+				if (shellNavigation.back()) return;
+				setEnabled(false);
+				try { getOnBackPressedDispatcher().onBackPressed(); }
+				finally { setEnabled(true); }
+			}
+		});
+		getOnBackPressedDispatcher().addCallback(this, new DrawerBackCallback(
+				(DrawerLayout) findViewById(R.id.main_safe_area)));
+		commandTransport = new SessionCommandTransport(getApplicationContext());
+		credentialUi = new CredentialUi(this);
+		sessionPresenter = new SessionActivityPresenter(this, credentialUi, this);
+
+		mouseSurfaceHost = findViewById(R.id.mouse_surface_host);
+		mouseSurfaceHost.setClipToOutline(true);
+		keyboardLayout = (LinearLayout) findViewById(R.id.keyboard);
+
+		mouseControlView = new MyMouseView(this);
+		mouseSurfaceHost.addView(mouseControlView, 0, new FrameLayout.LayoutParams(
+				FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+		//keyboardLayout.addView(new MyKeyboardView(getBaseContext(), MainActivity.this));
+
+		installMouseButtonInputCapture(R.id.firstMouseButton);
+		installMouseButtonInputCapture(R.id.secondMouseButton);
+		installMouseButtonInputCapture(R.id.thirdMouseButton);
+		installMouseButtonInputCapture(R.id.fourthMouseButton);
+		installMouseButtonInputCapture(R.id.fifthMouseButton);
+		findViewById(R.id.header_connection_button).setOnClickListener(v -> {
+			if (hasActiveOrPendingSession()) {
+				ConnectionState connection = sessionSnapshot == null ? null : sessionSnapshot.getConnection();
+				if (connection != null && connection.isReady()) disconnectForegroundSessionFromUi();
+			} else requestForegroundSessionFromUi();
+		});
+		bindNavigationDrawer();
+		findViewById(R.id.computers_manage).setOnClickListener(v -> openLegacyManager(0));
+		findViewById(R.id.computers_add).setOnClickListener(v -> openExternalScreen(ComputerEditorActivity.intent(this, 0)));
+		findViewById(R.id.computers_find).setOnClickListener(v -> openExternalScreen(
+				new Intent(this, ListEditActivity.class).putExtra("findComputers", true)));
+		findViewById(R.id.computers_connect).setOnClickListener(v -> {
+			if (hasActiveOrPendingSession()) disconnectForegroundSessionFromUi();
+			else requestForegroundSessionFromUi();
+		});
+		findViewById(R.id.actions_layout_picker).setOnClickListener(v -> showActionLayoutPicker());
+		findViewById(R.id.actions_edit).setOnClickListener(v -> {
+			if (actionsEditMode) finishActionsEditMode();
+			else openLayoutEditor();
+		});
+		findViewById(R.id.scripts_add).setOnClickListener(v -> openScriptManager(null, true));
+		findViewById(R.id.scripts_manage).setOnClickListener(v -> openScriptManager(null));
+		clipboardSendButton = findViewById(R.id.touchpad_clipboard_send);
+		clipboardSendButton.setOnClickListener(v -> sendClipboardToLinux());
+		bindShellKey(R.id.typing_key_escape, "Escape", ShellNavigation.InputRole.POINTER);
+		bindShellKey(R.id.typing_key_tab, "Tab", ShellNavigation.InputRole.POINTER);
+		bindShellKey(R.id.typing_key_backspace, "Backspace", ShellNavigation.InputRole.POINTER);
+		bindShellKey(R.id.typing_key_enter, "Enter", ShellNavigation.InputRole.POINTER);
+
+		ScrollView scrollView = (ScrollView) findViewById(R.id.key_drag_scrollView);
+		mCoolDragAndDropGridView = (CoolDragAndDropGridView) findViewById(R.id.key_drag_DragAndDropGridView);
+
+
+		// Construct owners here, but activate/migrate and read profile files only on actionsIoWorker.
+		layoutProfileRepository = new LayoutProfileRepository(new File(getFilesDir(), "layout-profiles"));
+		layoutProfileRuntime = new LayoutProfileRuntime(layoutProfileRepository,
+				new LegacyLayoutProfileMigrator(getFilesDir(), layoutProfileRepository));
+
+		mItemAdapter = new CustomKeyboardButtonAdapter(this, mItems);
+		mCoolDragAndDropGridView.setAdapter(mItemAdapter);
+		mCoolDragAndDropGridView.setScrollingStrategy(new SimpleScrollingStrategy(scrollView));
+		mCoolDragAndDropGridView.setDragAndDropListener(this);
+		mCoolDragAndDropGridView.setOnItemLongClickListener(this);
+		//RelativeLayout k = (RelativeLayout) rootView.findViewById(R.id.keyboard_full_layout);
+		//FrameLayout sh = (FrameLayout) rootView.findViewById(R.id.content_frame_keyboard);
+		//sh.addView(keyView);
+		ET = (EditText) findViewById(R.id.keyboard_input);
+		ET.setContentDescription(getString(R.string.ng_typing_accessibility));
+		ET.addTextChangedListener(new android.text.TextWatcher() {
+			@Override public void beforeTextChanged(CharSequence value, int start, int count, int after) { }
+			@Override public void onTextChanged(CharSequence value, int start, int before, int count) {
+				updateComposerSendState();
+			}
+			@Override public void afterTextChanged(android.text.Editable value) { }
+		});
+		ET.setOnEditorActionListener((textView, actionId, event) -> {
+			boolean imeSend = actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND;
+			boolean enterSend = event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER &&
+					event.getAction() == KeyEvent.ACTION_DOWN && !event.isShiftPressed();
+			if (!imeSend && !enterSend) return false;
+			findViewById(R.id.keyboard_send).performClick();
+			return true;
+		});
+
+		// Entering/editing a shell text field is never a remote input event, regardless of the
+		// retained legacy batch preference. Only the explicit Send callback owns typing capability.
+
+		EditKeyboardButtonsLayout = (RelativeLayout) findViewById(R.id.editKeyboardButtonsLayout);
+		EditKeyboardButtonsLayout.setVisibility(View.GONE);
+		//DeleteView = (ImageView) findViewById(R.id.deleteButton);
+		//DeleteView.setVisibility(View.GONE);
+		ETLayout = (LinearLayout) findViewById(R.id.keyboard_send_layout);
+		//SlidingPane SH = (SlidingPane) rootView.findViewById(R.id.slideHolder_keyboard);
+		////SH.setParallaxDistance(100);
+		////SH.setEnabled(false);
+		//SH.setCoveredFadeColor(Color.TRANSPARENT);
+		////SH.setShadowResource(R.drawable.shadow);
+        /*ListView drawerList = (ListView) rootView.findViewById(R.id.drawerList);
+
+        ButtonListAdapter adapter = new ButtonListAdapter(getActivity());
+        drawerList.setAdapter(adapter);*/
+		recentCmdTextView = (TextView) findViewById(R.id.recentCmd);
+
+		initDb();
+		// onResume owns the fresh metadata request; do not enqueue a duplicate creation-time read.
+		updateClipboardAction();
+		updateComposerSendState();
+	}
+	public void initDb(){
+
+		hostDBKeys = new ArrayList<ArrayList<String>>();
+		ArrayList<String> dataKey = new ArrayList<String>();
+		dataKey.add("Alias");
+		dataKey.add("TEXT");
+		hostDBKeys.add(dataKey);
+		dataKey = new ArrayList<String>();
+		dataKey.add("Host");
+		dataKey.add("TEXT");
+		hostDBKeys.add(dataKey);
+		dataKey = new ArrayList<String>();
+		dataKey.add("Username");
+		dataKey.add("TEXT");
+		hostDBKeys.add(dataKey);
+		dataKey = new ArrayList<String>();
+		dataKey.add("Port");
+		dataKey.add("TEXT");
+		hostDBKeys.add(dataKey);
+		dataKey = new ArrayList<String>();
+		dataKey.add("Password");
+		dataKey.add("TEXT");
+		hostDBKeys.add(dataKey);
+
+
+		ArrayList<ArrayList<String>> scriptDBKeys = new ArrayList<ArrayList<String>>();
+		dataKey = new ArrayList<String>();
+		dataKey.add("Alias");
+		dataKey.add("TEXT");
+		scriptDBKeys.add(dataKey);
+		dataKey = new ArrayList<String>();
+		dataKey.add("Script");
+		dataKey.add("TEXT");
+		scriptDBKeys.add(dataKey);
+
+		db = new DatabaseHandler(getApplicationContext(), hostDBKeys,scriptDBKeys);
+	}
+
+	public void initMenu(){
+		loadComputerMetadata();
+	}
+
+	/** Stable shell hook for destination controllers; changing destination never dispatches input. */
+	public ShellNavigation shellNavigation() { return shellNavigation; }
+
+	/** Immutable saved snapshot only: no draft/preview can become a normal executable action. */
+	public LayoutProfile selectedSavedActionProfile() { return selectedActionPreset == null ? selectedActionProfile : null; }
+	public String selectedBuiltInActionPresetId() { return selectedActionPreset == null ? null : selectedActionPreset.id(); }
+	public void refreshSavedActions() { requestActionsData(); }
+
+	private void renderShell() {
+		if (shellRoot == null || shellNavigation == null) return;
+		NativeShellViews.render(shellRoot, shellNavigation, !shellDialogs.isEmpty());
+		renderActions();
+		renderScripts();
+		if (shellNavigation.topOverlay() == ShellNavigation.Overlay.COMPUTERS) renderComputers();
+	}
+
+	/** Clear composer text only at the existing privacy boundaries (external UI or app suspension). */
+	private void retireInlineTypingInput() {
+		if (ET == null) return;
+		InputMethodManager inputMethod = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+		if (inputMethod != null && ET.getWindowToken() != null)
+			inputMethod.hideSoftInputFromWindow(ET.getWindowToken(), 0);
+		ET.clearFocus();
+		ET.setText("");
+		updateComposerSendState();
+	}
+
+	/** Destination changes hide the IME but keep the shared, non-persisted composer draft. */
+	private void suspendInlineTypingInput() {
+		if (ET == null) return;
+		InputMethodManager inputMethod = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+		if (inputMethod != null && ET.getWindowToken() != null)
+			inputMethod.hideSoftInputFromWindow(ET.getWindowToken(), 0);
+		ET.clearFocus();
+		updateComposerSendState();
+	}
+
+	private void updateComposerSendState() {
+		if (ET == null) return;
+		View send = findViewById(R.id.keyboard_send);
+		TextView hint = findViewById(R.id.typing_connection_hint);
+		if (send == null || hint == null) return;
+		boolean ready = sessionSnapshot != null && sessionSnapshot.getConnection().isReady();
+		boolean hasText = !ET.getText().toString().trim().isEmpty();
+		boolean destinationActive = shellNavigation != null &&
+				shellNavigation.inputRole() != ShellNavigation.InputRole.NONE;
+		boolean shellReady = activityResumed && windowFocused && destinationActive &&
+				activeComposerInputToken() != null && !isFinishing() && !isDestroyed();
+		send.setEnabled(ready && hasText && shellReady);
+		if (ready) {
+			hint.setVisibility(View.GONE);
+		} else {
+			ConnectionState.Phase phase = sessionSnapshot == null ? ConnectionState.Phase.DISCONNECTED
+					: sessionSnapshot.getConnection().getPhase();
+			boolean connecting = phase == ConnectionState.Phase.PREPARING_CREDENTIALS ||
+					phase == ConnectionState.Phase.RESOLVING || phase == ConnectionState.Phase.CONNECTING ||
+					phase == ConnectionState.Phase.AWAITING_TRUST || phase == ConnectionState.Phase.AUTHENTICATING;
+			hint.setText(connecting ? R.string.ng_composer_connecting_hint : R.string.ng_composer_disconnected_hint);
+			hint.setVisibility(View.VISIBLE);
+		}
+	}
+
+	@Override protected void onSaveInstanceState(Bundle outState) {
+		outState.putBoolean("actions.existingDataAtLaunch", databaseExistedAtLaunch || preferencesExistedAtLaunch);
+		outState.putString("shell.destination", shellNavigation.destination().name());
+		outState.putBoolean("shell.externalPending", externalScreenPending);
+		ArrayList<String> overlays = new ArrayList<>();
+		for (ShellNavigation.Overlay overlay : shellNavigation.overlays()) overlays.add(overlay.name());
+		outState.putStringArrayList("shell.overlays", overlays);
+		super.onSaveInstanceState(outState);
+	}
+
+	/** Quick-key controls share only the currently active Touchpad capability. */
+	public void bindShellKey(int viewId, String key, ShellNavigation.InputRole role) {
+		bindShellKey(findViewById(viewId), key, role);
+	}
+
+	public void bindShellKey(View button, String key, ShellNavigation.InputRole role) {
+		installInputButtonCapture(button, role);
+		button.setOnClickListener(view -> {
+			InputGestureToken gesture = takeButtonActivationGesture(view);
+			Object token = gesture != null ? gesture : canUseActiveSurfaceForButtonClick(view) ? inputTokenFor(role) : null;
+			IDoTool tool = isInputTokenActive(token) ? createDoToolForInput(token) : null;
+			if (tool != null) tool.key(key);
+			if (gesture != null && commandTransport != null) commandTransport.finishInputGesture(gesture);
+		});
+	}
+
+	/** Metadata-only worker path: no prepare/authenticate/readPassword or secret data in the UI. */
+	private void loadComputerMetadata() {
+		final long generation = ++computerLoadGeneration;
+		final SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
+		net.droopia.xmouse_ng.secrets.CredentialRepository repository = AndroidCredentials.get(getApplicationContext());
+		repository.execute(() -> {
+			try {
+				ComputerMetadataSnapshot snapshot = ComputerMetadataSnapshot.load(repository::hosts, preferences.getAll());
+				List<ComputerEntry> hosts = new ArrayList<>();
+				long selectedId = snapshot.selected == null ? -1 : snapshot.selected.getId();
+				for (CredentialHost host : snapshot.hosts) hosts.add(new ComputerEntry(host.getId(), computerName(host),
+						host.displayEndpoint() + " · SSH port " + host.getPort(), host.getId() == selectedId));
+				String selectedName = snapshot.selected != null ? computerName(snapshot.selected) :
+						(snapshot.host.isEmpty() ? getString(R.string.ng_choose_computer) : snapshot.host);
+				mainHandler.post(() -> {
+					if (generation != computerLoadGeneration || isFinishing() || isDestroyed()) return;
+					setting_host = snapshot.host;
+					setting_user = snapshot.user;
+					try { setting_port = Integer.parseInt(snapshot.port); }
+					catch (NumberFormatException ignored) {
+						Log.w(TAG, "settings_read_failed");
+						Toast.makeText(this, "There was a problem retrieving your settings.", Toast.LENGTH_LONG).show();
+					}
+					cachedComputers = hosts;
+					((TextView) findViewById(R.id.computer_name)).setText(selectedName);
+					findViewById(R.id.computer_selector).setContentDescription(getString(R.string.ng_select_computer, selectedName));
+					((TextView) findViewById(R.id.computers_message)).setText(
+							hosts.isEmpty() ? R.string.ng_no_computers : R.string.ng_computers_select_hint);
+					renderComputers();
+				});
+			} catch (Exception ignored) {
+				mainHandler.post(() -> {
+					if (generation == computerLoadGeneration && !isDestroyed())
+						((TextView) findViewById(R.id.computers_message)).setText(R.string.ng_computers_failed);
+				});
+			}
+		});
+	}
+
+	private String computerName(CredentialHost host) {
+		if (host.getAlias() != null && !host.getAlias().trim().isEmpty()) return host.getAlias();
+		String endpoint = host.displayEndpoint();
+		return endpoint.isEmpty() ? getString(R.string.ng_choose_computer) : endpoint;
+	}
+
+	private void renderComputers() {
+		LinearLayout list = findViewById(R.id.computers_list);
+		list.removeAllViews();
+		for (ComputerEntry host : cachedComputers) {
+			MaterialCardView card = new MaterialCardView(this);
+			float density = getResources().getDisplayMetrics().density;
+			card.setRadius(dp(14)); card.setCardElevation(0); card.setUseCompatPadding(false);
+			card.setCardBackgroundColor(getColor(R.color.ng_surface));
+			card.setStrokeWidth(dp(host.selected ? 2 : 1));
+			card.setStrokeColor(ColorStateList.valueOf(getColor(host.selected ? R.color.ng_accent : R.color.ng_border)));
+			card.setClickable(true); card.setFocusable(true);
+			card.setContentDescription(getString(R.string.ng_connect_computer_named, host.name) + ", " + host.endpoint);
+			LinearLayout body = new LinearLayout(this);
+			body.setOrientation(LinearLayout.VERTICAL);
+			body.setPadding(dp(12), dp(10), dp(12), dp(8));
+			LinearLayout titleRow = new LinearLayout(this);
+			titleRow.setOrientation(LinearLayout.HORIZONTAL); titleRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+			TextView name = new TextView(this);
+			name.setText(host.name); name.setTextColor(getColor(R.color.ng_text_primary)); name.setTextSize(15);
+			name.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+			name.setMaxLines(1); name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+			titleRow.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
+			TextView selected = new TextView(this);
+			selected.setText(R.string.ng_computer_selected); selected.setTextColor(getColor(R.color.ng_accent));
+			selected.setTextSize(11); selected.setVisibility(host.selected ? View.VISIBLE : View.GONE);
+			titleRow.addView(selected, new LinearLayout.LayoutParams(-2, -2));
+			TextView endpoint = new TextView(this);
+			endpoint.setText(host.endpoint); endpoint.setTextColor(getColor(R.color.ng_text_secondary)); endpoint.setTextSize(12);
+			endpoint.setMaxLines(2); endpoint.setEllipsize(android.text.TextUtils.TruncateAt.END);
+			body.addView(titleRow, new LinearLayout.LayoutParams(-1, -2));
+			body.addView(endpoint, new LinearLayout.LayoutParams(-1, -2));
+			LinearLayout actions = new LinearLayout(this);
+			actions.setOrientation(LinearLayout.HORIZONTAL); actions.setPadding(0, dp(6), 0, 0);
+			Button connect = computerButton(getString(R.string.ng_connection_connect));
+			connect.setContentDescription(getString(R.string.ng_connect_computer_named, host.name));
+			connect.setOnClickListener(v -> {
+				shellNavigation.closeTop();
+				selectHostAndConnect((int) host.id);
+			});
+			Button edit = computerButton(getString(R.string.ng_edit_computer));
+			edit.setContentDescription(getString(R.string.ng_edit_computer_named, host.name));
+			edit.setOnClickListener(v -> openExternalScreen(ComputerEditorActivity.intent(this, host.id)));
+			actions.addView(connect, new LinearLayout.LayoutParams(0, -2, 1));
+			LinearLayout.LayoutParams editParams = new LinearLayout.LayoutParams(0, -2, 1);
+			editParams.setMarginStart(dp(8)); actions.addView(edit, editParams);
+			body.addView(actions, new LinearLayout.LayoutParams(-1, -2));
+			card.addView(body);
+			card.setOnClickListener(v -> {
+				shellNavigation.closeTop();
+				selectHostAndConnect((int) host.id);
+			});
+			LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, -2);
+			cardParams.bottomMargin = Math.round(8 * density);
+			list.addView(card, cardParams);
+		}
+	}
+
+	private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
+
+	private MaterialButton computerButton(String title) {
+		float density = getResources().getDisplayMetrics().density;
+		MaterialButton button = new MaterialButton(this);
+		button.setText(title); button.setAllCaps(false); button.setSingleLine(false); button.setEllipsize(null);
+		button.setMinHeight((int) (48 * density)); button.setMinWidth((int) (48 * density));
+		button.setCornerRadius((int) (12 * density)); button.setStrokeWidth((int) density);
+		button.setStrokeColor(ColorStateList.valueOf(getColor(R.color.ng_border)));
+		button.setBackgroundTintList(ColorStateList.valueOf(getColor(R.color.ng_surface_soft)));
+		button.setTextColor(getColor(R.color.ng_text_primary));
+		return button;
+	}
+
+	private void bindNavigationDrawer() {
+		findViewById(R.id.drawer_computers).setOnClickListener(v -> runDrawerAction(
+				() -> shellNavigation.open(ShellNavigation.Overlay.COMPUTERS)));
+		findViewById(R.id.drawer_pointer_settings).setOnClickListener(v -> runDrawerAction(
+				() -> openInputSettings(NativeSettingsActivity.SECTION_POINTER)));
+		findViewById(R.id.drawer_keyboard_settings).setOnClickListener(v -> runDrawerAction(
+				() -> openInputSettings(NativeSettingsActivity.SECTION_KEYBOARD)));
+		findViewById(R.id.drawer_authentication).setOnClickListener(v -> runDrawerAction(
+				() -> openInputSettings(NativeSettingsActivity.SECTION_AUTHENTICATION)));
+		findViewById(R.id.drawer_appearance).setOnClickListener(v -> runDrawerAction(this::showAppearance));
+		findViewById(R.id.drawer_about).setOnClickListener(v -> runDrawerAction(this::showAbout));
+		findViewById(R.id.drawer_exit).setOnClickListener(v -> runDrawerAction(() -> {
+			disconnectForegroundSessionFromUi();
+			finish();
+		}));
+	}
+
+	private void runDrawerAction(Runnable action) {
+		DrawerLayout drawer = findViewById(R.id.main_safe_area);
+		if (shellNavigation.topOverlay() == ShellNavigation.Overlay.MENU)
+			shellNavigation.close(ShellNavigation.Overlay.MENU);
+		if (drawer.isDrawerOpen(GravityCompat.START)) drawer.closeDrawer(GravityCompat.START);
+		action.run();
+	}
+
+	private void openSettings() { openExternalScreen(new Intent(this, NativeSettingsActivity.class)); }
+	private void showAppearance() { openInputSettings(NativeSettingsActivity.SECTION_APPEARANCE); }
+	private void showAbout() { openInputSettings(NativeSettingsActivity.SECTION_ABOUT); }
+	private void openInputSettings(String section) {
+		Intent intent = new Intent(this, NativeSettingsActivity.class);
+		if (section != null) intent.putExtra(NativeSettingsActivity.EXTRA_SECTION, section);
+		openExternalScreen(intent);
+	}
+	private void openLegacyManager(int type) {
+		openExternalScreen(new Intent(this, ListEditActivity.class).putExtra("intVariableType", type));
+	}
+	private void openExternalScreen(Intent intent) {
+		shellNavigation.open(ShellNavigation.Overlay.EXTERNAL);
+		externalScreenPending = true;
+		try { startActivity(intent); }
+		catch (RuntimeException failure) {
+			externalScreenPending = false;
+			shellNavigation.closeTop();
+			throw failure;
+		}
+	}
+
+	private void showOwnedDialog(AlertDialog dialog) {
+		showOwnedDialog(dialog, null);
+	}
+
+	private void showOwnedDialog(AlertDialog dialog, Runnable afterDismiss) {
+		shellDialogs.add(dialog);
+		dialog.setOnDismissListener(dismissed -> {
+			shellDialogs.remove(dialog);
+			if (shellDialogs.isEmpty()) {
+				if (!actionsEditMode && !actionProfileSelectionPending) {
+					boolean hadEditOverlay = shellNavigation.overlays().contains(ShellNavigation.Overlay.ACTION_EDIT);
+					shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
+					if (!hadEditOverlay) renderShell();
+				} else {
+					renderShell();
+				}
+			}
+			if (afterDismiss != null) {
+				final long generation = actionsExecutionGeneration;
+				mainHandler.post(() -> {
+					if (generation == actionsExecutionGeneration && activityResumed &&
+							!isFinishing() && !isDestroyed() && shellNavigation.topOverlay() == null) afterDismiss.run();
+				});
+			}
+		});
+		boolean alreadyEditing = shellNavigation.topOverlay() == ShellNavigation.Overlay.ACTION_EDIT;
+		shellNavigation.open(ShellNavigation.Overlay.ACTION_EDIT);
+		if (alreadyEditing) renderShell();
+		dialog.show();
+	}
+
+	public void runSavedScript(int id) {
+		runSavedScriptAsync(id);
+	}
+
+	public void getPreferences(){
+
+		SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+		// Read these independently: malformed unrelated legacy settings must not prevent input reload.
+		InputPreferences input = InputPreferences.read(prefs.getAll());
+		setting_sensitivity = input.pointerSpeed;
+		setting_invert_scroll = input.invertScroll;
+		setting_keyboard_autoclear = input.keyboardAutoClear;
+		setting_keyboard_send_enter_after_text = input.keyboardSendEnterAfterText;
+		try{
+
+			setting_host= prefs.getString("setting_host", "");
+			setting_user= prefs.getString("setting_user", "");
+			setting_port= Integer.valueOf(prefs.getString("setting_port", "22"));
+
+			// Selected-host overrides arrive from the generation-guarded metadata worker. Session
+			// attachment/automatic Connect use the service's own fresh selection, never these fields.
+
+			setting_delay = Integer.valueOf(prefs.getString("delay_list", "350"));
+			setting_mdelay = Integer.valueOf(prefs.getString("mdelay_list", "0"));
+
+
+			setting_autoconnect=prefs.getBoolean("autologin_checkbox", false);
+			setting_dotool_initial=prefs.getString("setting_dotool_initial", "xdotool");
+			setting_xdotool_initial=prefs.getString("setting_xdotool_initial", "export DISPLAY=':0' && unset HISTFILE");
+			setting_shell = prefs.getString("setting_shell", "");
+			//setting_keyboard_show_details=prefs.getBoolean("show_commands_on_buttons",false);
+			setting_use_keys = prefs.getBoolean("pref_usekeyauth",false);
+			//setting_mouse_background=prefs.getBoolean("setting_mouse_background",false);
+			setting_keyboard_locked=prefs.getBoolean("keyboard_layout_locked",false);
+			//setting_log_staydown=prefs.getBoolean("log_staydown", true);
+			//setting_command_overlay=prefs.getBoolean("command_overlay", false);
+		}catch(Exception ignored){
+			Log.w(TAG, "settings_read_failed");
+			Toast.makeText(getApplicationContext(), "There was a problem retrieving your settings.", Toast.LENGTH_LONG).show();
+		}
+	}
+	public void xMouseKeyboardSend(View v){
+		InputGestureToken gesture = takeButtonActivationGesture(v);
+		Object token = gesture != null ? gesture :
+				(canUseActiveSurfaceForButtonClick(v) ? activeComposerInputToken() : null);
+		if (!isInputTokenActive(token)) {
+			if (gesture != null && commandTransport != null) commandTransport.cancelInputGesture(gesture);
+			return;
+		}
+		IDoTool inputTool = createDoToolForInput(token);
+		if (inputTool != null) useKeyboardSendText(inputTool);
+		if (gesture != null && commandTransport != null) commandTransport.finishInputGesture(gesture);
+		updateComposerSendState();
+	}
+
+	private InputSurfaceToken activeComposerInputToken() {
+		if (shellNavigation == null) return null;
+		ShellNavigation.InputRole role = shellNavigation.inputRole();
+		return role == ShellNavigation.InputRole.POINTER || role == ShellNavigation.InputRole.ACTIONS
+				? inputTokenFor(role) : null;
+	}
+
+	@Override
+	protected void onStart() {
+		super.onStart();
+		Log.d(TAG, "activity_started");
+		if (sessionPresenter != null) sessionPresenter.start();
+		bindSessionService();
+	}
+	@Override
+	protected void onResume() {
+		super.onResume();
+		activityResumed = true;
+		final boolean returningFromExternal = externalScreenPending;
+		if (returningFromLayoutEditor || returningFromLayoutManager || returningFromActionEditor || returningFromScriptsManager) {
+			returningFromLayoutEditor = false;
+			returningFromLayoutManager = false;
+			returningFromActionEditor = false;
+			returningFromScriptsManager = false;
+		}
+		foregroundRecoveryWindow = new ForegroundRecoveryWindow();
+		Log.d(TAG, "activity_resumed");
+		final boolean openedFromNotification = suppressLegacyAutoConnectOnResume;
+		suppressLegacyAutoConnectOnResume = false;
+		// The activity has become visible (it is now "resumed").
+		getPreferences();
+
+
+
+		//Toast.makeText(getBaseContext(), "setting_autoconnect "+String.valueOf(setting_autoconnect), Toast.LENGTH_SHORT).show();
+		// Returning from a form/Settings only reloads data; it is not a connection request.
+		if (!returningFromExternal) scheduleAutomaticForegroundSessionAfterVisibleFrame(
+				activityGeneration, getWindow().getDecorView(), !openedFromNotification);
+
+		initMenu();
+		showConnectionStat();
+		initDoTool();
+		if (returningFromExternal) {
+			externalScreenPending = false;
+			shellNavigation.close(ShellNavigation.Overlay.EXTERNAL);
+		}
+		requestActionsData();
+		windowFocused = getWindow().getDecorView().hasWindowFocus();
+		updateControlInputSurface();
+	}
+
+	private void requestAutomaticForegroundSession(boolean allowAutoConnect) {
+		if (pendingForegroundStartTicket != null) {
+			if (allowAutoConnect && setting_autoconnect) continueForegroundSessionRequest();
+			return;
+		}
+		String ticket = foregroundRecoveryWindow == null ? null :
+				SessionForegroundService.reserveForegroundRecoveryIfNeeded(this, foregroundRecoveryWindow);
+		if (ticket != null) {
+			// Recovery never prompts for or bypasses missing network permission. The owner checks it
+			// again before creating an attempt; existing notification disclosure remains in force.
+			SessionForegroundService.startReservedConnect(this, ticket);
+			return;
+		}
+		if (!allowAutoConnect || !setting_autoconnect) return;
+		SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
+		if (localNetworkPermissionCoordinator.requiresRuntimePermission() &&
+				preferences.getBoolean(PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED, false)) return;
+		if (!localNetworkPermissionCoordinator.requiresRuntimePermission()) {
+			preferences.edit().remove(PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED).apply();
+		}
+		ticket = SessionForegroundService.reserveAutomaticConnectIfNeeded(this);
+		if (ticket == null) return; // Existing intent, explicit Disconnect, or a newer request wins.
+		pendingForegroundStartTicket = ticket;
+		continueForegroundSessionRequest();
+	}
+
+	/** Wait for a laid-out visible frame before requesting an FGS start from this Activity. */
+	private void scheduleAutomaticForegroundSessionAfterVisibleFrame(long resumedGeneration, View decor,
+			boolean allowAutoConnect) {
+		decor.postOnAnimation(new Runnable() {
+			private boolean observedVisibleFrame;
+
+			@Override public void run() {
+				if (resumedGeneration != activityGeneration || isFinishing() || isDestroyed() ||
+						!activityResumed ||
+						!getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return;
+
+				boolean visibleFrame = decor.isAttachedToWindow() && decor.isShown() &&
+						decor.getWindowVisibility() == View.VISIBLE && decor.getWidth() > 0 && decor.getHeight() > 0;
+				if (!visibleFrame) {
+					observedVisibleFrame = false;
+					decor.postOnAnimation(this);
+					return;
+				}
+				if (!observedVisibleFrame) {
+					// This callback precedes drawing; wait one more frame so the window is genuinely visible.
+					observedVisibleFrame = true;
+					decor.postOnAnimation(this);
+					return;
+				}
+				requestAutomaticForegroundSession(allowAutoConnect);
+			}
+		});
+	}
+
+	private void bindSessionService() {
+		if (sessionServiceConnection != null || isFinishing() || isDestroyed()) return;
+		final long token = ++bindingGeneration;
+		ServiceConnection connection = new ServiceConnection() {
+			@Override public void onServiceConnected(ComponentName name, IBinder service) {
+				if (token != bindingGeneration || isFinishing() || isDestroyed()) return;
+				sessionBinder = (SessionForegroundService.SessionBinder) service;
+				promptInteractions = sessionBinder.getInteractions();
+				if (sessionPresenter != null) {
+					sessionPresenter.attach(promptInteractions);
+					if (commandTransport != null) {
+						commandTransport.setPresentationToken(sessionPresenter.presentationToken());
+					}
+				}
+				sessionSnapshot = sessionBinder.getSnapshot();
+				sessionObserver = snapshot -> applySessionSnapshot(token, snapshot);
+				sessionSubscription = sessionBinder.observe(command -> mainHandler.post(command), sessionObserver);
+				applySessionSnapshot(token, sessionSnapshot);
+			}
+			@Override public void onServiceDisconnected(ComponentName name) {
+				if (token != bindingGeneration) return;
+				clearShellPresentationTarget();
+				closeSessionObservation();
+				sessionBinder = null;
+				promptInteractions = null;
+				sessionSnapshot = null;
+				showConnectionStat();
+			}
+		};
+		sessionServiceConnection = connection;
+		if (!bindService(new Intent(this, SessionForegroundService.class), connection, Context.BIND_AUTO_CREATE)) {
+			sessionServiceConnection = null;
+		}
+	}
+
+	private void applySessionSnapshot(long token, SessionSnapshot snapshot) {
+		if (token != bindingGeneration || isFinishing() || isDestroyed() ||
+				!getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return;
+		sessionSnapshot = snapshot;
+		showConnectionStat();
+		updateControlInputSurface();
+	}
+
+	private void closeSessionObservation() {
+		if (sessionSubscription != null) {
+			try { sessionSubscription.close(); } catch (Exception ignored) { }
+			sessionSubscription = null;
+		}
+		sessionObserver = null;
+	}
+
+	private void unbindSessionService() {
+		clearShellPresentationTarget();
+		bindingGeneration++;
+		closeSessionObservation();
+		ServiceConnection connection = sessionServiceConnection;
+		sessionServiceConnection = null;
+		if (connection != null) {
+			try { unbindService(connection); } catch (IllegalArgumentException ignored) { }
+		}
+		sessionBinder = null;
+		promptInteractions = null;
+		sessionSnapshot = null;
+	}
+
+	private void clearShellPresentationTarget() {
+		deactivateControlInputSurface();
+		if (commandTransport != null && sessionPresenter != null) {
+			commandTransport.clearPresentationToken(sessionPresenter.presentationToken());
+		}
+	}
+
+	private void updateControlInputSurface() {
+		boolean eligible = shellNavigation != null && shellNavigation.eligible(activityResumed, windowFocused,
+				sessionSnapshot != null && sessionSnapshot.getConnection().isReady()) &&
+				!isFinishing() && !isDestroyed() && sessionPresenter != null && commandTransport != null &&
+				getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) &&
+				sessionSnapshot != null && sessionSnapshot.getConnection().isReady() &&
+				sessionPresenter.presentationToken() != null;
+		if (!eligible) {
+			deactivateControlInputSurface();
+			updateComposerSendState();
+			return;
+		}
+		if (controlInputSurface != null && commandTransport.isInputTokenActive(controlInputSurface)) {
+			updateComposerSendState();
+			return;
+		}
+		controlInputSurface = null;
+		InputSurfaceToken activated = commandTransport.activateControlSurface(sessionPresenter.presentationToken());
+		controlInputSurface = activated;
+		updateComposerSendState();
+	}
+
+	private void deactivateControlInputSurface() {
+		actionsExecutionGeneration++;
+		InputSurfaceToken old = controlInputSurface;
+		controlInputSurface = null;
+		for (Map.Entry<View, CapturedButtonGesture> entry : new ArrayList<>(mouseButtonGestures.entrySet())) {
+			entry.getKey().setPressed(false);
+			cancelledButtonTouches.put(entry.getKey(), Boolean.TRUE);
+			if (commandTransport != null) commandTransport.cancelInputGesture(entry.getValue().token);
+		}
+		for (InputGestureToken gesture : new ArrayList<>(volumeInputGestures.values())) {
+			if (commandTransport != null) commandTransport.cancelInputGesture(gesture);
+		}
+		if (commandTransport != null) commandTransport.deactivateControlSurface(old);
+		if (mItemAdapter != null) mItemAdapter.resetForInactiveSurface();
+		mouseButtonGestures.clear();
+		volumeInputGestures.clear();
+		if (mouseControlView != null) mouseControlView.resetForInactiveSurface();
+	}
+
+	private boolean isInputTokenActive(Object token) {
+		return commandTransport != null && commandTransport.isInputTokenActive(token);
+	}
+
+	public boolean isControlInputTokenActive(Object token) {
+		return isInputTokenActive(token);
+	}
+
+	private void installMouseButtonInputCapture(int viewId) {
+		installInputButtonCapture(viewId, ShellNavigation.InputRole.POINTER);
+	}
+
+	/** Same cancellation/accessibility policy for all destination buttons, including future typing keys. */
+	public void installInputButtonCapture(int viewId, ShellNavigation.InputRole role) {
+		View button = findViewById(viewId);
+		if (button == null) return;
+		installInputButtonCapture(button, role);
+	}
+
+	private void installInputButtonCapture(View button, ShellNavigation.InputRole role) {
+		if (button == null) return;
+		button.setOnTouchListener((view, event) -> {
+			switch (event.getActionMasked()) {
+				case android.view.MotionEvent.ACTION_DOWN:
+					cancelledButtonTouches.remove(view);
+					CapturedButtonGesture old = mouseButtonGestures.remove(view);
+					if (old != null && commandTransport != null) commandTransport.cancelInputGesture(old.token);
+					InputSurfaceToken surface = inputTokenFor(role);
+					InputGestureToken gesture = commandTransport == null ? null : commandTransport.beginInputGesture(surface);
+					if (gesture != null) {
+						mouseButtonGestures.put(view, new CapturedButtonGesture(gesture));
+						view.setPressed(true);
+					}
+					break;
+				case android.view.MotionEvent.ACTION_MOVE:
+					CapturedButtonGesture moving = mouseButtonGestures.get(view);
+					if (moving != null && (!isInputTokenActive(moving.token) || event.getX() < 0 || event.getY() < 0 ||
+							event.getX() >= view.getWidth() || event.getY() >= view.getHeight())) {
+						mouseButtonGestures.remove(view);
+						view.setPressed(false);
+						cancelledButtonTouches.put(view, Boolean.TRUE);
+						if (commandTransport != null) commandTransport.cancelInputGesture(moving.token);
+					}
+					break;
+				case android.view.MotionEvent.ACTION_CANCEL:
+					CapturedButtonGesture cancelled = mouseButtonGestures.remove(view);
+					view.setPressed(false);
+					if (cancelled != null) cancelledButtonTouches.put(view, Boolean.TRUE);
+					if (cancelled != null && commandTransport != null) commandTransport.cancelInputGesture(cancelled.token);
+					break;
+				case android.view.MotionEvent.ACTION_UP:
+					CapturedButtonGesture completed = mouseButtonGestures.get(view);
+					view.setPressed(false);
+					boolean inside = event.getX() >= 0 && event.getY() >= 0 &&
+						event.getX() < view.getWidth() && event.getY() < view.getHeight();
+					if (completed != null && inside && isInputTokenActive(completed.token)) {
+						capturedTouchClickView = view;
+						boolean clicked;
+						try { clicked = view.performClick(); }
+						finally { capturedTouchClickView = null; }
+						if (!clicked) {
+							mouseButtonGestures.remove(view);
+							if (commandTransport != null) commandTransport.cancelInputGesture(completed.token);
+						}
+					} else if (completed != null) {
+						mouseButtonGestures.remove(view);
+						cancelledButtonTouches.put(view, Boolean.TRUE);
+						if (commandTransport != null) commandTransport.cancelInputGesture(completed.token);
+					}
+					return true;
+			}
+			// Consume pointer sequences. A validated touch UP above invokes performClick explicitly;
+			// stale UP after lifecycle reset cannot be turned into a click on the next surface.
+			return true;
+		});
+		button.setAccessibilityDelegate(new View.AccessibilityDelegate() {
+			@Override public boolean performAccessibilityAction(View host, int action, Bundle arguments) {
+				if (action != android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK) {
+					return super.performAccessibilityAction(host, action, arguments);
+				}
+				accessibilityButtonActivations.put(host, Boolean.TRUE);
+				try { return super.performAccessibilityAction(host, action, arguments); }
+				finally { accessibilityButtonActivations.remove(host); }
+			}
+		});
+	}
+
+	public InputSurfaceToken activeControlInputToken() {
+		InputSurfaceToken token = controlInputSurface;
+		return isInputTokenActive(token) ? token : null;
+	}
+
+	/** Compatibility/volume route. New destination controls must use their role-specific helpers. */
+	public InputGestureToken beginControlInputGesture() {
+		return commandTransport == null ? null : commandTransport.beginInputGesture(activeControlInputToken());
+	}
+
+	private InputSurfaceToken inputTokenFor(ShellNavigation.InputRole role) {
+		return shellNavigation != null && shellNavigation.inputRole() == role ? activeControlInputToken() : null;
+	}
+	public InputSurfaceToken activePointerInputToken() { return inputTokenFor(ShellNavigation.InputRole.POINTER); }
+	public InputSurfaceToken activeActionInputToken() { return inputTokenFor(ShellNavigation.InputRole.ACTIONS); }
+	public InputGestureToken beginPointerInputGesture() {
+		return commandTransport == null ? null : commandTransport.beginInputGesture(activePointerInputToken());
+	}
+	public InputGestureToken beginActionInputGesture() {
+		return commandTransport == null ? null : commandTransport.beginInputGesture(activeActionInputToken());
+	}
+	public IDoTool createDoToolForInput(Object token) {
+		if (commandTransport == null || token == null) return null;
+		CommandTransport scoped = commandTransport.forInputToken(token);
+		return createDoTool(scoped);
+	}
+
+	public CommandTransport commandTransportForInput(Object token) {
+		return commandTransport == null || token == null ? null : commandTransport.forInputToken(token);
+	}
+
+	public void finishControlInputGesture(InputGestureToken token) {
+		if (commandTransport != null) commandTransport.finishInputGesture(token);
+	}
+
+	public void cancelControlInputGesture(InputGestureToken token) {
+		if (commandTransport != null) commandTransport.cancelInputGesture(token);
+	}
+
+	@Override
+	protected void onNewIntent(Intent intent) {
+		super.onNewIntent(intent);
+		suppressLegacyAutoConnectOnResume = isNotificationOpenIntent(intent);
+	}
+
+	private static boolean isNotificationOpenIntent(Intent intent) {
+		return intent != null && ACTION_OPEN_SESSION_CONTROLS.equals(intent.getAction());
+	}
+
+	/** In-app entry point retained when notification-tray visibility is denied or later revoked. */
+	public void showSessionControls() {
+		if (isFinishing() || isDestroyed()) return;
+		boolean active = hasActiveOrPendingSession() && !SessionForegroundService.hasPendingStart(this);
+		boolean pending = SessionForegroundService.hasPendingStart(this);
+		boolean retry = sessionSnapshot != null && sessionSnapshot.getDesiredHost() != null &&
+				sessionSnapshot.getConnection().getPhase() == ConnectionState.Phase.ERROR;
+		if (pending && !active) {
+			AlertDialog.Builder pendingDialog = new AlertDialog.Builder(this)
+					.setTitle(R.string.session_controls_title)
+					.setMessage(R.string.session_controls_pending_message);
+			if (pendingForegroundStartTicket != null) {
+				pendingDialog.setPositiveButton(R.string.session_controls_continue_request,
+						(dialog, which) -> continueForegroundSessionRequest());
+				pendingDialog.setNegativeButton(R.string.session_controls_cancel_request,
+						(dialog, which) -> cancelPendingForegroundSessionRequest());
+			} else {
+				pendingDialog.setPositiveButton(R.string.session_controls_close, null)
+						.setNegativeButton(R.string.session_controls_disconnect,
+								(dialog, which) -> disconnectForegroundSessionFromUi());
+			}
+			showOwnedDialog(pendingDialog.create());
+			return;
+		}
+		String message;
+		if (retry) {
+			message = connectionFailureMessage(sessionSnapshot.getConnection().getFailure());
+		} else if (!active) {
+			message = getString(R.string.session_controls_idle_message);
+		} else if (SessionForegroundService.areSessionNotificationsVisible(this)) {
+			message = getString(R.string.session_controls_active_message);
+		} else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+			message = getString(R.string.session_controls_hidden_api33_message);
+		} else {
+			message = getString(R.string.session_controls_hidden_older_message);
+		}
+		showOwnedDialog(new AlertDialog.Builder(this)
+				.setTitle(R.string.session_controls_title)
+				.setMessage(message)
+				.setPositiveButton(retry ? R.string.session_controls_retry : active ? R.string.session_controls_open : R.string.session_controls_connect,
+						(dialog, which) -> { if (!active) requestForegroundSessionFromUi(); })
+				.setNegativeButton(active || retry ? R.string.session_controls_disconnect : R.string.session_controls_close,
+						(dialog, which) -> { if (active || retry) disconnectForegroundSessionFromUi(); })
+				.create());
+	}
+
+	/** Keeps an in-progress permission flow intact while directing a legacy connect tap to it. */
+	public void showLegacyConnectBlockedGuidance() {
+		if (pendingForegroundStartTicket != null) {
+			android.widget.Toast.makeText(this, R.string.session_controls_pending_legacy_guidance,
+					android.widget.Toast.LENGTH_LONG).show();
+		} else {
+			showSessionControls();
+		}
+	}
+
+	private void requestForegroundSessionFromUi() {
+		if (pendingForegroundStartTicket != null) {
+			continueForegroundSessionRequest();
+			return;
+		}
+		if (hasActiveOrPendingSession() && !SessionForegroundService.hasPendingStart(this)) {
+			showSessionControls();
+			return;
+		}
+		if (SessionForegroundService.hasPendingStart(this)) {
+			showSessionControls();
+			return;
+		}
+		PreferenceManager.getDefaultSharedPreferences(this).edit()
+				.remove(PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED).apply();
+		pendingForegroundStartTicket = SessionForegroundService.reserveConnectRequest(this, false);
+		if (pendingForegroundStartTicket == null) {
+			android.widget.Toast.makeText(this, R.string.session_start_rejected, android.widget.Toast.LENGTH_LONG).show();
+			return;
+		}
+		continueForegroundSessionRequest();
+	}
+
+	private void continueForegroundSessionRequest() {
+		if (pendingForegroundStartTicket == null) {
+			pendingHostSelectionRequest = false;
+			pendingForegroundStartTicket = SessionForegroundService.reserveConnectRequest(this, false);
+			if (pendingForegroundStartTicket == null) {
+				android.widget.Toast.makeText(this, R.string.session_start_rejected, android.widget.Toast.LENGTH_LONG).show();
+				return;
+			}
+		}
+		if (localNetworkPermissionCoordinator.requiresRuntimePermission()) {
+			showLocalNetworkPermissionRationale();
+			return;
+		}
+		PreferenceManager.getDefaultSharedPreferences(this).edit()
+				.remove(PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED).apply();
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+				checkSelfPermission(POST_NOTIFICATIONS_PERMISSION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+			SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
+			boolean requestedBefore = preferences.getBoolean(PREF_NOTIFICATION_PERMISSION_REQUESTED, false);
+			if (requestedBefore && !shouldShowRequestPermissionRationale(POST_NOTIFICATIONS_PERMISSION)) {
+				showNotificationSettingsExplanation(true);
+			} else {
+				showNotificationPermissionRationale();
+			}
+			return;
+		}
+
+		if (!SessionForegroundService.areSessionNotificationsVisible(this)) {
+			showNotificationSettingsExplanation(false);
+			return;
+		}
+		startForegroundSession();
+	}
+
+	/** LAN access is requested only from this visible, ticket-owning Activity; services never prompt. */
+	private void showLocalNetworkPermissionRationale() {
+		String ticket = pendingForegroundStartTicket;
+		if (ticket == null || pendingLocalNetworkPermissionTicket != null) return;
+		if (!SessionForegroundService.hasReservedStart(this, ticket)) {
+			pendingForegroundStartTicket = null;
+			return;
+		}
+		pendingLocalNetworkPermissionTicket = ticket;
+		showOwnedDialog(new AlertDialog.Builder(this)
+				.setTitle(R.string.local_network_permission_title)
+				.setMessage(R.string.local_network_permission_message)
+				.setPositiveButton(R.string.local_network_permission_request, (dialog, which) -> {
+					if (!ticket.equals(pendingLocalNetworkPermissionTicket) ||
+							!ticket.equals(pendingForegroundStartTicket) ||
+							!SessionForegroundService.hasReservedStart(this, ticket)) {
+						if (ticket.equals(pendingLocalNetworkPermissionTicket)) pendingLocalNetworkPermissionTicket = null;
+						return;
+					}
+					try {
+						localNetworkPermissionLauncher.launch(LocalNetworkPermissionCoordinator.PERMISSION);
+					} catch (RuntimeException rejected) {
+						pendingLocalNetworkPermissionTicket = null;
+						cancelPendingForegroundSessionRequest();
+						android.widget.Toast.makeText(this, R.string.session_start_rejected,
+								android.widget.Toast.LENGTH_LONG).show();
+					}
+				})
+				.setNeutralButton(R.string.local_network_permission_open_settings,
+						(dialog, which) -> openLocalNetworkSettings(ticket))
+				.setNegativeButton(R.string.local_network_permission_not_now,
+						(dialog, which) -> cancelLocalNetworkPermissionRequest(ticket))
+				.setOnCancelListener(dialog -> cancelLocalNetworkPermissionRequest(ticket))
+				.create());
+	}
+
+	private void cancelLocalNetworkPermissionRequest(String ticket) {
+		if (!ticket.equals(pendingLocalNetworkPermissionTicket)) return;
+		pendingLocalNetworkPermissionTicket = null;
+		PreferenceManager.getDefaultSharedPreferences(this).edit()
+				.putBoolean(PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED, true).apply();
+		cancelPendingForegroundSessionRequest();
+	}
+
+	private void openLocalNetworkSettings(String ticket) {
+		if (ticket.equals(pendingLocalNetworkPermissionTicket)) {
+			pendingLocalNetworkPermissionTicket = null;
+			PreferenceManager.getDefaultSharedPreferences(this).edit()
+					.putBoolean(PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED, true).apply();
+			cancelPendingForegroundSessionRequest();
+		}
+		openApplicationSettings();
+	}
+
+	private void openApplicationSettings() {
+		Intent settings = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+				Uri.fromParts("package", getPackageName(), null));
+		try {
+			startActivity(settings);
+		} catch (RuntimeException ignored) {
+			startActivity(new Intent(Settings.ACTION_SETTINGS));
+		}
+	}
+
+	private void onLocalNetworkPermissionResult(boolean granted) {
+		String ticket = pendingLocalNetworkPermissionTicket;
+		if (ticket == null) return;
+		boolean reservationPending = SessionForegroundService.hasReservedStart(this, ticket);
+		if (!ticket.equals(pendingForegroundStartTicket) || !reservationPending) {
+			if (ticket.equals(pendingLocalNetworkPermissionTicket)) pendingLocalNetworkPermissionTicket = null;
+			if (ticket.equals(pendingForegroundStartTicket) && !reservationPending) {
+				pendingForegroundStartTicket = null;
+			}
+			return;
+		}
+		pendingLocalNetworkPermissionTicket = null;
+		if (isFinishing() || isDestroyed()) {
+			cancelPendingForegroundSessionRequest();
+			return;
+		}
+		if (granted && !localNetworkPermissionCoordinator.requiresRuntimePermission()) {
+			PreferenceManager.getDefaultSharedPreferences(this).edit()
+					.remove(PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED).apply();
+			continueForegroundSessionRequest();
+		} else {
+			PreferenceManager.getDefaultSharedPreferences(this).edit()
+					.putBoolean(PREF_LOCAL_NETWORK_AUTO_CONNECT_BLOCKED, true).apply();
+			cancelPendingForegroundSessionRequest();
+			showLocalNetworkPermissionDenied();
+		}
+	}
+
+	private void showLocalNetworkPermissionDenied() {
+		showOwnedDialog(new AlertDialog.Builder(this)
+				.setTitle(R.string.local_network_permission_denied_title)
+				.setMessage(R.string.local_network_permission_denied_message)
+				.setPositiveButton(R.string.local_network_permission_retry,
+						(dialog, which) -> requestForegroundSessionFromUi())
+				.setNeutralButton(R.string.local_network_permission_open_settings,
+						(dialog, which) -> openApplicationSettings())
+				.setNegativeButton(R.string.local_network_permission_not_now, null)
+				.create());
+	}
+
+	private void showNotificationPermissionRationale() {
+		showOwnedDialog(new AlertDialog.Builder(this)
+				.setTitle(R.string.session_permission_rationale_title)
+				.setMessage(R.string.session_permission_rationale_message)
+				.setPositiveButton(R.string.session_permission_request, (dialog, which) -> {
+					String ticket = pendingForegroundStartTicket;
+					if (ticket == null || !SessionForegroundService.hasReservedStart(this, ticket) ||
+							pendingNotificationPermissionTicket != null) {
+						if (ticket != null && ticket.equals(pendingForegroundStartTicket) &&
+								!SessionForegroundService.hasReservedStart(this, ticket)) {
+							pendingForegroundStartTicket = null;
+						}
+						return;
+					}
+					pendingNotificationPermissionTicket = ticket;
+					PreferenceManager.getDefaultSharedPreferences(this).edit()
+						.putBoolean(PREF_NOTIFICATION_PERMISSION_REQUESTED, true).apply();
+					notificationPermissionLauncher.launch(POST_NOTIFICATIONS_PERMISSION);
+				})
+				.setNegativeButton(R.string.session_permission_continue_without,
+						(dialog, which) -> startForegroundSession())
+				.setNeutralButton(R.string.session_permission_not_now,
+						(dialog, which) -> cancelPendingForegroundSessionRequest())
+				.setOnCancelListener(dialog -> cancelPendingForegroundSessionRequest())
+				.create());
+	}
+
+	/** A permission result is only UI for the exact still-reserved request that launched it. */
+	private void onNotificationPermissionResult(boolean granted) {
+		handleNotificationPermissionResult(pendingNotificationPermissionTicket, granted);
+	}
+
+	private void handleNotificationPermissionResult(String requestTicket, boolean granted) {
+		if (requestTicket == null || !requestTicket.equals(pendingNotificationPermissionTicket)) return;
+		boolean reservationPending = SessionForegroundService.hasReservedStart(this, requestTicket);
+		if (!requestTicket.equals(pendingForegroundStartTicket) || !reservationPending) {
+			if (requestTicket.equals(pendingNotificationPermissionTicket)) {
+				pendingNotificationPermissionTicket = null;
+			}
+			if (requestTicket.equals(pendingForegroundStartTicket) && !reservationPending) {
+				pendingForegroundStartTicket = null;
+			}
+			return;
+		}
+		pendingNotificationPermissionTicket = null;
+		if (isFinishing() || isDestroyed()) {
+			cancelPendingForegroundSessionRequest();
+			return;
+		}
+		if (granted && SessionForegroundService.areSessionNotificationsVisible(this)) {
+			startForegroundSession(requestTicket);
+		} else if (granted) {
+			showNotificationSettingsExplanation(false);
+		} else {
+			showNotificationPermissionDenied();
+		}
+	}
+
+	private void showNotificationPermissionDenied() {
+		showOwnedDialog(new AlertDialog.Builder(this)
+				.setTitle(R.string.session_permission_denied_title)
+				.setMessage(R.string.session_permission_denied_message)
+				.setPositiveButton(R.string.session_permission_continue_without,
+						(dialog, which) -> startForegroundSession())
+				.setNegativeButton(R.string.session_permission_not_now,
+						(dialog, which) -> cancelPendingForegroundSessionRequest())
+				.setNeutralButton(R.string.session_permission_open_settings,
+						(dialog, which) -> openNotificationSettings())
+				.setOnCancelListener(dialog -> cancelPendingForegroundSessionRequest())
+				.create());
+	}
+
+	private void showNotificationSettingsExplanation(boolean permanentDenial) {
+		int message = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+				? R.string.session_permission_older_settings_message
+				: permanentDenial ? R.string.session_permission_settings_message
+				: R.string.session_permission_denied_message;
+		showOwnedDialog(new AlertDialog.Builder(this)
+				.setTitle(permanentDenial ? R.string.session_permission_settings_title : R.string.session_permission_denied_title)
+				.setMessage(message)
+				.setPositiveButton(permanentDenial ? R.string.session_permission_open_settings
+						: R.string.session_permission_continue_without,
+						(dialog, which) -> {
+							if (permanentDenial) openNotificationSettings();
+							else startForegroundSession();
+						})
+				.setNegativeButton(permanentDenial ? R.string.session_permission_continue_without
+						: R.string.session_permission_not_now,
+						(dialog, which) -> {
+							if (permanentDenial) startForegroundSession();
+							else cancelPendingForegroundSessionRequest();
+						})
+				.setNeutralButton(permanentDenial ? R.string.session_permission_not_now
+						: R.string.session_permission_open_settings,
+						(dialog, which) -> {
+							if (!permanentDenial) openNotificationSettings();
+							else cancelPendingForegroundSessionRequest();
+						})
+				.setOnCancelListener(dialog -> cancelPendingForegroundSessionRequest())
+				.create());
+	}
+
+	private void openNotificationSettings() {
+		Intent settings = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+				.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+		try {
+			startActivity(settings);
+		} catch (RuntimeException ignored) {
+			startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+					Uri.fromParts("package", getPackageName(), null)));
+		}
+	}
+
+	private void startForegroundSession() {
+		if (!pendingHostSelectionRequest && pendingForegroundStartTicket == null && SessionForegroundService.hasRetainedSession(this)) {
+			showSessionControls();
+			return;
+		}
+		if (!pendingHostSelectionRequest && pendingForegroundStartTicket == null && SessionForegroundService.hasPendingStart(this)) {
+			showSessionControls();
+			return;
+		}
+		if (pendingForegroundStartTicket == null) {
+			pendingHostSelectionRequest = false;
+			pendingForegroundStartTicket = SessionForegroundService.reserveConnectRequest(this, false);
+		}
+		if (pendingForegroundStartTicket == null) {
+			android.widget.Toast.makeText(this, R.string.session_start_rejected, android.widget.Toast.LENGTH_LONG).show();
+			return;
+		}
+		String ticket = pendingForegroundStartTicket;
+		ForegroundConnectRequestResult result = SessionForegroundService.startReservedConnect(this, ticket);
+		pendingForegroundStartTicket = null;
+		pendingLocalNetworkPermissionTicket = null;
+		pendingHostSelectionRequest = false;
+		if (result != ForegroundConnectRequestResult.ACCEPTED) {
+			SessionForegroundService.cancelReservedConnect(this, ticket);
+			android.widget.Toast.makeText(this, R.string.session_start_rejected, android.widget.Toast.LENGTH_LONG).show();
+		}
+	}
+
+	/** Permission callbacks dispatch only their original reservation; they never create a new request. */
+	private void startForegroundSession(String requiredTicket) {
+		if (requiredTicket == null || !requiredTicket.equals(pendingForegroundStartTicket) ||
+				!SessionForegroundService.hasReservedStart(this, requiredTicket)) return;
+		startForegroundSession();
+	}
+
+	private void cancelPendingForegroundSessionRequest() {
+		String ticket = pendingForegroundStartTicket;
+		pendingForegroundStartTicket = null;
+		pendingNotificationPermissionTicket = null;
+		pendingLocalNetworkPermissionTicket = null;
+		pendingHostSelectionRequest = false;
+		if (ticket != null) SessionForegroundService.cancelReservedConnect(this, ticket);
+	}
+
+	private void disconnectForegroundSessionFromUi() {
+		cancelPendingForegroundSessionRequest();
+		if (!SessionForegroundService.requestDisconnect(this)) {
+			android.widget.Toast.makeText(this, R.string.session_start_rejected, android.widget.Toast.LENGTH_LONG).show();
+		}
+	}
+	@Override
+	protected void onPause() {
+		activityResumed = false;
+		// Permission prompts and in-app dialogs pause the Activity; retain the in-memory draft.
+		suspendInlineTypingInput();
+		if (foregroundRecoveryWindow != null) foregroundRecoveryWindow.close();
+		deactivateControlInputSurface();
+		if (mCoolDragAndDropGridView != null) mCoolDragAndDropGridView.cancelLegacyDragAndDrop();
+		if (shellDialogs.isEmpty()) {
+			actionsEditMode = false;
+			shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
+		}
+		// Navigation/lifecycle/Back never save an editor or layout. Legacy mutations persist at
+		// their explicit Save/Drop/Delete boundary instead; repository editor drafts stay owned there.
+		super.onPause();
+		// Another activity is taking focus (this activity is about to be "paused").
+	}
+	@Override
+	public void onWindowFocusChanged(boolean hasFocus) {
+		super.onWindowFocusChanged(hasFocus);
+		windowFocused = hasFocus;
+		if (hasFocus) updateControlInputSurface();
+		else deactivateControlInputSurface();
+	}
+	@Override
+	protected void onStop() {
+		activityGeneration++;
+		computerLoadGeneration++; // A stopped screen must not publish an older host snapshot.
+		// System continuation prompts can stop this Activity during reconnect. Keep their
+		// in-memory draft only while that exact prompt/picker is pending; normal backgrounding
+		// remains the privacy boundary, and no draft is serialized.
+		boolean continuingConnectionPrompt = (credentialUi != null && credentialUi.hasPicker()) ||
+				pendingNotificationPermissionTicket != null || pendingLocalNetworkPermissionTicket != null;
+		if (continuingConnectionPrompt) suspendInlineTypingInput();
+		else retireInlineTypingInput();
+		deactivateControlInputSurface();
+		unbindSessionService();
+		if (sessionPresenter != null) sessionPresenter.stop(credentialUi != null && credentialUi.hasPicker());
+		super.onStop();
+	}
+	@Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+		if (credentialUi == null || !credentialUi.onActivityResult(requestCode, resultCode, data)) super.onActivityResult(requestCode, resultCode, data);
+	}
+	@Override
+	protected void onDestroy() {
+		activityResumed = false;
+		actionsDataGeneration++;
+		actionSelectionGeneration++;
+		actionsIoWorker.shutdownNow();
+		computerLoadGeneration++;
+		for (AlertDialog dialog : new ArrayList<>(shellDialogs)) dialog.dismiss();
+		deactivateControlInputSurface();
+		cancelPendingForegroundSessionRequest();
+		unbindSessionService();
+		if (sessionPresenter != null) sessionPresenter.destroy();
+		super.onDestroy();
+	}
+
+	public void showConnectionStat(){
+		// Never reuse an Activity's pre-background connected snapshot while the service rebinds.
+		if (sessionBinder != null) sessionSnapshot = sessionBinder.getSnapshot();
+		ConnectionState state = sessionSnapshot == null ? new ConnectionState.Disconnected() : sessionSnapshot.getConnection();
+		ConnectionState.Phase phase = state.getPhase();
+		boolean active = state.isReady() || phase == ConnectionState.Phase.PREPARING_CREDENTIALS ||
+				phase == ConnectionState.Phase.RESOLVING || phase == ConnectionState.Phase.CONNECTING ||
+				phase == ConnectionState.Phase.AWAITING_TRUST || phase == ConnectionState.Phase.AUTHENTICATING ||
+				phase == ConnectionState.Phase.CLOSING || SessionForegroundService.hasPendingStart(this) ||
+				(sessionSnapshot == null && SessionForegroundService.hasRetainedSession(this));
+		String status;
+		switch (phase) {
+			case PREPARING_CREDENTIALS: status = "Preparing credentials"; break;
+			case RESOLVING: status = "Resolving host"; break;
+			case CONNECTING: status = "Connecting"; break;
+			case AWAITING_TRUST: status = "Waiting for host approval"; break;
+			case AUTHENTICATING: status = "Authenticating"; break;
+			case CONNECTED: status = "Connected"; break;
+			case CLOSING: status = "Disconnecting"; break;
+			case ERROR: status = "Connection failed"; break;
+			default: status = "Disconnected"; break;
+		}
+		TextView headerStatus = findViewById(R.id.connection_status);
+		if (headerStatus != null) {
+			headerStatus.setText(getString(R.string.ng_connection_status_display, status));
+			headerStatus.setContentDescription(getString(R.string.ng_status_action, status));
+		}
+		MaterialButton connectionButton = findViewById(R.id.header_connection_button);
+		boolean busy = phase == ConnectionState.Phase.PREPARING_CREDENTIALS ||
+				phase == ConnectionState.Phase.RESOLVING || phase == ConnectionState.Phase.CONNECTING ||
+				phase == ConnectionState.Phase.AWAITING_TRUST || phase == ConnectionState.Phase.AUTHENTICATING ||
+				phase == ConnectionState.Phase.CLOSING || SessionForegroundService.hasPendingStart(this) ||
+				(sessionSnapshot == null && SessionForegroundService.hasRetainedSession(this));
+		if (connectionButton != null) {
+			if (state.isReady()) {
+				connectionButton.setText(R.string.ng_connection_disconnect);
+				connectionButton.setIcon(AppCompatResources.getDrawable(this, R.drawable.ic_ng_unplug));
+				connectionButton.setBackgroundTintList(ColorStateList.valueOf(getColor(R.color.ng_accent_soft)));
+				connectionButton.setTextColor(getColor(R.color.ng_accent));
+				connectionButton.setStrokeWidth(Math.max(1, Math.round(getResources().getDisplayMetrics().density)));
+				connectionButton.setStrokeColor(ColorStateList.valueOf(getColor(R.color.ng_accent)));
+				connectionButton.setIconTint(ColorStateList.valueOf(getColor(R.color.ng_accent)));
+				connectionButton.setEnabled(true);
+				connectionButton.setContentDescription(getString(R.string.ng_connection_status_accessibility,
+						status, getString(R.string.ng_connection_disconnect)));
+			} else if (busy) {
+				connectionButton.setText(phase == ConnectionState.Phase.CLOSING
+						? R.string.ng_connection_disconnecting : R.string.ng_connection_connecting);
+				connectionButton.setIcon(AppCompatResources.getDrawable(this, R.drawable.ic_ng_plug));
+				connectionButton.setBackgroundTintList(ColorStateList.valueOf(getColor(R.color.ng_accent_soft)));
+				connectionButton.setTextColor(getColor(R.color.ng_accent));
+				connectionButton.setStrokeWidth(0);
+				connectionButton.setIconTint(ColorStateList.valueOf(getColor(R.color.ng_accent)));
+				connectionButton.setEnabled(false);
+				connectionButton.setContentDescription(getString(R.string.ng_connection_status_accessibility,
+						status, getString(phase == ConnectionState.Phase.CLOSING
+								? R.string.ng_connection_disconnecting : R.string.ng_connection_connecting)));
+			} else {
+				int actionLabel = phase == ConnectionState.Phase.ERROR
+						? R.string.session_controls_retry : R.string.ng_connection_connect;
+				connectionButton.setText(actionLabel);
+				connectionButton.setIcon(AppCompatResources.getDrawable(this, R.drawable.ic_ng_plug));
+				connectionButton.setBackgroundTintList(ColorStateList.valueOf(getColor(R.color.ng_accent)));
+				connectionButton.setTextColor(getColor(R.color.ng_on_accent));
+				connectionButton.setStrokeWidth(Math.max(1, Math.round(getResources().getDisplayMetrics().density)));
+				connectionButton.setStrokeColor(ColorStateList.valueOf(getColor(R.color.ng_accent)));
+				connectionButton.setIconTint(ColorStateList.valueOf(getColor(R.color.ng_on_accent)));
+				connectionButton.setEnabled(true);
+				connectionButton.setContentDescription(getString(R.string.ng_connection_status_accessibility,
+						status, getString(actionLabel)));
+			}
+		}
+		Button computerConnect = findViewById(R.id.computers_connect);
+		if (computerConnect != null) computerConnect.setText(active ? "Disconnect" : phase == ConnectionState.Phase.ERROR ? "Retry" : "Connect");
+		if (conDiscButton != null) {
+			conDiscButton.setIcon(active ? R.drawable.state_conn : R.drawable.state_disc);
+			String action = active ? "Disconnect" : phase == ConnectionState.Phase.ERROR ? getString(R.string.session_controls_retry) : "Connect";
+			conDiscButton.setTitle(action);
+			conDiscButton.setContentDescription(status + ". " + action);
+		}
+		updateClipboardAction();
+		if (state.getPhase() == ConnectionState.Phase.ERROR && sessionSnapshot != null &&
+				sessionSnapshot.getGeneration() != lastShownErrorGeneration) {
+			lastShownErrorGeneration = sessionSnapshot.getGeneration();
+			Toast.makeText(this, connectionFailureMessage(state.getFailure()), Toast.LENGTH_LONG).show();
+		}
+		updateComposerSendState();
+	}
+
+	private void updateClipboardAction() {
+		if (clipboardSendButton == null) return;
+		SessionInteractions.PresentationToken presentation = sessionPresenter == null
+				? null : sessionPresenter.presentationToken();
+		boolean ready = sessionSnapshot != null && sessionSnapshot.getConnection().isReady() &&
+				commandTransport != null && commandTransport.canSendClipboard(presentation);
+		String title = getString(R.string.clipboard_send_title);
+		clipboardSendButton.setEnabled(ready);
+		clipboardSendButton.setContentDescription(ready ? title : title + ". " +
+				getString(R.string.clipboard_send_connect_first));
+		clipboardSendButton.setTooltipText(getString(R.string.clipboard_send_tooltip));
+	}
+
+	private boolean isClipboardWindowForegroundVisible() {
+		View decor = getWindow().getDecorView();
+		return activityResumed && windowFocused && !isFinishing() && !isDestroyed() &&
+				getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) &&
+				decor.isAttachedToWindow() && decor.isShown() && decor.getWindowVisibility() == View.VISIBLE;
+	}
+
+	private void sendClipboardToLinux() {
+		boolean foreground = isClipboardWindowForegroundVisible();
+		SessionInteractions.PresentationToken presentation = sessionPresenter == null
+				? null : sessionPresenter.presentationToken();
+		boolean ready = foreground && commandTransport != null && commandTransport.canSendClipboard(presentation);
+		PlainTextClipboardSource source = this::readAndroidPrimaryPlainText;
+		ClipboardPreparation preparation = clipboardShareCoordinator.prepareForSend(true, foreground, ready, source);
+		if (preparation instanceof ClipboardPreparation.Ready) {
+			String text = ((ClipboardPreparation.Ready) preparation).getText();
+			if (commandTransport == null || !commandTransport.sendClipboard(text, presentation)) {
+				Toast.makeText(this, R.string.clipboard_send_rejected, Toast.LENGTH_LONG).show();
+			}
+			return;
+		}
+		if (preparation == ClipboardPreparation.NotForeground.INSTANCE ||
+				preparation == ClipboardPreparation.NotTapped.INSTANCE) return;
+		if (preparation == ClipboardPreparation.ConnectFirst.INSTANCE) {
+			Toast.makeText(this, R.string.clipboard_send_connect_first, Toast.LENGTH_LONG).show();
+		} else if (preparation == ClipboardPreparation.Empty.INSTANCE) {
+			Toast.makeText(this, R.string.clipboard_send_empty, Toast.LENGTH_LONG).show();
+		} else if (preparation == ClipboardPreparation.NonText.INSTANCE) {
+			Toast.makeText(this, R.string.clipboard_send_non_text, Toast.LENGTH_LONG).show();
+		} else if (preparation == ClipboardPreparation.TooLarge.INSTANCE) {
+			Toast.makeText(this, R.string.clipboard_send_too_large, Toast.LENGTH_LONG).show();
+		} else if (preparation == ClipboardPreparation.Malformed.INSTANCE) {
+			Toast.makeText(this, R.string.clipboard_send_malformed, Toast.LENGTH_LONG).show();
+		} else if (preparation == ClipboardPreparation.Unavailable.INSTANCE) {
+			Toast.makeText(this, R.string.clipboard_send_unavailable, Toast.LENGTH_LONG).show();
+		}
+	}
+
+	/** Reads only a direct text item; URI/Intent coercion or content loading is deliberately absent. */
+	private ClipboardRead readAndroidPrimaryPlainText() {
+		try {
+			Object service = getSystemService(Context.CLIPBOARD_SERVICE);
+			if (!(service instanceof ClipboardManager)) return ClipboardRead.Unavailable.INSTANCE;
+			ClipboardManager clipboard = (ClipboardManager) service;
+			ClipData clip = clipboard.getPrimaryClip();
+			if (clip == null || clip.getItemCount() == 0) return ClipboardRead.Empty.INSTANCE;
+			ClipDescription description = clip.getDescription();
+			if (clip.getItemCount() != 1 || description == null ||
+					!description.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN)) {
+				return ClipboardRead.NonText.INSTANCE;
+			}
+			CharSequence text = clip.getItemAt(0).getText();
+			return text == null ? ClipboardRead.NonText.INSTANCE : new ClipboardRead.Text(text.toString());
+		} catch (RuntimeException ignored) {
+			return ClipboardRead.Unavailable.INSTANCE;
+		}
+	}
+
+	private String connectionFailureMessage(ConnectionFailure failure) {
+		if (failure instanceof ConnectionFailure.Permission) {
+			return "Local network access was denied or revoked. SSH stopped without treating this as an authentication failure. Allow access in Android settings, then use Retry.";
+		}
+		if (failure instanceof ConnectionFailure.Resolution) {
+			ConnectionFailure.ResolutionReason reason = ((ConnectionFailure.Resolution) failure).getReason();
+			if (reason == ConnectionFailure.ResolutionReason.TIMED_OUT) return "Computer lookup timed out. Check the network or open Manage Hosts to enter its IP address, then retry.";
+			if (reason == ConnectionFailure.ResolutionReason.NOT_FOUND) return "Computer could not be found. Check the hostname and same network, or open Manage Hosts to enter its IP address. The saved profile is unchanged until saved.";
+			return "Computer lookup is unavailable. Check the network or open Manage Hosts to enter its IP address, then retry.";
+		}
+		if (failure instanceof ConnectionFailure.Trust) {
+			ConnectionFailure.TrustReason reason = ((ConnectionFailure.Trust) failure).getReason();
+			if (reason == ConnectionFailure.TrustReason.KEY_MISMATCH) {
+				return "The host key changed. Authentication was blocked; review the host identity before reconnecting.";
+			}
+			if (reason == ConnectionFailure.TrustReason.STORAGE_UNAVAILABLE) return "Saved host trust could not be checked. No credentials were sent.";
+			return "Host identity was not approved. Review the fingerprint and retry.";
+		}
+		if (failure instanceof ConnectionFailure.Authentication) {
+			ConnectionFailure.AuthenticationReason reason = ((ConnectionFailure.Authentication) failure).getReason();
+			if (reason == ConnectionFailure.AuthenticationReason.KEY_UNAVAILABLE) return "Saved credentials are unavailable. Re-enter credentials and retry.";
+			if (reason == ConnectionFailure.AuthenticationReason.INVALID_PASSPHRASE) return "The key passphrase was not accepted. Check it and retry.";
+			if (reason == ConnectionFailure.AuthenticationReason.TIMED_OUT) return "Credential entry timed out. Retry when ready.";
+			if (reason == ConnectionFailure.AuthenticationReason.UNSUPPORTED_KEY) return "This private-key format is not supported.";
+			return "Authentication was not accepted. Check the selected credentials and retry.";
+		}
+		if (failure instanceof ConnectionFailure.Transport) {
+			ConnectionFailure.TransportReason reason = ((ConnectionFailure.Transport) failure).getReason();
+			if (reason == ConnectionFailure.TransportReason.CONNECTION_REFUSED) return "The computer refused the SSH connection. Check that SSH is running and retry.";
+			if (reason == ConnectionFailure.TransportReason.UNREACHABLE) return "The computer is unreachable. Check the network and retry.";
+			if (reason == ConnectionFailure.TransportReason.TIMED_OUT) return "The SSH connection timed out. Check the network and retry.";
+			if (reason == ConnectionFailure.TransportReason.CLEANUP_UNCONFIRMED) return "The previous SSH session could not be safely closed. Reconnect is blocked.";
+			return "The SSH session failed. Check the network and retry.";
+		}
+		return "Connection failed. Check the host settings and retry.";
+	}
+
+	public void initDoTool() {
+		doTool = createDoTool(commandTransport);
+	}
+
+	private IDoTool createDoTool(CommandTransport transport) {
+		switch (setting_dotool_initial) {
+			case "ydotool": return new YDoTool(transport);
+			case "xdotool": return new XDoTool(transport);
+			default:
+				Log.w(TAG, "unknown_command_backend");
+				return new XDoTool(transport);
+		}
+	}
+
+	@Override
+	public boolean onKeyDown(int keyCode, KeyEvent event) {
+		switch(keyCode){
+	 	/*case KeyEvent.KEYCODE_MENU:
+	   case KeyEvent.KEYCODE_SEARCH:
+	   case KeyEvent.KEYCODE_BACK:*/
+			case KeyEvent.KEYCODE_VOLUME_UP:
+				captureVolumeGesture(keyCode, event);
+				event.startTracking();
+				return true;
+			case KeyEvent.KEYCODE_VOLUME_DOWN:
+				captureVolumeGesture(keyCode, event);
+				event.startTracking();
+				return true;
+		}
+		return super.onKeyDown(keyCode, event);
+	}
+	@Override
+	public boolean onKeyUp(int keyCode, KeyEvent event) {
+		switch(keyCode){
+       /*case KeyEvent.KEYCODE_MENU:
+       case KeyEvent.KEYCODE_SEARCH:*/
+			case KeyEvent.KEYCODE_VOLUME_UP:
+				InputGestureToken volumeUp = volumeInputGestures.remove(keyCode);
+				if(event.isTracking() && !event.isCanceled() && isInputTokenActive(volumeUp)){
+					//Toast.makeText(this, "Volumen Up released", Toast.LENGTH_SHORT).show();
+					createDoToolForInput(volumeUp).key("XF86AudioRaiseVolume");
+
+				}
+				if (volumeUp != null && commandTransport != null) commandTransport.finishInputGesture(volumeUp);
+				return true;
+			case KeyEvent.KEYCODE_VOLUME_DOWN:
+				InputGestureToken volumeDown = volumeInputGestures.remove(keyCode);
+				if(event.isTracking() && !event.isCanceled() && isInputTokenActive(volumeDown)){
+					//Toast.makeText(this, "Volumen Down released", Toast.LENGTH_SHORT).show();case
+					createDoToolForInput(volumeDown).key("XF86AudioLowerVolume");
+				}
+				if (volumeDown != null && commandTransport != null) commandTransport.finishInputGesture(volumeDown);
+				return true;
+
+		}
+		return super.onKeyUp(keyCode, event);
+	}
+
+	private void captureVolumeGesture(int keyCode, KeyEvent event) {
+		if (event.getRepeatCount() != 0) return;
+		InputGestureToken old = volumeInputGestures.remove(keyCode);
+		if (old != null && commandTransport != null) commandTransport.cancelInputGesture(old);
+		InputGestureToken gesture = beginControlInputGesture();
+		if (gesture != null) volumeInputGestures.put(keyCode, gesture);
+	}
+
+	public void confirmLayoutReload(String title, String msg, final boolean def, final String profileId){
+		AlertDialog.Builder builder = new AlertDialog.Builder(this);
+
+		builder.setTitle(title);
+		builder.setMessage(msg);
+		builder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
+			@Override
+			public void onClick(DialogInterface dialog, int which) {
+				if (!isRepositoryLayoutActive()) {
+					Toast.makeText(MainActivity.this, R.string.ng_actions_layout_unavailable, Toast.LENGTH_LONG).show();
+					return;
+				}
+				List<LayoutButton> defaults = null;
+				if (def) {
+					defaults = new ArrayList<>();
+					for (CustomKeyboardButton button : loadDefaultKeyboardLayout(MainActivity.this)) {
+						defaults.add(new LayoutButton(UUID.randomUUID().toString(), button.getmTitle(), button.getmCommand(),
+								button.getmSpans(), button.getmColor()));
+					}
+				}
+				selectActionProfile(profileId, defaults);
+
+			}
+		});
+		builder.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+			@Override
+			public void onClick(DialogInterface dialog, int which) {
+				dialog.dismiss();
+			}
+		});
+		AlertDialog dialog = builder.create();
+		showOwnedDialog(dialog);
+	}
+	public void confirmSaveLayout(String title, String msg, final boolean def, final String presetProfileId){
+		if (!isRepositoryLayoutActive() && legacyLayoutFallbackReadOnly) {
+			Toast.makeText(this, "Legacy layouts are read-only while migration recovery is needed.", Toast.LENGTH_LONG).show();
+			return;
+		}
+		AlertDialog.Builder builder = new AlertDialog.Builder(this);
+
+		builder.setTitle(title);
+		builder.setMessage(msg);
+		builder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
+			@Override
+			public void onClick(DialogInterface dialog, int which) {
+				if (isRepositoryLayoutActive()) {
+					saveRepositoryLayoutAs(presetProfileId);
+				} else {
+					saveKeyboardLayout();
+				}
+
+			}
+		});
+		builder.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+			@Override
+			public void onClick(DialogInterface dialog, int which) {
+				dialog.dismiss();
+			}
+		});
+		AlertDialog dialog = builder.create();
+		showOwnedDialog(dialog);
+	}
+	@Override
+
+	public boolean onPrepareOptionsMenu(Menu menu) {
+		if(conDiscButton!=null) {
+			conDiscButton.setChecked(setting_keyboard_locked);
+		}
+		if(KeyLockButton!=null) {
+			KeyLockButton.setChecked(setting_keyboard_locked);
+		}
+		if(InvScrollButton!=null){
+			InvScrollButton.setChecked(setting_invert_scroll);
+		}
+		updateClipboardAction();
+		//Log.d("prepMenu","menu prepared");
+		return true;
+	}
+
+	@Override public boolean onMenuOpened(int featureId, Menu menu) {
+		if (shellNavigation != null) shellNavigation.open(ShellNavigation.Overlay.MENU);
+		return super.onMenuOpened(featureId, menu);
+	}
+	@Override public void onPanelClosed(int featureId, Menu menu) {
+		super.onPanelClosed(featureId, menu);
+		if (shellNavigation != null) shellNavigation.close(ShellNavigation.Overlay.MENU);
+	}
+	@Override
+	public boolean onOptionsItemSelected(MenuItem item) {
+		shellNavigation.close(ShellNavigation.Overlay.MENU);
+
+		int id = item.getItemId();
+		if (id == R.id.action_settings) {
+			openSettings();
+			return true;
+		} else if (id == R.id.action_load_preset_one || id == R.id.action_load_preset_two || id == R.id.action_load_preset_three) {
+			int preset = id == R.id.action_load_preset_one ? 1 : id == R.id.action_load_preset_two ? 2 : 3;
+			KEYLOAYOUTFILENAME = preset == 1 ? "keyFileOne.csv" : preset == 2 ? "keyFileTwo.csv" : "keyFileThree.csv";
+			confirmLayoutReload("Load Keyboard Layout " + preset, "Any unsaved buttons will be lost", false,
+					preset == 1 ? LegacyLayoutProfileMigrator.PRESET_ONE_PROFILE_ID : preset == 2
+							? LegacyLayoutProfileMigrator.PRESET_TWO_PROFILE_ID : LegacyLayoutProfileMigrator.PRESET_THREE_PROFILE_ID);
+			return true;
+		} else if (id == R.id.action_session_controls) {
+			showSessionControls();
+			return true;
+		} else if (id == R.id.action_conn_disc) {
+			if (hasActiveOrPendingSession()) disconnectForegroundSessionFromUi();
+			else requestForegroundSessionFromUi();
+			return true;
+		} else if (id == R.id.action_restore_default_keys) {
+			KEYLOAYOUTFILENAME = "keyLayoutFile.csv";
+			confirmLayoutReload("Restore default Keyboard?","Any unsaved buttons will be lost",true,
+					LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID);
+		} else if (id == R.id.action_save_preset_one) {
+			KEYLOAYOUTFILENAME = "keyFileOne.csv";
+			confirmSaveLayout("Save as Keyboard Layout 1", "Any previous layout data will be overwritten", false,
+					LegacyLayoutProfileMigrator.PRESET_ONE_PROFILE_ID);
+		} else if (id == R.id.action_save_preset_two) {
+			KEYLOAYOUTFILENAME = "keyFileTwo.csv";
+			confirmSaveLayout("Save as Keyboard Layout 2", "Any previous layout data will be overwritten", false,
+					LegacyLayoutProfileMigrator.PRESET_TWO_PROFILE_ID);
+		} else if (id == R.id.action_save_preset_three) {
+			KEYLOAYOUTFILENAME = "keyFileThree.csv";
+			confirmSaveLayout("Save as Keyboard Layout 3", "Any previous layout data will be overwritten", false,
+					LegacyLayoutProfileMigrator.PRESET_THREE_PROFILE_ID);
+		} else if (id == R.id.action_lock_keys) {
+			setting_keyboard_locked=!setting_keyboard_locked;
+			item.setChecked(setting_keyboard_locked);
+			SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+			SharedPreferences.Editor editor = prefs.edit();
+			editor.putBoolean("keyboard_layout_locked", setting_keyboard_locked);
+			editor.commit();
+		} else if (id == R.id.action_invert_scroll) {
+			setting_invert_scroll=!setting_invert_scroll;
+			item.setChecked(setting_invert_scroll);
+			SharedPreferences prefs2 = PreferenceManager.getDefaultSharedPreferences(this);
+			SharedPreferences.Editor editor2 = prefs2.edit();
+			editor2.putBoolean("mouse_invert_scroll", setting_invert_scroll);
+			editor2.commit();
+		} else if (id == R.id.action_edit_layout) {
+			openLayoutEditor();
+		} else if (id == R.id.action_manage_layouts) {
+			openLayoutProfileManager();
+			return true;
+		} else if (id == R.id.action_exit) {
+			// Exit is an explicit session dismissal, unlike ordinary Activity pause/destruction.
+			disconnectForegroundSessionFromUi();
+			this.finish();
+			return true;
+		}
+		return super.onOptionsItemSelected(item);
+	}
+
+	private boolean hasActiveOrPendingSession() {
+		if (pendingForegroundStartTicket != null || SessionForegroundService.hasPendingStart(this)) return true;
+		if (sessionSnapshot == null) return SessionForegroundService.hasRetainedSession(this);
+		ConnectionState.Phase phase = sessionSnapshot.getConnection().getPhase();
+		return phase == ConnectionState.Phase.PREPARING_CREDENTIALS || phase == ConnectionState.Phase.RESOLVING ||
+				phase == ConnectionState.Phase.CONNECTING || phase == ConnectionState.Phase.AWAITING_TRUST ||
+				phase == ConnectionState.Phase.AUTHENTICATING || phase == ConnectionState.Phase.CONNECTED ||
+				phase == ConnectionState.Phase.CLOSING;
+	}
+
+	private void requestForegroundSessionForSelectedHost() {
+		cancelPendingForegroundSessionRequest();
+		pendingHostSelectionRequest = true;
+		pendingForegroundStartTicket = SessionForegroundService.reserveConnectRequest(this, false);
+		if (pendingForegroundStartTicket == null) {
+			pendingHostSelectionRequest = false;
+			android.widget.Toast.makeText(this, R.string.session_start_rejected, android.widget.Toast.LENGTH_LONG).show();
+			return;
+		}
+		continueForegroundSessionRequest();
+	}
+	public void showNoticeDialog(Context mCont) {
+		// Create an instance of the dialog fragment and show it
+		myDialogFragment dialog = new myDialogFragment();
+		dialog.setmCont(mCont);
+		dialog.setText(getKeyboardTextValue());
+
+		dialog.show(fm, "NoticeDialogFragment");
+	}
+	public boolean onNavigationItemSelected(MenuItem item) {
+		// Compatibility bridge for existing callers; primary UI routes are native shell controls.
+		int id = item.getItemId();
+		int group = item.getGroupId();
+		//Toast.makeText(getBaseContext(),String.valueOf(id),Toast.LENGTH_LONG).show();
+		switch(group) {
+			case 1: //hosts
+
+				if(id==999999999){
+					//manage sripts ID
+
+					openLegacyManager(0);
+
+				}else {
+					selectHostAndConnect(id);
+				}
+
+				break;
+			case 3: //keyboard layout files group
+					switch (id) {
+
+					case 61:
+						KEYLOAYOUTFILENAME = "keyFileOne.csv";
+						confirmLayoutReload("Load Keyboard Layout 1", "Any unsaved buttons will be lost", false,
+								LegacyLayoutProfileMigrator.PRESET_ONE_PROFILE_ID);
+						break;
+					case 62:
+						KEYLOAYOUTFILENAME = "keyFileTwo.csv";
+						confirmLayoutReload("Load Keyboard Layout 2", "Any unsaved buttons will be lost", false,
+								LegacyLayoutProfileMigrator.PRESET_TWO_PROFILE_ID);
+						break;
+					case 63:
+						KEYLOAYOUTFILENAME = "keyFileThree.csv";
+						confirmLayoutReload("Load Keyboard Layout 3", "Any unsaved buttons will be lost", false,
+								LegacyLayoutProfileMigrator.PRESET_THREE_PROFILE_ID);
+						break;
+					case 64:
+						xMouseNewCustomButton(null);
+						break;
+					default:
+						break;
+				}
+				break;
+
+			case 5: //scripts;
+
+				if(id==19999999){
+					//manage sripts ID
+
+					openScriptManager(null);
+
+				}else {
+
+					ArrayList<ArrayList<String>> script = db.getRowWithId(DatabaseHandler.SCRIPT_TABLE_NAME,
+							new String[]{"Alias", "Script", "id"}, String.valueOf(id));
+
+					if (script.size() > 0) {
+						String cmd = script.get(0).get(1);
+						SessionInteractions.PresentationToken presentation = sessionPresenter == null
+								? null : sessionPresenter.presentationToken();
+						if (commandTransport == null || !commandTransport.executeExecCommand(cmd, presentation)) {
+							Toast.makeText(this, "Connect to a computer before running a script.", Toast.LENGTH_LONG).show();
+						}
+					} else {
+
+						Toast.makeText(getBaseContext(), "Error finding Script command with id=" + id, Toast.LENGTH_LONG).show();
+					}
+				}
+				break;
+			default:
+				break;
+		}
+
+		return true;
+	}
+
+	public void selectHostAndConnect(int id) {
+		final long activityToken = activityGeneration;
+		final long selectionToken = ++hostSelectionGeneration;
+		computerLoadGeneration++; // Revoke metadata queued before this explicit selection.
+		if (promptInteractions != null) promptInteractions.invalidate();
+		final net.droopia.xmouse_ng.secrets.CredentialRepository repository = AndroidCredentials.get(getApplicationContext());
+		repository.execute(() -> {
+			try {
+				repository.selectHost(id);
+				mainHandler.post(() -> {
+					if (activityToken != activityGeneration || selectionToken != hostSelectionGeneration ||
+							isFinishing() || isDestroyed() || !getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return;
+					getPreferences();
+					loadComputerMetadata();
+					requestForegroundSessionForSelectedHost();
+				});
+			} catch (Exception ignored) {
+				mainHandler.post(() -> {
+					if (activityToken == activityGeneration && selectionToken == hostSelectionGeneration &&
+							!isFinishing() && !isDestroyed()) {
+						Toast.makeText(this, "Host selection could not be saved. Existing credentials were kept.", Toast.LENGTH_LONG).show();
+					}
+				});
+			}
+		});
+	}
+
+
+	@SuppressLint("RestrictedApi")
+	@Override
+	public boolean onItemLongClick(AdapterView<?> arg0, View arg1, int arg2, long arg3) {
+		if (selectedActionPreset != null) return false;
+		if(!MainActivity.setting_keyboard_locked){
+			shellNavigation.open(ShellNavigation.Overlay.ACTION_EDIT);
+			mCoolDragAndDropGridView.startDragAndDrop();
+			EditKeyboardButtonsLayout.setVisibility(View.VISIBLE);
+			ETLayout.setVisibility(View.GONE);
+		}
+		return false;
+	}
+
+	@Override
+	public void onItemClick(AdapterView<?> arg0, View arg1, int arg2, long arg3) {
+
+	}
+
+	@Override
+	public void onDragItem(int from) {
+
+	}
+
+	@Override
+	public void onDraggingItem(int from, int to) {
+
+	}
+
+	@SuppressLint("RestrictedApi")
+	@Override
+	public void onDropItem(int from, int to) {
+		if (selectedActionPreset != null) return;
+		if (from != to) {
+
+			mItems.add(to, mItems.remove(from));
+			mItemAdapter.notifyDataSetChanged();
+			saveKeyboardLayout();
+		}
+
+		potentialDeletePosition = to;
+		startPosition = from;
+		EditKeyboardButtonsLayout.setVisibility(View.GONE);
+		ETLayout.setVisibility(View.VISIBLE);
+		shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
+	}
+
+	@Override public void onDragCancelled() {
+		if (mItemAdapter != null) mItemAdapter.notifyDataSetChanged();
+		if (EditKeyboardButtonsLayout != null) EditKeyboardButtonsLayout.setVisibility(View.GONE);
+		if (shellNavigation != null) shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
+	}
+
+	@Override
+	public boolean isDragAndDropEnabled(int position) {
+		return selectedActionPreset == null && actionsEditMode;
+	}
+	@Override
+	public void onEditItem(int mDragPosition) {
+		if (selectedActionPreset != null) return;
+		//Log.d("onDeleteItem", ""+mDragPosition);
+		//mItems.remove(mDragPosition);
+		//mItemAdapter.notifyDataSetChanged();
+
+		onDropItem(potentialDeletePosition,startPosition);
+		//Toast.makeText(getBaseContext(),"Edit item "+potentialDeletePosition,Toast.LENGTH_LONG).show();
+		xMouseNewCustomButton(potentialDeletePosition);
+
+	}
+	@Override
+	public void onDeleteItem(int mDragPosition) {
+		if (selectedActionPreset != null) return;
+		//Log.d("onDeleteItem", ""+mDragPosition);
+
+		try {
+			mItems.remove(potentialDeletePosition);
+			mItemAdapter.notifyDataSetChanged();
+			saveKeyboardLayout();
+		}catch (Exception ignored){
+			Log.w(TAG, "layout_button_delete_failed");
+			Toast.makeText(getBaseContext(),"Error during delete",Toast.LENGTH_LONG).show();
+			mItemAdapter.notifyDataSetChanged();
+		}
+		Toast.makeText(getBaseContext(),"Remove item "+potentialDeletePosition,Toast.LENGTH_LONG).show();
+	}
+	private static LayoutProfileActivation activateLayoutProfiles(File filesDirectory,
+			LayoutProfileRepository repository, LayoutProfileRuntime runtime, boolean hasUserData,
+			List<LayoutButton> legacyDefaults) {
+		try {
+			boolean hasLegacySource = false;
+			for (String source : new String[]{"keyLayoutFile.csv", "keyFileOne.csv", "keyFileTwo.csv", "keyFileThree.csv"}) {
+				if (new File(filesDirectory, source).exists()) {
+					hasLegacySource = true;
+					break;
+				}
+			}
+			FreshActionsProfileInitializer.INSTANCE.initializeIfFresh(
+					repository, hasLegacySource, hasUserData);
+			FreshActionsProfileInitializer.INSTANCE.preserveLegacyDefaultsIfNeeded(
+					repository, hasLegacySource, hasUserData, legacyDefaults);
+			return runtime.activate();
+		} catch (Exception ignored) {
+			Log.w(TAG, "layout_profile_activation_failed");
+			return new LayoutProfileActivation(null,
+					"Layout profiles could not be activated. Check retained layout files and storage, then restart; legacy layouts remain available read-only.");
+		}
+	}
+
+	private boolean isRepositoryLayoutActive() {
+		return layoutProfileRuntime != null && layoutProfileRuntime.isRepositoryActive();
+	}
+
+	private void openLayoutEditor() {
+		if (selectedActionPreset != null) {
+			Toast.makeText(this, R.string.ng_actions_read_only_hint, Toast.LENGTH_LONG).show();
+			return;
+		}
+		if (!isRepositoryLayoutActive() || selectedActionProfile == null) {
+			Toast.makeText(this, "The layout editor is unavailable until saved profiles are safely activated.",
+					Toast.LENGTH_LONG).show();
+			return;
+		}
+		finishActionsEditMode();
+		returningFromLayoutEditor = true;
+		try { openExternalScreen(new Intent(this, LayoutEditorActivity.class)
+				.putExtra(LayoutEditorActivity.EXTRA_PROFILE_ID, selectedActionProfile.getId())); }
+		catch (RuntimeException ignored) {
+			returningFromLayoutEditor = false;
+			Toast.makeText(this, "The selected layout could not be opened.", Toast.LENGTH_LONG).show();
+		}
+	}
+
+	private void openLayoutProfileManager() {
+		if (!isRepositoryLayoutActive() || layoutProfileRepository == null) {
+			Toast.makeText(this, "Named layouts are unavailable until saved profiles are safely activated.",
+					Toast.LENGTH_LONG).show();
+			return;
+		}
+		try {
+			finishActionsEditMode();
+			returningFromLayoutManager = true;
+			openExternalScreen(new Intent(this, LayoutProfileManagerActivity.class));
+		} catch (Exception ignored) {
+			returningFromLayoutManager = false;
+			Toast.makeText(this, "The layout manager could not be opened.", Toast.LENGTH_LONG).show();
+		}
+	}
+
+	private void finishActionsEditMode() {
+		if (!actionsEditMode) return;
+		actionsEditMode = false;
+		if (shellNavigation != null) {
+			if (shellDialogs.isEmpty()) shellNavigation.close(ShellNavigation.Overlay.ACTION_EDIT);
+			else renderShell();
+		}
+	}
+
+	private void showActionLayoutPicker() {
+		if (actionsLoading || actionProfileSelectionPending) {
+			Toast.makeText(this, R.string.ng_actions_loading, Toast.LENGTH_SHORT).show();
+			return;
+		}
+		List<LayoutProfile> choices = new ArrayList<>(actionProfiles);
+		AlertDialog dialog = ActionsViewRenderer.profilePicker(this, ActionPresetCatalog.presets(), choices,
+				selectedActionPreset == null ? selectedActionProfile : null,
+				selectedActionPreset == null ? null : selectedActionPreset.id(), choice -> {
+					if (choice.isPreset()) selectActionPreset(choice.presetId());
+					else selectActionProfile(choice.profileId());
+				}, this::openLayoutProfileManager);
+		showOwnedDialog(dialog);
+	}
+
+	private void selectActionPreset(String presetId) {
+		if (actionsLoading || actionProfileSelectionPending) return;
+		ActionPresetCatalog.Preset preset = ActionPresetCatalog.find(presetId);
+		if (preset == null) return;
+		if (selectedActionPreset != null && selectedActionPreset.id().equals(preset.id())) return;
+		++actionSelectionGeneration;
+		shellNavigation.replaceContent(() -> {
+			installSelectedActionPreset(preset);
+			actionsEditMode = false;
+		});
+	}
+
+	private void installSelectedActionPreset(ActionPresetCatalog.Preset preset) {
+		selectedActionPreset = preset;
+		LayoutProfile virtualProfile = preset.toLayoutProfile(themeColorHex(R.color.ng_surface_soft),
+				themeColorHex(R.color.ng_danger_soft));
+		installSelectedActionProfile(virtualProfile);
+	}
+
+	private String themeColorHex(int colorId) {
+		return String.format(java.util.Locale.ROOT, "#%06X", 0xFFFFFF & getColor(colorId));
+	}
+
+	private void selectActionProfile(String profileId) {
+		selectActionProfile(profileId, null);
+	}
+
+	private void selectActionProfile(String profileId, List<LayoutButton> replacement) {
+		if (!isRepositoryLayoutActive() || layoutProfileRuntime == null || profileId == null) return;
+		if (actionsLoading || actionProfileSelectionPending) return;
+		if (replacement == null && selectedActionPreset == null && selectedActionProfile != null &&
+				profileId.equals(selectedActionProfile.getId())) return;
+		final long generation = ++actionSelectionGeneration;
+		final long dataGeneration = ++actionsDataGeneration;
+		shellNavigation.replaceContent(() -> {
+			selectedActionPreset = null;
+			selectedActionProfile = null;
+			actionsEditMode = false;
+			actionProfileSelectionPending = true;
+			actionsLoading = true;
+		});
+		final WeakReference<MainActivity> owner = new WeakReference<>(this);
+		final LayoutProfileRuntime runtime = layoutProfileRuntime;
+		final LayoutProfileRepository repository = layoutProfileRepository;
+		final Handler handler = new Handler(Looper.getMainLooper());
+		try {
+			actionsIoWorker.execute(() -> {
+				LayoutProfile selected = null;
+				List<LayoutProfile> profiles = new ArrayList<>();
+				boolean failed = false;
+				try {
+					if (replacement != null) runtime.saveProfileAs(profileId, "Active layout", replacement);
+					selected = runtime.selectProfile(profileId);
+					profiles = repository.listProfiles();
+				} catch (Exception ignored) { failed = true; }
+				final LayoutProfile result = selected;
+				final List<LayoutProfile> resultProfiles = profiles;
+				final boolean resultFailed = failed;
+				handler.post(() -> {
+					MainActivity activity = owner.get();
+					if (activity == null || activity.isFinishing() || activity.isDestroyed() ||
+							generation != activity.actionSelectionGeneration ||
+							dataGeneration != activity.actionsDataGeneration) return;
+					activity.shellNavigation.replaceContent(() -> {
+						if (result != null) {
+							if (!resultFailed) activity.actionProfiles = new ArrayList<>(resultProfiles);
+							activity.installSelectedActionProfile(result);
+						}
+						activity.actionProfileSelectionPending = false;
+						activity.actionsLoading = false;
+					});
+					if (resultFailed || result == null) {
+						Toast.makeText(activity, R.string.ng_actions_layout_changed, Toast.LENGTH_LONG).show();
+					}
+				});
+			});
+		} catch (RuntimeException ignored) {
+			shellNavigation.replaceContent(() -> { actionProfileSelectionPending = false; actionsLoading = false; });
+			Toast.makeText(this, R.string.ng_actions_layout_changed, Toast.LENGTH_LONG).show();
+		}
+	}
+
+	private void installSelectedActionProfile(LayoutProfile profile) {
+		selectedActionProfile = profile;
+		mItems = customButtonsFromProfile(profile);
+		if (mCoolDragAndDropGridView != null) {
+			mItemAdapter = new CustomKeyboardButtonAdapter(this, mItems);
+			mCoolDragAndDropGridView.setAdapter(mItemAdapter);
+			mItemAdapter.notifyDataSetChanged();
+		}
+	}
+
+	private void requestActionsData() {
+		final long generation = ++actionsDataGeneration;
+		final WeakReference<MainActivity> owner = new WeakReference<>(this);
+		final LayoutProfileRepository repository = layoutProfileRepository;
+		final LayoutProfileRuntime runtime = layoutProfileRuntime;
+		final File filesDirectory = getFilesDir();
+		final boolean hasUserData = databaseExistedAtLaunch || preferencesExistedAtLaunch;
+		final List<LayoutButton> legacyDefaults = new ArrayList<>();
+		int defaultIndex = 0;
+		for (CustomKeyboardButton button : loadDefaultKeyboardLayout(this)) {
+			legacyDefaults.add(new LayoutButton("legacy-default-" + (++defaultIndex), button.getmTitle(),
+					button.getmCommand(), button.getmSpans(), button.getmColor()));
+		}
+		final Context applicationContext = getApplicationContext();
+		final Handler handler = new Handler(Looper.getMainLooper());
+		shellNavigation.replaceContent(() -> {
+			actionProfileSelectionPending = false;
+			actionsLoading = true;
+			actionsLoadFailed = false;
+			scriptsLoading = true;
+			scriptsLoadFailed = false;
+		});
+		try {
+			actionsIoWorker.execute(() -> {
+				List<LayoutProfile> profiles = new ArrayList<>();
+				LayoutProfile selected = null;
+				String profileError = null;
+				try {
+					if (!runtime.isRepositoryActive()) {
+						LayoutProfileActivation activation = activateLayoutProfiles(filesDirectory, repository, runtime, hasUserData, legacyDefaults);
+						profileError = activation.getWarning();
+					}
+					if (runtime.isRepositoryActive()) {
+						profiles = repository.listProfiles();
+						selected = runtime.loadSelectedProfile();
+						if (selected == null) profileError = applicationContext.getString(R.string.ng_actions_layout_failed);
+					}
+				} catch (Exception ignored) {
+					profileError = applicationContext.getString(R.string.ng_actions_layout_failed);
+				}
+				List<SavedActionScript> scripts = new ArrayList<>();
+				boolean scriptFailure = false;
+				try { scripts = new SavedActionScriptRepository(applicationContext).listScripts(); }
+				catch (Exception ignored) { scriptFailure = true; }
+				ActionsSnapshot snapshot = new ActionsSnapshot(profiles, selected, scripts,
+						profileError, scriptFailure);
+				handler.post(() -> {
+					MainActivity activity = owner.get();
+					if (activity == null || activity.isFinishing() || activity.isDestroyed() ||
+							generation != activity.actionsDataGeneration) return;
+					activity.shellNavigation.replaceContent(() -> {
+						activity.actionProfiles = new ArrayList<>(snapshot.profiles);
+						activity.savedActionScripts = new ArrayList<>(snapshot.scripts);
+						activity.actionsLoading = false;
+						activity.actionsLoadFailed = snapshot.profileError != null;
+						activity.legacyLayoutFallbackReadOnly = !runtime.isRepositoryActive();
+						activity.scriptsLoading = false;
+						activity.scriptsLoadFailed = snapshot.scriptsFailed;
+						if (activity.selectedActionPreset != null) {
+							activity.installSelectedActionPreset(activity.selectedActionPreset);
+						} else if (snapshot.selectedProfile != null) {
+							activity.installSelectedActionProfile(snapshot.selectedProfile);
+						}
+					});
+					if (snapshot.profileError != null) Toast.makeText(activity, snapshot.profileError, Toast.LENGTH_LONG).show();
+				});
+			});
+		} catch (RuntimeException ignored) {
+			shellNavigation.replaceContent(() -> {
+				actionsLoading = false; actionsLoadFailed = true;
+				scriptsLoading = false; scriptsLoadFailed = true;
+			});
+		}
+	}
+
+	private void renderActions() {
+		if (shellRoot == null) return;
+		LinearLayout tiles = findViewById(R.id.actions_tiles);
+		Button picker = findViewById(R.id.actions_layout_picker);
+		Button edit = findViewById(R.id.actions_edit);
+		if (tiles == null || picker == null || edit == null) return;
+		boolean visible = shellNavigation.destination() == ShellNavigation.Destination.ACTIONS &&
+				shellNavigation.topOverlay() != ShellNavigation.Overlay.COMPUTERS;
+		if (!visible) return;
+		List<?> renderKey = java.util.Arrays.asList(selectedActionProfile,
+				selectedActionPreset == null ? null : selectedActionPreset.id(), actionsEditMode,
+				actionsLoading, actionsLoadFailed, actionProfileSelectionPending, isRepositoryLayoutActive());
+		if (!actionsRenderCache.shouldRender(visible, renderKey)) return;
+		boolean canEditProfile = isRepositoryLayoutActive() && selectedActionProfile != null &&
+				selectedActionPreset == null && !actionsLoading && !actionProfileSelectionPending;
+		boolean canChooseLayout = !actionsLoading && !actionProfileSelectionPending;
+		ActionsViewRenderer.renderProfileControls(shellRoot, selectedActionProfile, actionsEditMode,
+				canEditProfile, canChooseLayout, selectedActionPreset != null);
+		int emptyMessage = actionsLoading ? R.string.ng_actions_loading :
+				actionsLoadFailed ? R.string.ng_actions_layout_failed : R.string.ng_actions_layout_unavailable;
+		ActionsViewRenderer.ActionListener actionListener = (tile, button) -> {
+					tile.setOnClickListener(view -> {
+						if (actionsEditMode) {
+							openActionEditor(button.getId());
+							return;
+						}
+						dispatchActionTile(view, button);
+					});
+					tile.setEnabled(!actionsLoading);
+					if (!actionsEditMode && !actionsLoading) installInputButtonCapture(tile, ShellNavigation.InputRole.ACTIONS);
+				};
+		if (selectedActionPreset != null) {
+			ActionsViewRenderer.renderPreset(this, tiles, selectedActionPreset, selectedActionProfile, actionListener);
+		} else {
+			ActionsViewRenderer.renderTiles(this, tiles, selectedActionProfile, actionsEditMode, emptyMessage, actionListener);
+		}
+	}
+
+	private void renderScripts() {
+		if (shellRoot == null) return;
+		LinearLayout scripts = findViewById(R.id.scripts_list);
+		if (scripts == null) return;
+		boolean visible = shellNavigation.destination() == ShellNavigation.Destination.SCRIPTS &&
+				shellNavigation.topOverlay() != ShellNavigation.Overlay.COMPUTERS;
+		if (!visible) return;
+		List<?> renderKey = java.util.Arrays.asList(new ArrayList<>(savedActionScripts), scriptsLoading,
+				scriptsLoadFailed, actionsLoading);
+		if (!scriptsRenderCache.shouldRender(visible, renderKey)) return;
+		ActionsViewRenderer.renderScripts(this, scripts, savedActionScripts, scriptsLoading, scriptsLoadFailed,
+				actionsLoading, new ActionsViewRenderer.ScriptListener() {
+					@Override public void onRun(View view, SavedActionScript script) {
+						if (view.isShown() && view.isAttachedToWindow() && savedActionScripts.contains(script))
+							runSavedScriptAsync(script.getId());
+					}
+					@Override public void onEdit(View view, SavedActionScript script) { openScriptManager(script.getId()); }
+				});
+	}
+
+	private void dispatchActionTile(View tile, LayoutButton button) {
+		if (actionsEditMode || actionsLoading || !tile.isShown() || !tile.isAttachedToWindow() ||
+				selectedActionProfile == null || !selectedActionProfile.getButtons().contains(button)) return;
+		InputGestureToken gesture = takeButtonActivationGesture(tile);
+		Object token = gesture != null ? gesture :
+				(canUseActiveSurfaceForButtonClick(tile) ? activeActionInputToken() : null);
+		try {
+			if (!isInputTokenActive(token)) return;
+			IDoTool inputTool = createDoToolForInput(token);
+			CommandTransport inputTransport = commandTransportForInput(token);
+			if (inputTool != null && inputTransport != null) {
+				CustomCommandDispatcher.execCommand(button.getCommand(), inputTool, inputTransport);
+			}
+		} catch (RuntimeException ignored) {
+			Toast.makeText(this, R.string.ng_action_dispatch_failed, Toast.LENGTH_LONG).show();
+		} finally {
+			if (gesture != null && commandTransport != null) commandTransport.finishInputGesture(gesture);
+		}
+	}
+
+	private void openActionEditor(String buttonId) {
+		if (selectedActionPreset != null) {
+			Toast.makeText(this, R.string.ng_actions_read_only_hint, Toast.LENGTH_LONG).show();
+			return;
+		}
+		if (!isRepositoryLayoutActive() || selectedActionProfile == null) {
+			Toast.makeText(this, R.string.ng_actions_layout_unavailable, Toast.LENGTH_LONG).show();
+			return;
+		}
+		finishActionsEditMode();
+		returningFromActionEditor = true;
+		try {
+			openExternalScreen(ActionEditorActivity.intent(this, selectedActionProfile.getId(), buttonId));
+		} catch (RuntimeException ignored) {
+			returningFromActionEditor = false;
+			Toast.makeText(this, R.string.ng_action_editor_load_failed, Toast.LENGTH_LONG).show();
+		}
+	}
+
+	private void openScriptManager(Integer scriptId) {
+		openScriptManager(scriptId, false);
+	}
+
+	private void openScriptManager(Integer scriptId, boolean add) {
+		finishActionsEditMode();
+		Intent intent = new Intent(this, ListEditActivity.class).putExtra("intVariableType", 1);
+		if (scriptId != null) intent.putExtra(ListEditActivity.EXTRA_SCRIPT_ID, scriptId.toString());
+		if (add) intent.putExtra(ListEditActivity.EXTRA_ADD_SCRIPT, true);
+		returningFromScriptsManager = true;
+		try { openExternalScreen(intent); }
+		catch (RuntimeException ignored) {
+			returningFromScriptsManager = false;
+			Toast.makeText(this, R.string.ng_script_unavailable, Toast.LENGTH_LONG).show();
+		}
+	}
+
+	private void runSavedScriptAsync(int id) {
+		if (actionsEditMode || shellNavigation.destination() != ShellNavigation.Destination.SCRIPTS ||
+				shellNavigation.topOverlay() != null || !activityResumed || !windowFocused) return;
+		final long executionGeneration = actionsExecutionGeneration;
+		final WeakReference<MainActivity> owner = new WeakReference<>(this);
+		final Context applicationContext = getApplicationContext();
+		final SessionCommandTransport transport = commandTransport;
+		final SessionInteractions.PresentationToken presentation = sessionPresenter == null
+				? null : sessionPresenter.presentationToken();
+		final long activityToken = activityGeneration;
+		final Handler handler = new Handler(Looper.getMainLooper());
+		try {
+			actionsIoWorker.execute(() -> {
+				String command = null;
+				try { command = new SavedActionScriptRepository(applicationContext).loadCommand(id); }
+				catch (Exception ignored) { /* Report only a fixed message on the UI thread. */ }
+				final String savedCommand = command;
+				handler.post(() -> {
+					MainActivity activity = owner.get();
+					if (activity == null || activity.isFinishing() || activity.isDestroyed() ||
+							activityToken != activity.activityGeneration || !activity.activityResumed ||
+							executionGeneration != activity.actionsExecutionGeneration || activity.actionsEditMode ||
+							!activity.windowFocused ||
+							activity.shellNavigation.destination() != ShellNavigation.Destination.SCRIPTS ||
+							activity.shellNavigation.topOverlay() != null) return;
+					if (savedCommand == null) {
+						Toast.makeText(activity, R.string.ng_script_unavailable, Toast.LENGTH_LONG).show();
+						return;
+					}
+					if (transport == null || !transport.executeExecCommand(savedCommand, presentation)) {
+						Toast.makeText(activity, R.string.ng_script_run_rejected, Toast.LENGTH_LONG).show();
+					}
+				});
+			});
+		} catch (RuntimeException ignored) {
+			Toast.makeText(this, R.string.ng_script_read_failed, Toast.LENGTH_LONG).show();
+		}
+	}
+
+	private LinkedList<CustomKeyboardButton> customButtonsFromProfile(LayoutProfile profile) {
+		LinkedList<CustomKeyboardButton> buttons = new LinkedList<>();
+		layoutButtonIds.clear();
+		for (LayoutButton button : profile.getButtons()) {
+			CustomKeyboardButton customButton = new CustomKeyboardButton(
+					0, button.getWidth(), button.getTitle(), button.getCommand(), button.getColor());
+			buttons.add(customButton);
+			layoutButtonIds.put(customButton, button.getId());
+		}
+		return buttons;
+	}
+
+	private void assignFreshLayoutButtonIds(List<CustomKeyboardButton> buttons) {
+		layoutButtonIds.clear();
+		for (CustomKeyboardButton button : buttons) {
+			layoutButtonIds.put(button, UUID.randomUUID().toString());
+		}
+	}
+
+	private List<LayoutButton> layoutButtonsForRepository() {
+		List<LayoutButton> buttons = new ArrayList<>();
+		for (CustomKeyboardButton button : mItems) {
+			String id = layoutButtonIds.get(button);
+			if (id == null) {
+				id = UUID.randomUUID().toString();
+				layoutButtonIds.put(button, id);
+			}
+			buttons.add(new LayoutButton(id, button.getmTitle(), button.getmCommand(),
+					button.getmSpans(), button.getmColor()));
+		}
+		return buttons;
+	}
+
+	private void saveCurrentRepositoryLayout() {
+		if (!isRepositoryLayoutActive() || selectedActionPreset != null || selectedActionProfile == null) return;
+		final LayoutProfileRuntime runtime = layoutProfileRuntime;
+		final String profileId = selectedActionProfile.getId();
+		final List<LayoutButton> buttons = layoutButtonsForRepository();
+		final WeakReference<MainActivity> owner = new WeakReference<>(this);
+		final Handler handler = new Handler(Looper.getMainLooper());
+		actionsIoWorker.execute(() -> {
+			boolean saved = false;
+			try { saved = runtime.saveCurrentProfileIfSelected(profileId, buttons) != null; }
+			catch (Exception ignored) { /* No raw data in diagnostics. */ }
+			final boolean success = saved;
+			handler.post(() -> {
+				MainActivity activity = owner.get();
+				if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
+				if (success) activity.requestActionsData();
+				else Toast.makeText(activity, R.string.ng_actions_layout_changed, Toast.LENGTH_LONG).show();
+			});
+		});
+	}
+
+	private void saveRepositoryLayoutAs(String profileId) {
+		if (!isRepositoryLayoutActive() || selectedActionPreset != null || selectedActionProfile == null) return;
+		final LayoutProfileRuntime runtime = layoutProfileRuntime;
+		final List<LayoutButton> buttons = selectedActionProfile.getButtons();
+		final String name = presetNameForId(profileId);
+		final WeakReference<MainActivity> owner = new WeakReference<>(this);
+		final Handler handler = new Handler(Looper.getMainLooper());
+		actionsIoWorker.execute(() -> {
+			boolean saved = false;
+			try { runtime.saveProfileAs(profileId, name, buttons); saved = true; }
+			catch (Exception ignored) { /* Fixed diagnostic only, never stored command content. */ }
+			final boolean success = saved;
+			handler.post(() -> {
+				MainActivity activity = owner.get();
+				if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
+				if (success) activity.requestActionsData();
+				else Toast.makeText(activity, R.string.ng_actions_layout_changed, Toast.LENGTH_LONG).show();
+			});
+		});
+	}
+
+	private String presetNameForId(String profileId) {
+		if (LegacyLayoutProfileMigrator.PRESET_ONE_PROFILE_ID.equals(profileId)) return "Preset 1";
+		if (LegacyLayoutProfileMigrator.PRESET_TWO_PROFILE_ID.equals(profileId)) return "Preset 2";
+		if (LegacyLayoutProfileMigrator.PRESET_THREE_PROFILE_ID.equals(profileId)) return "Preset 3";
+		return "Saved layout";
+	}
+
+	public LinkedList<CustomKeyboardButton> loadKeyboardLayout(Context mCont,String stream){
+		LinkedList<CustomKeyboardButton> views = new LinkedList<CustomKeyboardButton>();
+		try{
+			//BufferedReader reader = new BufferedReader(stream);
+			String[] lines = stream.split("\n");
+			String line=null;
+			for(int i=0;i<lines.length;i++){
+				line = lines[i];
+				//sb.append(line).append("\n");
+				LegacyLayoutReader.Record record = LegacyLayoutReader.parseRecord(line, "#ffffff");
+				if(record.isSeparatorFormat() && (record.getSpan()<1 || record.getSpan()>10)){
+					Toast.makeText(mCont, "You have included an invalid span integer, try again", Toast.LENGTH_SHORT).show();
+					return null;
+				}
+				views.add(new CustomKeyboardButton(
+						0, record.getSpan(), record.getTitle(), record.getCommand(), record.getColor()));
+			}
+			//fis.close();
+		} catch(OutOfMemoryError ignored){
+			Log.e(TAG, "layout_parse_resource_failure");
+			Toast.makeText(mCont, "Keyboard layout could not be loaded.", Toast.LENGTH_LONG).show();
+			return null;
+		} catch(Exception ignored){
+			Log.w(TAG, "layout_parse_failed");
+			Toast.makeText(mCont, "Keyboard layout could not be loaded.", Toast.LENGTH_LONG).show();
+			return null;
+		}
+
+		if(views.size()<1){
+			views = loadDefaultKeyboardLayout(mCont);
+		}
+
+		return views;
+	}
+	public LinkedList<CustomKeyboardButton> loadKeyboardLayout(Context mCont,boolean def){
+
+		if(def){
+			return loadDefaultKeyboardLayout(mCont);
+		}
+
+		LinkedList<CustomKeyboardButton> views = new LinkedList<CustomKeyboardButton>();
+		FileInputStream fis;
+		try {
+			fis = mCont.openFileInput(KEYLOAYOUTFILENAME);
+
+			//StringBuilder sb = new StringBuilder();
+			try{
+				BufferedReader reader = new BufferedReader(new InputStreamReader(fis, "UTF-8"));
+				String line = null;
+				while ((line = reader.readLine()) != null) {
+					//sb.append(line).append("\n");
+					LegacyLayoutReader.Record record = LegacyLayoutReader.parseRecord(line, "#FFFFFF");
+					views.add(new CustomKeyboardButton(
+							0, record.getSpan(), record.getTitle(), record.getCommand(), record.getColor()));
+				}
+				fis.close();
+			} catch(OutOfMemoryError ignored){
+				Log.e(TAG, "layout_read_resource_failure");
+			} catch(Exception ignored){
+				Log.w(TAG, "layout_parse_failed");
+			}
+			//String result = sb.toString();
+			//Toast.makeText(mCont, result, Toast.LENGTH_LONG).show();
+
+		} catch (Exception ignored) {
+			Log.w(TAG, "layout_read_failed");
+		}
+
+		if(views.size()<1){
+			views = loadDefaultKeyboardLayout(mCont);
+		}
+
+		return views;
+	}
+	public LinkedList<CustomKeyboardButton> loadDefaultKeyboardLayout(Context mCont){
+		LinkedList<CustomKeyboardButton> views = new LinkedList<CustomKeyboardButton>();
+
+		//new default design by Xalalau Xubilozo, Brazil
+		views.add(new CustomKeyboardButton( 0, 2,"Esc","key Escape","#FFe6e6"));
+		views.add(new CustomKeyboardButton( 0, 3,"Minimize","xdotool windowminimize $(xdotool getactivewindow)","#9FFF80"));
+		views.add(new CustomKeyboardButton( 0, 3,"Maximize","xdotool windowsize $(xdotool getactivewindow) 100% 100%","#FFCC66"));
+		views.add(new CustomKeyboardButton( 0, 2,"X","key alt+F4","#FF9999"));
+		views.add(new CustomKeyboardButton( 0, 2,"F1","key F1","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 2,"F2","key F2","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 2,"F3","key F3","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 2,"F4","key F4","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 2,"F5","key F5","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 2,"F6","key F6","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 2,"F7","key F7","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 2,"F8","key F8","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 2,"F9","key F9","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 2,"F10","key F10","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 2,"F11","key F11","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 2,"F12","key F12","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 3,"+Brightness","key XF86MonBrightnessUp","#e6f7ff"));
+		views.add(new CustomKeyboardButton( 0, 3,"-Brightness","key XF86MonBrightnessDown","#e6f7ff"));
+		views.add(new CustomKeyboardButton( 0, 2,"Super","key super","#80d4ff"));
+		views.add(new CustomKeyboardButton( 0, 3,"+Volume","key XF86AudioRaiseVolume","#B3E6FF"));
+		views.add(new CustomKeyboardButton( 0, 3,"-Volume","key XF86AudioLowerVolume","#B3E6FF"));
+		views.add(new CustomKeyboardButton( 0, 2,"Mute","key XF86AudioMute","#B3E6FF"));
+		views.add(new CustomKeyboardButton( 0, 2,"Alt|Tab","key alt+Tab","#80d4ff"));
+		views.add(new CustomKeyboardButton( 0, 3,"[Prev]","key XF86AudioPrev","#B3E6FF"));
+		views.add(new CustomKeyboardButton( 0, 3,"[Next]","key XF86AudioNext","#B3E6FF"));
+		views.add(new CustomKeyboardButton( 0, 2,"[Play]","key XF86AudioPlay","#B3E6FF"));
+		views.add(new CustomKeyboardButton( 0, 2,"New","key ctrl+n","#E6B3FF"));
+		views.add(new CustomKeyboardButton( 0, 2,"Open","key ctrl+o","#E6B3FF"));
+		views.add(new CustomKeyboardButton( 0, 2,"Save","key ctrl+s","#E6B3FF"));
+		views.add(new CustomKeyboardButton( 0, 2,"Find","key ctrl+f","#E6B3FF"));
+		views.add(new CustomKeyboardButton( 0, 2,"Print","key ctrl+p","#E6B3FF"));
+		views.add(new CustomKeyboardButton( 0, 4,"Select all","key ctrl+a","#E6B3FF"));
+		views.add(new CustomKeyboardButton( 0, 3,"+Zoom","key ctrl+plus","#E6B3FF"));
+		views.add(new CustomKeyboardButton( 0, 3,"-Zoom","key ctrl+minus","#E6B3FF"));
+		views.add(new CustomKeyboardButton( 0, 2,"Undo","key ctrl+z","#F7E6FF"));
+		views.add(new CustomKeyboardButton( 0, 2,"Redo","key ctrl+y","#F7E6FF"));
+		views.add(new CustomKeyboardButton( 0, 2,"Copy","key ctrl+c","#F7E6FF"));
+		views.add(new CustomKeyboardButton( 0, 2,"Crop","key ctrl+x","#F7E6FF"));
+		views.add(new CustomKeyboardButton( 0, 2,"Paste","key ctrl+v","#F7E6FF"));
+		views.add(new CustomKeyboardButton( 0, 3,"PgUp","key Prior","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 3,"PgDown","key Next","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 4,"Delete","key Delete","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 2,"Home","key Home","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 2,"Up","key Up","#FFFFB3"));
+		views.add(new CustomKeyboardButton( 0, 2,"End","key End","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 4,"Backspace","key BackSpace","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 2,"Left","key Left","#FFFFB3"));
+		views.add(new CustomKeyboardButton( 0, 2,"Down","key Down","#FFFFB3"));
+		views.add(new CustomKeyboardButton( 0, 2,"Right","key Right","#FFFFB3"));
+		views.add(new CustomKeyboardButton( 0, 4,"Enter","key Return","#FFFFFF"));
+		views.add(new CustomKeyboardButton( 0, 5,"<Back","key XF86Back","#f2e5d9"));
+		views.add(new CustomKeyboardButton( 0, 5,"Forward>","key XF86Forward","#f2e5d9"));
+		views.add(new CustomKeyboardButton( 0, 1,"+","key ctrl+t","#e6ccb3"));
+		views.add(new CustomKeyboardButton( 0, 1,"-","key ctrl+w","#e6ccb3"));
+		views.add(new CustomKeyboardButton( 0, 4,"Reopen Last Tab","key ctrl+shift+t","#e6ccb3"));
+		views.add(new CustomKeyboardButton( 0, 2,"<-","key ctrl+shift+Tab","#e6ccb3"));
+		views.add(new CustomKeyboardButton( 0, 2,"->","key ctrl+Tab","#e6ccb3"));
+
+		return views;
+	}
+	public String getKeyboardTextValue(){
+
+		StringBuilder sb = new StringBuilder();
+		for(int x=0;x<mItems.size();x++){
+			sb.append(mItems.get(x).getmTitle())
+					.append("<xmousesep>").append(mItems.get(x).getmCommand())
+					.append("<xmousesep>").append(mItems.get(x).getmSpans())
+					.append("<xmousesep>").append(mItems.get(x).getmColor());
+
+			if(x!=mItems.size()-1){
+				sb.append("\n");
+			}
+		}
+		return sb.toString();
+	}
+	public void saveKeyboardLayout(){
+		if (selectedActionPreset != null) return;
+		if (isRepositoryLayoutActive()) {
+			saveCurrentRepositoryLayout();
+			return;
+		}
+		if (legacyLayoutFallbackReadOnly) {
+			Log.w(TAG, "layout_recovery_source_write_blocked");
+			return;
+		}
+
+		try{
+			FileOutputStream fos = openFileOutput(KEYLOAYOUTFILENAME, Context.MODE_PRIVATE);
+			fos.write(getKeyboardTextValue().getBytes());
+			fos.close();
+			//Toast.makeText(getBaseContext(), "Saved", Toast.LENGTH_SHORT).show();
+		}catch(Exception ignored){
+			Log.w(TAG, "layout_save_failed");
+			Toast.makeText(getBaseContext(), "Keyboard layout could not be saved.", Toast.LENGTH_LONG).show();
+		}
+	}
+	public void xMouseNewCustomButton(final Integer id){
+		if (selectedActionPreset != null) {
+			Toast.makeText(this, R.string.ng_actions_read_only_hint, Toast.LENGTH_LONG).show();
+			return;
+		}
+		if (isRepositoryLayoutActive()) {
+			String buttonId = id == null || id < 0 || id >= mItems.size() ? null : layoutButtonIds.get(mItems.get(id));
+			openActionEditor(buttonId);
+			return;
+		}
+		if (legacyLayoutFallbackReadOnly) {
+			Toast.makeText(this, R.string.ng_actions_layout_unavailable, Toast.LENGTH_LONG).show();
+			return;
+		}
+		//open dialog for new command
+
+		//Preparing views
+		LayoutInflater inflater = (LayoutInflater) getLayoutInflater();
+		View layout = inflater.inflate(R.layout.new_button_dialog, null);
+		//layout_root should be the name of the "top-level" layout node in the dialog_layout.xml file.
+		final EditText nameBox = (EditText) layout.findViewById(R.id.new_command_name);
+		final EditText script = (EditText) layout.findViewById(R.id.new_command_command);
+		final EditText spans = (EditText) layout.findViewById(R.id.new_command_width);
+		final EditText color = (EditText) layout.findViewById(R.id.new_command_hex);
+		//Building dialog
+		AlertDialog.Builder builder = new AlertDialog.Builder(this);
+		builder.setView(layout);
+		if(id != null) {
+			builder.setTitle("Edit Button");
+
+			nameBox.setText(mItems.get(id).getmTitle());
+			script.setText(mItems.get(id).getmCommand());
+			spans.setText(String.valueOf(mItems.get(id).getmSpans()));
+			color.setText(mItems.get(id).getmColor());
+
+		}else{
+			builder.setTitle("New Button");
+		}
+		builder.setPositiveButton("Save", new DialogInterface.OnClickListener() {
+			@Override
+			public void onClick(DialogInterface dialog, int which) {
+
+				String name = nameBox.getText().toString();
+				String content = script.getText().toString();
+				String spanStr = spans.getText().toString();
+				String colorStr = color.getText().toString();
+
+				if (!spanStr.isEmpty()) {
+
+					if (name.length() > 0 && content.length() > 0) {
+						int span = Integer.valueOf(spanStr);
+
+						if (span > 0 && span < 11) {
+
+
+							if(id!=null){
+
+								mItems.get(id).setName(name);
+								mItems.get(id).setSpans(span);
+								mItems.get(id).setmCommand(content);
+								mItems.get(id).setColor(colorStr);
+
+							}else {
+								mItems.add(new CustomKeyboardButton(0, span, name, content, colorStr));
+							}
+
+							mItemAdapter = new CustomKeyboardButtonAdapter(MainActivity.this, mItems);
+							mCoolDragAndDropGridView.setAdapter(mItemAdapter);
+							mItemAdapter.notifyDataSetChanged();
+							saveKeyboardLayout();
+
+							Toast.makeText(getBaseContext(), "Button \"" + name + "\" saved to main layout", Toast.LENGTH_LONG).show();
+
+							dialog.dismiss();
+						} else {
+							Toast.makeText(getBaseContext(), "Width must be between 1 and 10", Toast.LENGTH_LONG).show();
+
+						}
+					} else {
+
+						Toast.makeText(getBaseContext(), "A required value was empty, button not saved", Toast.LENGTH_LONG).show();
+
+					}
+				} else {
+					Toast.makeText(getBaseContext(), "A required value was empty, button not saved", Toast.LENGTH_LONG).show();
+				}
+			}
+		});
+		builder.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+			@Override
+			public void onClick(DialogInterface dialog, int which) {
+				dialog.dismiss();
+			}
+		});
+		AlertDialog dialog = builder.create();
+		showOwnedDialog(dialog);
+		if (dialog.getWindow() != null) {
+			dialog.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+		}
+
+
+	}
+	private void useKeyboardSendText(IDoTool inputTool) {
+		String text = ET.getText().toString();
+		if (InlineTextDispatch.send(inputTool, text, setting_keyboard_send_enter_after_text)) {
+			if(setting_keyboard_autoclear){
+				ET.setText("");
+			}
+		}
+	}
+
+
+	@Override public void showRecentCommand(String command) {
+		if (Looper.myLooper() != Looper.getMainLooper()) {
+			mainHandler.post(() -> showRecentCommand(command));
+			return;
+		}
+		if (recentCmdTextView != null && !isDestroyed()) recentCmdTextView.setText(command);
+	}
+
+	@Override public void performCallback() {
+		if (Looper.myLooper() != Looper.getMainLooper()) {
+			mainHandler.post(this::performCallback);
+			return;
+		}
+		if (!isDestroyed()) showConnectionStat();
+	}
+
+	@Override
+	public void performCallback2(Integer i) {
+
+	}
+
+}

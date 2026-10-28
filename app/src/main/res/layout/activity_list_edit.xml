@@ -5,7 +5,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:id="@+id/list_edit_root"
-    tools:context="com.stripe1.xmouse.ListEditActivity">
+    tools:context="net.droopia.xmouse_ng.ListEditActivity">
 
     <com.google.android.material.appbar.AppBarLayout
         android:layout_width="match_parent"

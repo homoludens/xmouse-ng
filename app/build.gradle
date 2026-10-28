@@ -54,16 +54,16 @@ android {
         xmlReport = true
     }
 
-    namespace = 'com.stripe1.xmouse'
+    namespace = 'net.droopia.xmouse_ng'
     compileSdk = 37
     buildToolsVersion = '36.0.0'
 
     defaultConfig {
-        applicationId "com.stripe1.xmouse"
+        applicationId "net.droopia.xmouse_ng"
         minSdk = 26
         targetSdk = 37
-        versionCode 26
-        versionName "2.1.0"
+        versionCode 27
+        versionName "2.1.1"
         testInstrumentationRunner = 'androidx.test.runner.AndroidJUnitRunner'
     }
     signingConfigs {

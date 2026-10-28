@@ -66,7 +66,7 @@
             android:theme="@style/AppTheme.NoActionBar">
             <meta-data
                 android:name="android.support.PARENT_ACTIVITY"
-                android:value="com.stripe1.xmouse.MainActivity" />
+                android:value="net.droopia.xmouse_ng.MainActivity" />
         </activity>
         <activity
             android:name=".ComputerEditorActivity"
@@ -79,7 +79,7 @@
             android:theme="@style/AppTheme.NoActionBar">
             <meta-data
                 android:name="android.support.PARENT_ACTIVITY"
-                android:value="com.stripe1.xmouse.MainActivity" />
+                android:value="net.droopia.xmouse_ng.MainActivity" />
         </activity>
     </application>
 

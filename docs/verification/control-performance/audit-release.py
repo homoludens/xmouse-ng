@@ -108,6 +108,12 @@ def main():
     sdk = Path(os.environ['ANDROID_HOME'])
     assert str(sdk) == os.environ['ANDROID_SDK_ROOT']
     args.output.mkdir(parents=True, exist_ok=True)
+    build = (root / 'app/build.gradle').read_text()
+    namespace = re.search(r"(?m)^\s*namespace\s*=\s*['\"]([^'\"]+)['\"]", build)[1]
+    app_id = re.search(r'(?m)^\s*applicationId\s+["\']([^"\']+)["\']', build)[1]
+    version_code = re.search(r'(?m)^\s*versionCode\s+(\d+)', build)[1]
+    version_name = re.search(r'(?m)^\s*versionName\s+["\']([^"\']+)["\']', build)[1]
+    assert namespace == app_id, 'This audit expects the app ID and namespace to match'
     classes, members = mapping(args.mapping / 'mapping.txt')
     with ZipFile(args.apk) as apk:
         assert apk.testzip() is None, 'APK CRC failure'
@@ -123,7 +129,7 @@ def main():
         assert all(n in ['assets/dexopt/baseline.prof', 'assets/dexopt/baseline.profm']
                    for n in names if n.startswith('assets/') and not n.endswith('/'))
         banned = ('androidx.test.', 'org.junit.', 'org.mockito.', 'org.apache.sshd.',
-                  'com.stripe1.xmouse.MainInsetsFixtureActivity', 'org.xbill.DNS.spi.')
+                  namespace + '.MainInsetsFixtureActivity', 'org.xbill.DNS.spi.')
         assert not [n for n in definitions if n.startswith(banned)]
         assert not [n for n, mapped in classes.items() if n.startswith(banned) and mapped in definitions]
         for source_root in ['debug', 'test', 'androidTest', 'testFixtures']:
@@ -158,10 +164,10 @@ def main():
     for name in ['JSch', 'Session', 'KeyPair']:
         assert classes['com.jcraft.jsch.' + name].startswith('com.jcraft.jsch.'), 'Package-private reflection access'
     for method in ['xMouseClickMouse', 'xMouseKeyboardSend']:
-        assert method in definitions['com.stripe1.xmouse.MainActivity']['methods'], 'XML onClick: ' + method
+        assert method in definitions[namespace + '.MainActivity']['methods'], 'XML onClick: ' + method
     constants = {}
     for name, expression in re.findall(r'public static int (KEY_\w+) = ([^;]+);',
-            (root / 'app/src/main/java/com/stripe1/xmouse/InputEventCodes.java').read_text()):
+            (root / 'app/src/main/java' / namespace.replace('.', '/') / 'InputEventCodes.java').read_text()):
         # Generated declarations have only integer literals, aliases and KEY_MAX+1.
         if expression.strip() in constants:
             constants[name] = constants[expression.strip()]
@@ -169,7 +175,7 @@ def main():
             constants[name] = constants['KEY_MAX'] + 1
         else:
             constants[name] = int(expression, 0)
-    defined_fields = definitions[classes['com.stripe1.xmouse.InputEventCodes']]['fields']
+    defined_fields = definitions[classes[namespace + '.InputEventCodes']]['fields']
     assert {n for n, kind, flags in defined_fields if kind == 'I' and flags & 9 == 9} == set(constants)
     tools = sdk / 'build-tools/36.0.0'
     def run(name, *command):
@@ -181,21 +187,22 @@ def main():
     assert f'Signer #1 certificate SHA-256 digest: {fingerprint}' in cert
     assert 'Number of signers: 1' in cert and 'Verified using v2 scheme (APK Signature Scheme v2): true' in cert
     badging = run('badging.txt', str(tools / 'aapt2'), 'dump', 'badging', str(args.apk))
-    for expected in ["name='com.stripe1.xmouse'", "versionCode='26'", "versionName='2.1.0'",
+    for expected in [f"name='{app_id}'", f"versionCode='{version_code}'", f"versionName='{version_name}'",
                      "minSdkVersion:'26'", "targetSdkVersion:'37'", "compileSdkVersion='37'",
-                     "application-label:'XMouse-NG'", "launchable-activity: name='com.stripe1.xmouse.MainActivity'"]:
+                     "application-label:'XMouse-NG'", f"launchable-activity: name='{namespace}.MainActivity'"]:
         assert expected in badging, expected
     manifest = run('manifest.txt', str(tools / 'aapt2'), 'dump', 'xmltree', str(args.apk), '--file', 'AndroidManifest.xml')
     assert not re.search(r'E: instrumentation|android:(?:debuggable|testOnly).*0xffffffff', manifest)
     run('alignment.txt', str(tools / 'zipalign'), '-c', '-P', '16', '-v', '4', str(args.apk))
     aapt = (root / 'app/build/intermediates/aapt_proguard_file/release/processReleaseResources/aapt_rules.txt').read_text()
-    for name in re.findall(r'-keep class (com\.stripe1\.xmouse\.\S+) \{', aapt):
+    app_class_pattern = re.escape(namespace) + r'\.\S+'
+    for name in re.findall(r'-keep class (' + app_class_pattern + r') \{', aapt):
         assert name in definitions, name
     config = (args.mapping / 'configuration.txt').read_text()
     assert '-ignorewarnings' not in config and not re.search(r'^-dontwarn\s+\*', config, re.M)
     assert '-dontshrink' not in config and '-dontobfuscate' not in config and '-dontoptimize' not in config
-    assert classes['com.stripe1.xmouse.YDoTool'] != 'com.stripe1.xmouse.YDoTool'
-    selected = {name for name in classes if name.startswith(('com.stripe1.xmouse.', 'com.jcraft.jsch.',
+    assert classes[namespace + '.YDoTool'] != namespace + '.YDoTool'
+    selected = {name for name in classes if name.startswith((namespace + '.', 'com.jcraft.jsch.',
                 'org.bouncycastle.jce.provider.', 'org.xbill.DNS.'))}
     runtime = dict(classes={n: classes[n] for n in selected}, members={n: members[n] for n in selected},
                    constants=constants, algorithms=algorithms)

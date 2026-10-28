@@ -45,7 +45,7 @@
             android:paddingTop="@dimen/ng_touchpad_control_gap" android:paddingBottom="@dimen/ng_touchpad_control_gap" android:background="@color/ng_background">
             <LinearLayout android:id="@+id/typing_composer_row" android:layout_width="match_parent"
                 android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
-                <com.stripe1.xmouse.SendImeEditText android:id="@+id/keyboard_input" android:layout_width="0dp" android:layout_height="wrap_content"
+                <net.droopia.xmouse_ng.SendImeEditText android:id="@+id/keyboard_input" android:layout_width="0dp" android:layout_height="wrap_content"
                     android:layout_weight="1" android:minHeight="52dp" android:maxLines="3"
                     android:gravity="center_vertical|start" android:paddingStart="14dp" android:paddingEnd="14dp"
                     android:background="@drawable/ng_surface_rounded"

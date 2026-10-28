@@ -1,7 +1,7 @@
 # YDoTool builds KEY_* names from user/layout input. getDeclaredField is not a
 # closed set of literal lookups: retain every public Linux input constant and
 # its original name/value, including aliases. No other app class is kept here.
--keepclassmembers class com.stripe1.xmouse.InputEventCodes {
+-keepclassmembers class net.droopia.xmouse_ng.InputEventCodes {
     public static int KEY_*;
 }
 

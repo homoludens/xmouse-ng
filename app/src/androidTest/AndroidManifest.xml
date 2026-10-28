@@ -2,13 +2,13 @@
     <application>
         <!-- Synthetic, memory-only provider, installed ONLY with the test APK. -->
         <provider
-            android:name="com.stripe1.xmouse.secrets.SyntheticKeyFixtureControlProvider"
-            android:authorities="com.stripe1.xmouse.test.synthetic.keys.control"
+            android:name="net.droopia.xmouse_ng.secrets.SyntheticKeyFixtureControlProvider"
+            android:authorities="net.droopia.xmouse_ng.test.synthetic.keys.control"
             android:exported="true"
             android:permission="android.permission.INTERNET" />
         <provider
-            android:name="com.stripe1.xmouse.secrets.SyntheticKeyDocumentsProvider"
-            android:authorities="com.stripe1.xmouse.test.synthetic.keys"
+            android:name="net.droopia.xmouse_ng.secrets.SyntheticKeyDocumentsProvider"
+            android:authorities="net.droopia.xmouse_ng.test.synthetic.keys"
             android:exported="true"
             android:grantUriPermissions="true"
             android:permission="android.permission.MANAGE_DOCUMENTS">
