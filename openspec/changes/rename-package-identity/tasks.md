@@ -14,4 +14,4 @@ All tasks are `[low]` under the project classification: the requested valid ID a
 
 ## 3. Commit and publish
 
-- [ ] 3.1 [low] Commit the verified package/release changes, fast-forward and push `main` to `homoludens/xmouse-ng`, publish GitHub release `v2.1.1` with the verified signed APK and SHA-256 companion, and record exact commit/tag/release URL, artifact identity/hash/signature and verification limits; confirm remote branch, tag, release and downloaded asset checksums.
+- [x] 3.1 [low] Commit the verified package/release changes, fast-forward and push `main` to `homoludens/xmouse-ng`, publish GitHub release `v2.1.1` with the verified signed APK and SHA-256 companion, and record exact commit/tag/release URL, artifact identity/hash/signature and verification limits; confirm remote branch, tag, release and downloaded asset checksums.
