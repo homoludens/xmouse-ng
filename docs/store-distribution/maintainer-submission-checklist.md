@@ -22,7 +22,7 @@ This is preparation guidance, not a store submission. The v2.1.2 source and GitH
 
 ## F-Droid (future maintainer/reviewer action; not submitted)
 
-- [ ] Review `metadata/net.droopia.xmouse_ng.yml`, its exact full commit, Gradle subdirectory/output, `fdroidUnsigned=true` opt-in, version/code, and future versioned `Binaries` URL. Replace any draft gate only after owner review; do not submit a placeholder commit.
+- [ ] Review `metadata/net.droopia.xmouse_ng.yml`, its exact full source commit, Gradle subdirectory/output, `fdroidUnsigned=true` opt-in, version/code, and published versioned `Binaries` URL. The source commit and APK are now identified; keep the draft gate until official `fdroid lint`, build-server/review checks, and explicit owner approval pass.
 - [ ] Confirm the unsigned build remains APK-only and isolated from signed outputs. Do not pass release signing properties or key material into the source build.
 - [ ] For the exact released source commit, compare an independent clean F-Droid build with the signed upstream APK by signature copying and verify the result with `apksigner`. The local source-only checks in the accompanying record are not an official F-Droid build-server result or review.
 - [ ] Confirm the F-Droid verifier's accepted signing-key fingerprint equals the existing public SHA-256 certificate fingerprint above. A mismatch is a stop condition; do not change or replace the project signing key to make a match.

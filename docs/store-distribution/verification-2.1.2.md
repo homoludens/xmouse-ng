@@ -1,6 +1,6 @@
 # XMouse-NG 2.1.2 distribution preparation verification
 
-**Status:** local preparation evidence for an uncommitted working-tree checkpoint. This record does not claim a GitHub release, Google Play acceptance/publication, F-Droid inclusion/review, or official F-Droid build-server reproducibility. After publication, a follow-up entry must bind the final artifacts to their actual source commit/tag and record remote download verification.
+**Status:** The first sections below preserve local preparation evidence for the original uncommitted working-tree checkpoint. The final section records tagged-source builds and the subsequent public GitHub release/download verification. This record does not claim Google Play acceptance/publication, F-Droid inclusion/review, or official F-Droid build-server reproducibility.
 
 ## Source checkpoint
 
@@ -38,6 +38,18 @@ Generated artwork sizes and safe-mask/source provenance are recorded in [artwork
 - Diagnostic attempts without a valid VCS checkout were not counted as passes: builds A/B emitted `generate_error_reason: NO_SUPPORTED_VCS_FOUND`, and a `.git`-file-only setup C/D emitted `NO_VALID_GIT_FOUND`; signature copying then failed because `META-INF/version-control-info.textproto` differed. The final G/H builds used independent full Git clones; that embedded revision metadata matched the signed APK and no Gradle/release optimization or signing setting was weakened.
 - Raw build logs, source snapshots, APKs, copied-signature APK, bundletool reports, alignment output, and native-library extracts are outside Git under `/tmp/opencode/store-distribution/`. These are local checks only: the official F-Droid build server, fdroidserver lint/review, Google Play Console, store submission, and publication were **NOT RUN** at this checkpoint.
 
-## Publication and remaining external checks
+## Tagged-source verification and GitHub publication
 
-No release/tag/push or store action had occurred when this checkpoint was recorded. Before GitHub publication, rebuild and repeat the signature-copy and signed AAB/APK audits against the actual committed/tagged source revision, then confirm the published downloads match the local artifact hashes. Google Play enrollment, key-continuity decisions, declarations, reviewer access, review, and publication remain owner actions. F-Droid application request/MR, build-server result, review, and publication remain **NOT RUN**. The public privacy-policy URL also remains unpublished.
+- Artifact source commit: `1d99fd7982efd7fe5ab237429abbcec5fc441af7`; annotated tag `v2.1.2` resolves to that commit (tag object `6ae040edb7e0ba9b53668344b501bb4650605d6b`). The release build's `META-INF/version-control-info.textproto` records that exact commit.
+- The committed-source APK/AAB builds and audits were rerun before publication. Two fresh, independent clean clones at this exact source commit produced matching unsigned APKs (each 4,016,950 bytes; SHA-256 `efda8c0f5fa4fb4935b940c3a64242967c7cbb0a5880ffd2b3204a58312309ba`). Signature comparison/copy against the exact committed-source signed APK passed; `apksigner` verified the copied result with the expected certificate, and the copied APK is byte-identical to the release APK.
+- Fast-forward push: `homoludens/xmouse-ng` `main` advanced from `dd5059b40749c9aa16ae63816945a9fcea6e5257` to the artifact-source commit above. No push was made to the upstream `bradand/XMouse` remote. The existing `v2.1.0` and `v2.1.1` tags/releases were left unchanged.
+- Public non-prerelease, non-draft, latest GitHub release: [XMouse-NG 2.1.2](https://github.com/homoludens/xmouse-ng/releases/tag/v2.1.2), published 2026-10-28. GitHub reports tag `v2.1.2`, not draft, not prerelease, and latest.
+
+| Published/downloaded asset | Size | SHA-256 |
+| --- | ---: | --- |
+| `xmouse-ng-2.1.2.apk` | 4,029,238 bytes | `93febcefb169d465d8effebba3e4f7b9404a482fd4db633ba7e3ecb0e942c0f4` |
+| `xmouse-ng-2.1.2.aab` | 7,247,242 bytes | `547441f91d7dd98b050b5003019c643ee04f72237acb0250b66796be92edd20c` |
+
+Both release checksum companions were downloaded and `sha256sum -c` passed. APK and AAB downloads were byte-for-byte identical to the locally audited, signed artifacts; the APK's signature and the AAB's signer were verified locally against the expected certificate before upload. The download evidence remains outside Git under `/tmp/opencode/store-distribution/downloaded-v2.1.2/`.
+
+The F-Droid draft metadata now identifies the exact published source commit and versioned binary URL but remains disabled pending official `fdroid lint`, build-server/review checks, the hosted privacy URL, and explicit owner approval. No F-Droid application request/MR, build-server check, review, or publication occurred. Google Play Console, enrollment/key-continuity decisions, declarations, upload, review, and publication also remain **NOT RUN**. The privacy policy has not been published at a public HTTPS URL; physical-device testing and the full instrumentation suite were not run.

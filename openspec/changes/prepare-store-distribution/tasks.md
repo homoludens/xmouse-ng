@@ -21,4 +21,4 @@
 
 ## 6. Authorized GitHub publication
 
-- [ ] 6.1 [low] After tasks 4.1 and 5.1 pass, verify the remote fork/tag/release state; commit the prepared source, fast-forward push only `homoludens/xmouse-ng` `main`, create annotated `v2.1.2` on the verified artifact-source commit, and publish the verified signed APK/AAB plus checksum files as a non-prerelease GitHub release; download and independently verify the published assets, record actual commit/tag/release hashes and links in a docs-only follow-up, and leave Google Play/F-Droid service-side submission NOT RUN.
+- [x] 6.1 [low] After tasks 4.1 and 5.1 pass, verify the remote fork/tag/release state; commit the prepared source, fast-forward push only `homoludens/xmouse-ng` `main`, create annotated `v2.1.2` on the verified artifact-source commit, and publish the verified signed APK/AAB plus checksum files as a non-prerelease GitHub release; download and independently verify the published assets, record actual commit/tag/release hashes and links in a docs-only follow-up, and leave Google Play/F-Droid service-side submission NOT RUN.
