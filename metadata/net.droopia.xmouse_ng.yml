@@ -10,14 +10,14 @@ Binaries: https://github.com/homoludens/xmouse-ng/releases/download/v%v/xmouse-n
 AllowedAPKSigningKeys: c1c5faca7bfd24ce2bf5467a731b71b0218bcb503eb20f814d370925a4b88eed
 MaintainerNotes: |
   Disabled preparation draft only; this file does not represent an F-Droid submission or review.
-  The 2.1.2 source commit and matching signed APK are published at the v2.1.2 GitHub release.
+  The 2.1.3 source commit and matching signed APK are published at the v2.1.3 GitHub release.
   Review this recipe, the versioned Binaries URL, the still-unpublished hosted privacy policy,
   and local reproducibility evidence. Official fdroidserver lint/build/review and explicit owner
   approval are still pending. Do not remove the build's disable field before those checks.
 Builds:
-  - versionName: '2.1.2'
-    versionCode: 28
-    commit: 1d99fd7982efd7fe5ab237429abbcec5fc441af7
+  - versionName: '2.1.3'
+    versionCode: 29
+    commit: 675bc1fd5880996ba1212ec876ca793137a4964c
     disable: Draft only; official fdroidserver lint/build/review and explicit owner approval are pending.
     subdir: .
     gradle:
