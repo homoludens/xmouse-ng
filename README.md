@@ -13,7 +13,7 @@ These captures use synthetic display data.
 ## Features
 
 - Move and scroll the desktop pointer, click, use quick keys, and send text with the explicit **Send** action.
-- Build named **Actions** layouts with custom shortcuts, or use the built-in key presets.
+- Start with the editable 57-button **Keys Layout**, build named **Actions** layouts, or use the built-in key presets.
 - Connect to Linux computers over SSH with password or private-key authentication and verify host fingerprints.
 - Save and explicitly run SSH scripts; optionally discover SSH hosts on the local network.
 

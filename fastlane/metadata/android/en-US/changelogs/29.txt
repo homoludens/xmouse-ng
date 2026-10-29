@@ -1,0 +1,3 @@
+2.1.3 (29)
+- Adds the editable 57-button Keys Layout by default.
+- Preserves existing saved layouts, selections, and drafts during additive setup.

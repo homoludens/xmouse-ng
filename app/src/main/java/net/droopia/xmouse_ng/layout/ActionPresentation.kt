@@ -56,43 +56,52 @@ data class LayoutProfileChoice(val id: String, val name: String)
 
 data class SavedActionScript(val id: Int, val name: String)
 
-/**
- * The built-in legacy grid is a compatibility fallback, not fresh-install demo data. This helper
- * only creates the single empty active profile when no source, profile, preference, host, or script
- * data exists. Existing migration inputs and saved profiles always win.
- */
-object FreshActionsProfileInitializer {
-    fun initializeIfFresh(
+/** Seeds the original table once without replacing saved profiles, drafts, or migration sources. */
+object DefaultKeysLayoutProfileInitializer {
+    @Synchronized
+    fun initializeIfNeeded(repository: LayoutProfileRepository): LayoutProfile? =
+        initialize(repository, preserveExistingSelection = false)
+
+    @Synchronized
+    fun initializeAfterSuccessfulMigration(
         repository: LayoutProfileRepository,
-        hasLegacySource: Boolean,
-        hasUserData: Boolean,
+        activation: LayoutProfileActivation,
     ): LayoutProfile? {
-        if (hasLegacySource || hasUserData || repository.listProfiles().isNotEmpty()) return null
-        val empty = LayoutProfile(
-            id = LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID,
-            name = "Actions",
-            buttons = emptyList(),
-        )
-        repository.createProfile(empty)
-        repository.selectProfile(empty.id)
-        return empty
+        if (!activation.activated) return null
+        return initialize(repository, preserveExistingSelection = true)
     }
 
-    /** Upgrade-only preservation of the old built-in fallback when no file/profile was ever saved. */
-    fun preserveLegacyDefaultsIfNeeded(
+    private fun initialize(
         repository: LayoutProfileRepository,
-        hasLegacySource: Boolean,
-        hasUserData: Boolean,
-        legacyDefaults: List<LayoutButton>,
+        preserveExistingSelection: Boolean,
     ): LayoutProfile? {
-        if (hasLegacySource || !hasUserData || repository.listProfiles().isNotEmpty()) return null
-        val retained = LayoutProfile(
-            id = LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID,
-            name = "Active layout",
-            buttons = legacyDefaults.toList(),
-        )
-        repository.createProfile(retained)
-        repository.selectProfile(retained.id)
-        return retained
+        if (repository.isDefaultKeysLayoutInitializationComplete()) return null
+
+        val profiles = repository.listProfiles()
+        if (profiles.any { it.id == DefaultKeysLayoutCatalog.PROFILE_ID }) {
+            repository.markDefaultKeysLayoutInitializationComplete()
+            return null
+        }
+
+        val selected = repository.loadSelectedProfile()
+        val shouldSelectStock = !preserveExistingSelection && (profiles.isEmpty() || (
+            profiles.size == 1 &&
+                profiles.single().id == LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID &&
+                profiles.single().name == "Actions" &&
+                profiles.single().buttons.isEmpty() &&
+                repository.loadDraft(profiles.single().id) == null &&
+                selected?.id == LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID
+            ))
+
+        val stock = DefaultKeysLayoutCatalog.profile()
+        try {
+            repository.createProfile(stock)
+        } catch (_: LayoutProfileAlreadyExistsException) {
+            // An orphaned profile/draft at the reserved ID is user-owned; leave it untouched.
+            return null
+        }
+        if (shouldSelectStock) repository.selectProfile(stock.id)
+        repository.markDefaultKeysLayoutInitializationComplete()
+        return stock
     }
 }

@@ -3,8 +3,6 @@ package net.droopia.xmouse_ng.layout
 import java.io.File
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -68,46 +66,16 @@ class ActionPresentationTest {
         }
     }
 
-    @Test
-    fun cleanOnlyInitializerCreatesOneEmptyActiveProfileAndNeverSeedsExamples() {
-        val directories = listOf("fresh", "legacy", "upgrade", "existing")
-            .map { Files.createTempDirectory("actions-$it").toFile() }
-        try {
-            val clean = LayoutProfileRepository(DirectoryFiles(directories[0]))
-            val initialized = FreshActionsProfileInitializer.initializeIfFresh(clean, hasLegacySource = false, hasUserData = false)
-            assertNotNull(initialized)
-            assertEquals(LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID, initialized!!.id)
-            assertEquals("Actions", initialized.name)
-            assertTrue(initialized.buttons.isEmpty())
-            assertEquals(initialized.id, clean.loadSelectedProfile()?.id)
-
-            val sourceBacked = LayoutProfileRepository(DirectoryFiles(directories[1]))
-            assertNull(FreshActionsProfileInitializer.initializeIfFresh(
-                sourceBacked, hasLegacySource = true, hasUserData = false))
-            assertTrue(sourceBacked.listProfiles().isEmpty())
-
-            val upgraded = LayoutProfileRepository(DirectoryFiles(directories[2]))
-            assertNull(FreshActionsProfileInitializer.initializeIfFresh(
-                upgraded, hasLegacySource = false, hasUserData = true))
-            assertTrue(upgraded.listProfiles().isEmpty())
-
-            val existing = LayoutProfileRepository(DirectoryFiles(directories[3]))
-            val saved = LayoutProfile(id = "already-saved", name = "Duplicate name")
-            existing.createProfile(saved)
-            assertNull(FreshActionsProfileInitializer.initializeIfFresh(
-                existing, hasLegacySource = false, hasUserData = false))
-            assertEquals(listOf(saved), existing.listProfiles())
-            assertFalse(saved.id == LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID)
-        } finally {
-            directories.forEach(File::deleteRecursively)
-        }
-    }
-
     @Test fun namedProfilesAllowDuplicateNamesMoreThanThreeAndRestartAfterDeletingInitialEmptyProfile() {
         val directory = Files.createTempDirectory("actions-named-profiles").toFile()
         try {
             val repository = LayoutProfileRepository(DirectoryFiles(directory))
-            val initial = FreshActionsProfileInitializer.initializeIfFresh(repository, false, false)!!
+            val initial = LayoutProfile(
+                id = LegacyLayoutProfileMigrator.ACTIVE_PROFILE_ID,
+                name = "Actions",
+            )
+            repository.createProfile(initial)
+            repository.selectProfile(initial.id)
             repeat(6) { index -> repository.createProfile(LayoutProfile(id = "named-$index", name = "Same name")) }
             repository.selectProfile("named-4")
             repository.deleteProfile(initial.id, confirmed = true)
@@ -123,22 +91,6 @@ class ActionPresentationTest {
                 runtime.saveCurrentProfileIfSelected("named-4", listOf(LayoutButton("stale", "Stale", "key Escape", 5))))
             assertTrue(restarted.loadProfile("named-2").buttons.isEmpty())
             assertTrue(restarted.loadProfile("named-4").buttons.isEmpty())
-        } finally { directory.deleteRecursively() }
-    }
-
-    @Test fun upgradeOnlyFallbackPreservesOldDefaultsButNeverOverridesLegacySourcesOrFreshEmptyData() {
-        val directory = Files.createTempDirectory("actions-upgrade-defaults").toFile()
-        try {
-            val repository = LayoutProfileRepository(DirectoryFiles(directory))
-            val defaults = listOf(LayoutButton("legacy-default-1", "Esc", "key Escape", 2, "#FFe6e6"))
-            assertNull(FreshActionsProfileInitializer.preserveLegacyDefaultsIfNeeded(repository, false, false, defaults))
-            assertNull(FreshActionsProfileInitializer.preserveLegacyDefaultsIfNeeded(repository, true, true, defaults))
-            assertTrue(repository.listProfiles().isEmpty())
-            val retained = FreshActionsProfileInitializer.preserveLegacyDefaultsIfNeeded(repository, false, true, defaults)!!
-            assertEquals(defaults, retained.buttons)
-            assertEquals(retained, LayoutProfileRepository(DirectoryFiles(directory)).loadSelectedProfile())
-            assertNull(FreshActionsProfileInitializer.preserveLegacyDefaultsIfNeeded(repository, false, true, emptyList()))
-            assertEquals(defaults, repository.loadProfile(retained.id).buttons)
         } finally { directory.deleteRecursively() }
     }
 

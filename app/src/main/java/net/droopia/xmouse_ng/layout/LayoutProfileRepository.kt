@@ -197,6 +197,18 @@ class LayoutProfileRepository internal constructor(
         draft.takeUnless { it == saved }
     }
 
+    /** Durable one-time seed marker; catalog writes keep intentional profile deletion respected. */
+    fun isDefaultKeysLayoutInitializationComplete(): Boolean = synchronized(processLock) {
+        ensureCatalog().defaultKeysLayoutInitializationComplete
+    }
+
+    fun markDefaultKeysLayoutInitializationComplete() = synchronized(processLock) {
+        val catalog = ensureCatalog()
+        if (!catalog.defaultKeysLayoutInitializationComplete) {
+            writeCatalog(catalog.copy(defaultKeysLayoutInitializationComplete = true))
+        }
+    }
+
     fun discardDraft(profileId: String) = synchronized(processLock) {
         validateProfileId(profileId)
         try {
@@ -357,6 +369,7 @@ class LayoutProfileRepository internal constructor(
         val profileIds: List<String>,
         val selectedProfileId: String? = null,
         val deletingProfileIds: List<String> = emptyList(),
+        val defaultKeysLayoutInitializationComplete: Boolean = false,
     ) {
         init {
             require(profileIds.all(::isStableLayoutId) && profileIds.distinct().size == profileIds.size)
@@ -374,6 +387,7 @@ class LayoutProfileRepository internal constructor(
             .put("profileIds", ids)
             .put("selectedProfileId", catalog.selectedProfileId ?: JSONObject.NULL)
             .put("deletingProfileIds", deleting)
+            .put("defaultKeysLayoutInitializationComplete", catalog.defaultKeysLayoutInitializationComplete)
             .toString()
         return StandardCharsets.UTF_8.newEncoder()
             .onMalformedInput(CodingErrorAction.REPORT)
@@ -400,7 +414,18 @@ class LayoutProfileRepository internal constructor(
             is String -> selected
             else -> throw IllegalArgumentException("Invalid selected profile ID")
         }
-        return ProfileCatalog(profileIds, selectedProfileId, deletingProfileIds)
+        val defaultKeysLayoutInitializationComplete = when {
+            !root.has("defaultKeysLayoutInitializationComplete") -> false
+            root.opt("defaultKeysLayoutInitializationComplete") is Boolean ->
+                root.optBoolean("defaultKeysLayoutInitializationComplete")
+            else -> throw IllegalArgumentException("Invalid default Keys Layout initialization marker")
+        }
+        return ProfileCatalog(
+            profileIds,
+            selectedProfileId,
+            deletingProfileIds,
+            defaultKeysLayoutInitializationComplete,
+        )
     }
 
     private fun JSONObject.requiredStringArray(key: String): List<String> {

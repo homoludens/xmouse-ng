@@ -74,12 +74,13 @@ import net.droopia.xmouse_ng.layout.LegacyLayoutProfileMigrator;
 import net.droopia.xmouse_ng.layout.LayoutButton;
 import net.droopia.xmouse_ng.layout.LayoutEditorActivity;
 import net.droopia.xmouse_ng.layout.ActionEditorActivity;
-import net.droopia.xmouse_ng.layout.FreshActionsProfileInitializer;
+import net.droopia.xmouse_ng.layout.DefaultKeysLayoutProfileInitializer;
 import net.droopia.xmouse_ng.layout.LayoutProfile;
 import net.droopia.xmouse_ng.layout.LayoutProfileManagerActivity;
 import net.droopia.xmouse_ng.layout.LayoutProfileActivation;
 import net.droopia.xmouse_ng.layout.LayoutProfileRepository;
 import net.droopia.xmouse_ng.layout.LayoutProfileRuntime;
+import net.droopia.xmouse_ng.layout.DefaultKeysLayoutCatalog;
 import net.droopia.xmouse_ng.layout.SavedActionScript;
 import net.droopia.xmouse_ng.layout.SavedActionScriptRepository;
 import net.droopia.xmouse_ng.layout.ActionPresetCatalog;
@@ -176,8 +177,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	private boolean actionProfileSelectionPending;
 	private boolean returningFromActionEditor;
 	private boolean returningFromScriptsManager;
-	private boolean databaseExistedAtLaunch;
-	private boolean preferencesExistedAtLaunch;
 	private final ShellContentRenderCache actionsRenderCache = new ShellContentRenderCache();
 	private final ShellContentRenderCache scriptsRenderCache = new ShellContentRenderCache();
 	private static final class ActionsSnapshot {
@@ -347,12 +346,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
-		databaseExistedAtLaunch = getDatabasePath("contactsManager").exists();
-		preferencesExistedAtLaunch = !PreferenceManager.getDefaultSharedPreferences(this).getAll().isEmpty();
-		if (savedInstanceState != null && savedInstanceState.containsKey("actions.existingDataAtLaunch")) {
-			databaseExistedAtLaunch = savedInstanceState.getBoolean("actions.existingDataAtLaunch");
-			preferencesExistedAtLaunch = false;
-		}
 		suppressLegacyAutoConnectOnResume = isNotificationOpenIntent(getIntent());
 		localNetworkPermissionCoordinator = LocalNetworkPermissionCoordinator.forContext(getApplicationContext());
 		notificationPermissionLauncher = registerForActivityResult(
@@ -616,7 +609,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	}
 
 	@Override protected void onSaveInstanceState(Bundle outState) {
-		outState.putBoolean("actions.existingDataAtLaunch", databaseExistedAtLaunch || preferencesExistedAtLaunch);
 		outState.putString("shell.destination", shellNavigation.destination().name());
 		outState.putBoolean("shell.externalPending", externalScreenPending);
 		ArrayList<String> overlays = new ArrayList<>();
@@ -2317,8 +2309,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		Toast.makeText(getBaseContext(),"Remove item "+potentialDeletePosition,Toast.LENGTH_LONG).show();
 	}
 	private static LayoutProfileActivation activateLayoutProfiles(File filesDirectory,
-			LayoutProfileRepository repository, LayoutProfileRuntime runtime, boolean hasUserData,
-			List<LayoutButton> legacyDefaults) {
+			LayoutProfileRepository repository, LayoutProfileRuntime runtime) {
 		try {
 			boolean hasLegacySource = false;
 			for (String source : new String[]{"keyLayoutFile.csv", "keyFileOne.csv", "keyFileTwo.csv", "keyFileThree.csv"}) {
@@ -2327,11 +2318,22 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 					break;
 				}
 			}
-			FreshActionsProfileInitializer.INSTANCE.initializeIfFresh(
-					repository, hasLegacySource, hasUserData);
-			FreshActionsProfileInitializer.INSTANCE.preserveLegacyDefaultsIfNeeded(
-					repository, hasLegacySource, hasUserData, legacyDefaults);
-			return runtime.activate();
+			if (!hasLegacySource) {
+				try {
+					DefaultKeysLayoutProfileInitializer.INSTANCE.initializeIfNeeded(repository);
+				} catch (Exception ignored) {
+					Log.w(TAG, "default_keys_layout_seed_failed");
+				}
+			}
+			LayoutProfileActivation activation = runtime.activate();
+			if (hasLegacySource && activation.getActivated()) {
+				try {
+					DefaultKeysLayoutProfileInitializer.INSTANCE.initializeAfterSuccessfulMigration(repository, activation);
+				} catch (Exception ignored) {
+					Log.w(TAG, "default_keys_layout_seed_failed");
+				}
+			}
+			return activation;
 		} catch (Exception ignored) {
 			Log.w(TAG, "layout_profile_activation_failed");
 			return new LayoutProfileActivation(null,
@@ -2501,13 +2503,6 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 		final LayoutProfileRepository repository = layoutProfileRepository;
 		final LayoutProfileRuntime runtime = layoutProfileRuntime;
 		final File filesDirectory = getFilesDir();
-		final boolean hasUserData = databaseExistedAtLaunch || preferencesExistedAtLaunch;
-		final List<LayoutButton> legacyDefaults = new ArrayList<>();
-		int defaultIndex = 0;
-		for (CustomKeyboardButton button : loadDefaultKeyboardLayout(this)) {
-			legacyDefaults.add(new LayoutButton("legacy-default-" + (++defaultIndex), button.getmTitle(),
-					button.getmCommand(), button.getmSpans(), button.getmColor()));
-		}
 		final Context applicationContext = getApplicationContext();
 		final Handler handler = new Handler(Looper.getMainLooper());
 		shellNavigation.replaceContent(() -> {
@@ -2524,7 +2519,7 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 				String profileError = null;
 				try {
 					if (!runtime.isRepositoryActive()) {
-						LayoutProfileActivation activation = activateLayoutProfiles(filesDirectory, repository, runtime, hasUserData, legacyDefaults);
+						LayoutProfileActivation activation = activateLayoutProfiles(filesDirectory, repository, runtime);
 						profileError = activation.getWarning();
 					}
 					if (runtime.isRepositoryActive()) {
@@ -2881,66 +2876,10 @@ public class MainActivity extends AppCompatActivity implements MyInterface,
 	}
 	public LinkedList<CustomKeyboardButton> loadDefaultKeyboardLayout(Context mCont){
 		LinkedList<CustomKeyboardButton> views = new LinkedList<CustomKeyboardButton>();
-
-		//new default design by Xalalau Xubilozo, Brazil
-		views.add(new CustomKeyboardButton( 0, 2,"Esc","key Escape","#FFe6e6"));
-		views.add(new CustomKeyboardButton( 0, 3,"Minimize","xdotool windowminimize $(xdotool getactivewindow)","#9FFF80"));
-		views.add(new CustomKeyboardButton( 0, 3,"Maximize","xdotool windowsize $(xdotool getactivewindow) 100% 100%","#FFCC66"));
-		views.add(new CustomKeyboardButton( 0, 2,"X","key alt+F4","#FF9999"));
-		views.add(new CustomKeyboardButton( 0, 2,"F1","key F1","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 2,"F2","key F2","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 2,"F3","key F3","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 2,"F4","key F4","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 2,"F5","key F5","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 2,"F6","key F6","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 2,"F7","key F7","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 2,"F8","key F8","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 2,"F9","key F9","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 2,"F10","key F10","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 2,"F11","key F11","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 2,"F12","key F12","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 3,"+Brightness","key XF86MonBrightnessUp","#e6f7ff"));
-		views.add(new CustomKeyboardButton( 0, 3,"-Brightness","key XF86MonBrightnessDown","#e6f7ff"));
-		views.add(new CustomKeyboardButton( 0, 2,"Super","key super","#80d4ff"));
-		views.add(new CustomKeyboardButton( 0, 3,"+Volume","key XF86AudioRaiseVolume","#B3E6FF"));
-		views.add(new CustomKeyboardButton( 0, 3,"-Volume","key XF86AudioLowerVolume","#B3E6FF"));
-		views.add(new CustomKeyboardButton( 0, 2,"Mute","key XF86AudioMute","#B3E6FF"));
-		views.add(new CustomKeyboardButton( 0, 2,"Alt|Tab","key alt+Tab","#80d4ff"));
-		views.add(new CustomKeyboardButton( 0, 3,"[Prev]","key XF86AudioPrev","#B3E6FF"));
-		views.add(new CustomKeyboardButton( 0, 3,"[Next]","key XF86AudioNext","#B3E6FF"));
-		views.add(new CustomKeyboardButton( 0, 2,"[Play]","key XF86AudioPlay","#B3E6FF"));
-		views.add(new CustomKeyboardButton( 0, 2,"New","key ctrl+n","#E6B3FF"));
-		views.add(new CustomKeyboardButton( 0, 2,"Open","key ctrl+o","#E6B3FF"));
-		views.add(new CustomKeyboardButton( 0, 2,"Save","key ctrl+s","#E6B3FF"));
-		views.add(new CustomKeyboardButton( 0, 2,"Find","key ctrl+f","#E6B3FF"));
-		views.add(new CustomKeyboardButton( 0, 2,"Print","key ctrl+p","#E6B3FF"));
-		views.add(new CustomKeyboardButton( 0, 4,"Select all","key ctrl+a","#E6B3FF"));
-		views.add(new CustomKeyboardButton( 0, 3,"+Zoom","key ctrl+plus","#E6B3FF"));
-		views.add(new CustomKeyboardButton( 0, 3,"-Zoom","key ctrl+minus","#E6B3FF"));
-		views.add(new CustomKeyboardButton( 0, 2,"Undo","key ctrl+z","#F7E6FF"));
-		views.add(new CustomKeyboardButton( 0, 2,"Redo","key ctrl+y","#F7E6FF"));
-		views.add(new CustomKeyboardButton( 0, 2,"Copy","key ctrl+c","#F7E6FF"));
-		views.add(new CustomKeyboardButton( 0, 2,"Crop","key ctrl+x","#F7E6FF"));
-		views.add(new CustomKeyboardButton( 0, 2,"Paste","key ctrl+v","#F7E6FF"));
-		views.add(new CustomKeyboardButton( 0, 3,"PgUp","key Prior","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 3,"PgDown","key Next","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 4,"Delete","key Delete","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 2,"Home","key Home","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 2,"Up","key Up","#FFFFB3"));
-		views.add(new CustomKeyboardButton( 0, 2,"End","key End","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 4,"Backspace","key BackSpace","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 2,"Left","key Left","#FFFFB3"));
-		views.add(new CustomKeyboardButton( 0, 2,"Down","key Down","#FFFFB3"));
-		views.add(new CustomKeyboardButton( 0, 2,"Right","key Right","#FFFFB3"));
-		views.add(new CustomKeyboardButton( 0, 4,"Enter","key Return","#FFFFFF"));
-		views.add(new CustomKeyboardButton( 0, 5,"<Back","key XF86Back","#f2e5d9"));
-		views.add(new CustomKeyboardButton( 0, 5,"Forward>","key XF86Forward","#f2e5d9"));
-		views.add(new CustomKeyboardButton( 0, 1,"+","key ctrl+t","#e6ccb3"));
-		views.add(new CustomKeyboardButton( 0, 1,"-","key ctrl+w","#e6ccb3"));
-		views.add(new CustomKeyboardButton( 0, 4,"Reopen Last Tab","key ctrl+shift+t","#e6ccb3"));
-		views.add(new CustomKeyboardButton( 0, 2,"<-","key ctrl+shift+Tab","#e6ccb3"));
-		views.add(new CustomKeyboardButton( 0, 2,"->","key ctrl+Tab","#e6ccb3"));
-
+		for (LayoutButton button : DefaultKeysLayoutCatalog.buttons()) {
+			views.add(new CustomKeyboardButton(0, button.getWidth(), button.getTitle(),
+					button.getCommand(), button.getColor()));
+		}
 		return views;
 	}
 	public String getKeyboardTextValue(){
