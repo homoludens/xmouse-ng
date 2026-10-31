@@ -1,6 +1,6 @@
 # Maintainer checklist for future store submissions
 
-This is preparation guidance, not a store submission. The v2.1.3 source and GitHub release do not mean that XMouse-NG is available in Google Play or F-Droid, that either service has accepted it, or that an external reproducible-build service has verified it. The privacy policy is included in the source and in the app, but it has **not** been published at a public HTTPS policy URL.
+This is preparation guidance, not a store submission. The v2.1.3 source and GitHub release do not mean that XMouse-NG is available in Google Play or F-Droid, that either service has accepted it, or that an external reproducible-build service has verified it. The privacy policy is included in the source and in the app. GitHub Pages deployment is configured, but the public HTTPS policy URL still needs to be deployed and verified.
 
 ## Before any store account or upload action
 

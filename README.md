@@ -4,11 +4,12 @@ Control a Linux desktop from an Android phone or tablet over SSH. XMouse-NG star
 
 ## Screenshots
 
-| Touchpad | Actions |
-| --- | --- |
-| ![Touchpad tab](docs/screenshots/touchpad.png) | ![Actions tab](docs/screenshots/actions.png) |
+| Theme | Touchpad | Actions |
+| --- | --- | --- |
+| Dark | <img src="docs/screenshots/1000075739.jpg" alt="XMouse-NG touchpad in dark theme" width="220"> | <img src="docs/screenshots/1000075740.jpg" alt="XMouse-NG actions layout in dark theme" width="220"> |
+| Light | <img src="docs/screenshots/1000075741.jpg" alt="XMouse-NG touchpad in light theme" width="220"> | <img src="docs/screenshots/1000075742.jpg" alt="XMouse-NG actions layout in light theme" width="220"> |
 
-These captures use synthetic display data.
+See the [project site](https://homoludens.github.io/xmouse-ng/) or read the [privacy policy](https://homoludens.github.io/xmouse-ng/privacy/).
 
 ## Features
 
